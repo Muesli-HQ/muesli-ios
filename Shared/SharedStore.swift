@@ -34,7 +34,6 @@ struct SharedStore: Sendable {
 
     func saveRequest(_ request: DictationRequest) throws {
         try write(request, to: "pending-request.json")
-        try saveStatus(.init(requestID: request.id, phase: .requested))
     }
 
     func pendingRequest() throws -> DictationRequest? {

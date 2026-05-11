@@ -76,4 +76,19 @@ final class SharedStoreTests: XCTestCase {
 
         XCTAssertNil(try store.pendingCommand())
     }
+
+    func testSavingPendingRequestDoesNotOverwriteStatus() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let activeRequestID = UUID()
+
+        try store.saveStatus(.init(requestID: activeRequestID, phase: .recording))
+        try store.saveRequest(.init())
+
+        XCTAssertEqual(try store.status().requestID, activeRequestID)
+        XCTAssertEqual(try store.status().phase, .recording)
+    }
 }

@@ -162,8 +162,8 @@ final class KeyboardController {
 
     func startPolling() {
         markKeyboardVisible()
-        prepareLaunchRequestIfNeeded()
         refreshLatestDictation()
+        prepareLaunchRequestIfNeeded()
         pollingTask?.cancel()
         pollingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -282,6 +282,7 @@ final class KeyboardController {
         statusText = "Inserted"
         try? store.clearPendingRequest()
         try? store.clearPendingCommand()
+        try? store.saveStatus(.idle)
         prepareLaunchRequestIfNeeded()
 
         Task { @MainActor [weak self] in

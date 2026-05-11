@@ -20,7 +20,7 @@ final class KeyboardController {
     var primaryButtonTitle: String {
         switch dictationPhase {
         case .requested:
-            "Open Muesli"
+            activeRequestID == nil ? "Open Muesli" : "Stop Dictation"
         case .recording:
             "Stop Dictation"
         case .transcribing:
@@ -34,7 +34,7 @@ final class KeyboardController {
 
     var primaryButtonIcon: String {
         switch dictationPhase {
-        case .recording:
+        case .requested, .recording:
             "stop.fill"
         case .transcribing:
             "waveform"
@@ -47,9 +47,9 @@ final class KeyboardController {
 
     var primaryButtonColor: ColorToken {
         switch dictationPhase {
-        case .recording:
+        case .requested, .recording:
             .recording
-        case .transcribing, .requested:
+        case .transcribing:
             .transcribing
         default:
             .accent
@@ -65,15 +65,13 @@ final class KeyboardController {
     }
 
     var opensMuesliFromPrimaryButton: Bool {
-        dictationPhase == .idle || dictationPhase == .requested || dictationPhase == .failed
+        dictationPhase == .idle || dictationPhase == .failed || (dictationPhase == .requested && activeRequestID == nil)
     }
 
     func primaryAction() {
         switch dictationPhase {
-        case .recording:
+        case .requested, .recording:
             stopActiveDictation()
-        case .requested:
-            startDictation()
         case .transcribing, .finished:
             break
         default:
@@ -119,7 +117,7 @@ final class KeyboardController {
         launchURL = makeLaunchURL(for: request)
         activeRequestID = request.id
         insertedRequestIDs.remove(request.id)
-        dictationPhase = .requested
+        dictationPhase = .recording
         statusText = "Opening Muesli"
 
         do {
@@ -133,7 +131,7 @@ final class KeyboardController {
             return
         }
 
-        statusText = "Swipe back after recording starts"
+        statusText = "Recording in Muesli"
     }
 
     private func stopActiveDictation() {
@@ -165,6 +163,7 @@ final class KeyboardController {
     func startPolling() {
         markKeyboardVisible()
         prepareLaunchRequestIfNeeded()
+        refreshLatestDictation()
         pollingTask?.cancel()
         pollingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -229,6 +228,10 @@ final class KeyboardController {
             return
         }
 
+        if activeRequestID == nil, preparedRequest?.id == requestID, status.phase == .requested {
+            return
+        }
+
         let resumablePhases: [DictationPhase] = [.requested, .recording, .transcribing, .finished]
         let isRecentStatus = Date().timeIntervalSince(status.updatedAt) < 120
         if activeRequestID == nil, isRecentStatus, resumablePhases.contains(status.phase) {
@@ -236,21 +239,31 @@ final class KeyboardController {
         }
 
         guard activeRequestID == requestID else { return }
-        dictationPhase = status.phase
 
         switch status.phase {
         case .requested:
-            statusText = "Open Muesli to record"
+            if activeRequestID == nil {
+                dictationPhase = .requested
+                statusText = "Open Muesli to record"
+            } else {
+                dictationPhase = .recording
+                statusText = "Recording in Muesli"
+            }
         case .recording:
+            dictationPhase = .recording
             statusText = "Recording in Muesli"
         case .transcribing:
+            dictationPhase = .transcribing
             statusText = status.message ?? "Transcribing"
         case .failed:
+            dictationPhase = .failed
             activeRequestID = nil
             statusText = status.message ?? "Dictation failed"
         case .finished:
+            dictationPhase = .finished
             break
         case .idle:
+            dictationPhase = .idle
             activeRequestID = nil
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         }

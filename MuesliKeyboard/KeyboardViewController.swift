@@ -34,6 +34,11 @@ final class KeyboardViewController: UIInputViewController {
         controller.startPolling()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        controller.startPolling()
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         controller.stopPolling()

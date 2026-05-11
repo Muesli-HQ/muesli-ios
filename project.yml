@@ -23,6 +23,9 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio.git
     from: "0.14.5"
+  TelemetryDeck:
+    url: https://github.com/TelemetryDeck/SwiftSDK
+    from: "2.12.0"
 
 targets:
   Muesli:
@@ -38,9 +41,11 @@ targets:
         INFOPLIST_FILE: Muesli/Info.plist
         CODE_SIGN_ENTITLEMENTS: Muesli/Muesli.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MUESLI_TELEMETRYDECK_APP_ID: ""
     dependencies:
       - target: MuesliKeyboard
       - package: FluidAudio
+      - package: TelemetryDeck
 
   MuesliKeyboard:
     type: app-extension

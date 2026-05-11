@@ -5,11 +5,17 @@ import Observation
 @MainActor
 @Observable
 final class DictationCoordinator {
+    private static let onboardingCompletedKey = "muesli.onboarding.completed"
+
     private let store = SharedStore()
-    private let engine: TranscriptionEngine = FluidAudioTranscriptionEngine()
+    private let engine = FluidAudioTranscriptionEngine()
     private let recorder = AudioRecorder()
+    private var modelPreparationTask: Task<Void, Never>?
 
     private var activeRequest: DictationRequest?
+    var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
+    var modelPreparation = ModelPreparationState()
+    var telemetryEnabled = AppTelemetry.isEnabled
     var isRecording = false
     var statusText = "Ready"
     var lastTranscript = ""
@@ -24,18 +30,105 @@ final class DictationCoordinator {
 
         let request = DictationRequest(id: requestID)
         activeRequest = request
-        startRecording(for: request)
+        startRecording(for: request, source: "keyboard")
     }
 
     func toggleRecording() {
         if isRecording {
             stopRecording()
         } else {
-            startRecording(for: DictationRequest())
+            startRecording(for: DictationRequest(), source: "app")
         }
     }
 
-    private func startRecording(for request: DictationRequest) {
+    func prepareModelForOnboarding() {
+        guard !modelPreparation.isPreparing, !modelPreparation.isReady else { return }
+
+        modelPreparationTask?.cancel()
+        modelPreparation = ModelPreparationState(
+            phase: .downloading,
+            progress: 0,
+            status: "Checking model files...",
+            detail: "Parakeet v3"
+        )
+        AppTelemetry.signal("model_prepare_started", parameters: ["engine": engine.identifier])
+
+        let coordinator = self
+        modelPreparationTask = Task { [engine] in
+            do {
+                try await engine.prepare { progress, status in
+                    Task { @MainActor in
+                        coordinator.applyModelPreparationProgress(progress, status: status)
+                    }
+                }
+
+                await MainActor.run {
+                    coordinator.modelPreparationTask = nil
+                    coordinator.modelPreparation = ModelPreparationState(
+                        phase: .ready,
+                        progress: 1,
+                        status: "Parakeet v3 ready",
+                        detail: "Ready for on-device dictation"
+                    )
+                    AppTelemetry.signal("model_prepare_completed", parameters: ["engine": coordinator.engine.identifier])
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    coordinator.modelPreparationTask = nil
+                }
+            } catch {
+                await MainActor.run {
+                    coordinator.modelPreparationTask = nil
+                    coordinator.modelPreparation = ModelPreparationState(
+                        phase: .failed,
+                        progress: nil,
+                        status: "Model setup paused",
+                        detail: "Check your connection and try again"
+                    )
+                    AppTelemetry.signal(
+                        "model_prepare_failed",
+                        parameters: [
+                            "engine": coordinator.engine.identifier,
+                            "error": String(describing: type(of: error))
+                        ]
+                    )
+                }
+            }
+        }
+    }
+
+    func completeOnboarding(telemetryEnabled: Bool) {
+        setTelemetryEnabled(telemetryEnabled)
+        hasCompletedOnboarding = true
+        UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
+        AppTelemetry.signal(
+            "onboarding_completed",
+            parameters: ["model_ready": modelPreparation.isReady ? "true" : "false"]
+        )
+    }
+
+    func setTelemetryEnabled(_ enabled: Bool) {
+        telemetryEnabled = enabled
+        AppTelemetry.setEnabled(enabled)
+    }
+
+    private func applyModelPreparationProgress(_ progress: Double, status: String?) {
+        let normalizedProgress = min(max(progress, 0), 1)
+        let detail = status ?? "\(Int((normalizedProgress * 100).rounded()))% complete"
+        let phase: ModelPreparationPhase = detail.localizedCaseInsensitiveContains("compil")
+            || detail.localizedCaseInsensitiveContains("prepar")
+            ? .preparing
+            : .downloading
+
+        modelPreparation = ModelPreparationState(
+            phase: phase,
+            progress: normalizedProgress,
+            status: phase == .preparing ? "Optimizing for this iPhone..." : "Downloading Parakeet v3",
+            detail: detail
+        )
+    }
+
+    private func startRecording(for request: DictationRequest, source: String) {
         activeRequest = request
 
         Task {
@@ -44,10 +137,12 @@ final class DictationCoordinator {
                 try recorder.start()
                 isRecording = true
                 statusText = "Recording"
+                AppTelemetry.signal("dictation_started", parameters: ["source": source])
                 try store.saveRequest(request)
                 try store.saveStatus(.init(requestID: request.id, phase: .recording))
             } catch {
                 statusText = error.localizedDescription
+                AppTelemetry.signal("dictation_failed", parameters: ["stage": "recording"])
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
             }
         }
@@ -68,8 +163,23 @@ final class DictationCoordinator {
                 try store.clearPendingRequest()
                 lastTranscript = text
                 statusText = "Ready"
+                AppTelemetry.signal(
+                    "dictation_completed",
+                    parameters: [
+                        "engine": engine.identifier,
+                        "empty": text.isEmpty ? "true" : "false"
+                    ]
+                )
             } catch {
                 statusText = error.localizedDescription
+                AppTelemetry.signal(
+                    "dictation_failed",
+                    parameters: [
+                        "stage": "transcription",
+                        "engine": engine.identifier,
+                        "error": String(describing: type(of: error))
+                    ]
+                )
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
             }
         }

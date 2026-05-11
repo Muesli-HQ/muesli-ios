@@ -5,22 +5,28 @@ struct RootView: View {
     @State private var selectedSection: AppSection = .dictate
 
     var body: some View {
-        VStack(spacing: 0) {
-            Group {
-                switch selectedSection {
-                case .dictate:
-                    DictationView(coordinator: coordinator)
-                case .settings:
-                    SettingsView()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            if coordinator.hasCompletedOnboarding {
+                VStack(spacing: 0) {
+                    Group {
+                        switch selectedSection {
+                        case .dictate:
+                            DictationView(coordinator: coordinator)
+                        case .settings:
+                            SettingsView(coordinator: coordinator)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            MuesliTabSwitcher(selectedSection: $selectedSection)
-                .padding(.horizontal, MuesliTheme.spacing20)
-                .padding(.bottom, MuesliTheme.spacing12)
-                .padding(.top, MuesliTheme.spacing8)
-                .background(MuesliTheme.backgroundBase)
+                    MuesliTabSwitcher(selectedSection: $selectedSection)
+                        .padding(.horizontal, MuesliTheme.spacing20)
+                        .padding(.bottom, MuesliTheme.spacing12)
+                        .padding(.top, MuesliTheme.spacing8)
+                        .background(MuesliTheme.backgroundBase)
+                }
+            } else {
+                OnboardingView(coordinator: coordinator)
+            }
         }
         .background(MuesliTheme.backgroundBase)
         .tint(MuesliTheme.accent)

@@ -33,6 +33,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>MuesliTelemetryDeckAppID</key>
+	<string>$(MUESLI_TELEMETRYDECK_APP_ID)</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Muesli records your voice so it can transcribe speech into text on device.</string>
 	<key>UILaunchScreen</key>

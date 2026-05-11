@@ -4,6 +4,10 @@ import SwiftUI
 struct MuesliApp: App {
     @State private var coordinator = DictationCoordinator()
 
+    init() {
+        AppTelemetry.configure()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(coordinator: coordinator)
@@ -13,4 +17,3 @@ struct MuesliApp: App {
         }
     }
 }
-

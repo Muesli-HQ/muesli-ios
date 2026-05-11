@@ -45,12 +45,14 @@ group.com.phequals7.muesli
 
 ## Current Status
 
-This repo is intentionally private while the iOS product shape, App Store model, and monetization are being validated. The scaffold includes the keyboard handoff path and a pluggable transcription engine boundary. The containing app now uses FluidAudio Parakeet v3 for on-device CoreML/ANE transcription; the model downloads on first transcription and is cached by FluidAudio.
+This repo is intentionally private while the iOS product shape, App Store model, and monetization are being validated. The scaffold includes the keyboard handoff path, a pluggable transcription engine boundary, and first-run onboarding. The containing app uses FluidAudio Parakeet v3 for on-device CoreML/ANE transcription; onboarding can download and compile the model before first dictation.
+
+TelemetryDeck support is wired behind an opt-in toggle and a build setting. Set `MUESLI_TELEMETRYDECK_APP_ID` to the app's TelemetryDeck identifier when generating/building release variants. Events intentionally avoid audio, transcript text, and user-provided content.
 
 ## Next Milestones
 
-1. Add explicit model download/state management UI.
+1. Add keyboard installation and Full Access checks to onboarding.
 2. Persist local history in the app container.
-3. Add onboarding for keyboard installation and Full Access.
+3. Add model cache health and retry controls.
 4. Decide what belongs in a future shared Muesli Swift package.
 5. Add a WhisperKit backend if model choice becomes important on iOS.

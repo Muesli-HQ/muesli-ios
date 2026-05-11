@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Bindable var coordinator: DictationCoordinator
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -28,8 +30,25 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                             SettingsRow(icon: "cpu", title: "Runtime", value: "CoreML / ANE")
                             Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsRow(icon: "square.and.arrow.down", title: "Engine", value: "Placeholder")
+                            SettingsRow(icon: "waveform", title: "Engine", value: "Parakeet v3")
+                            Divider().overlay(MuesliTheme.surfaceBorder)
+                            SettingsRow(icon: "checkmark.seal", title: "Model", value: modelStatus)
                         }
+                        .padding(MuesliTheme.spacing16)
+                    }
+
+                    MuesliSurface {
+                        Toggle(isOn: telemetryBinding) {
+                            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                                Text("Anonymous Telemetry")
+                                    .font(MuesliTheme.headline())
+                                    .foregroundStyle(MuesliTheme.textPrimary)
+                                Text("No audio or transcript text is sent.")
+                                    .font(MuesliTheme.caption())
+                                    .foregroundStyle(MuesliTheme.textTertiary)
+                            }
+                        }
+                        .toggleStyle(.switch)
                         .padding(MuesliTheme.spacing16)
                     }
                 }
@@ -48,6 +67,29 @@ struct SettingsView: View {
             Text("Configure the keyboard shell and local model runtime.")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
+        }
+    }
+
+    private var modelStatus: String {
+        switch coordinator.modelPreparation.phase {
+        case .ready:
+            "Ready"
+        case .downloading:
+            "Downloading"
+        case .preparing:
+            "Preparing"
+        case .failed:
+            "Paused"
+        case .idle:
+            "Not prepared"
+        }
+    }
+
+    private var telemetryBinding: Binding<Bool> {
+        Binding {
+            coordinator.telemetryEnabled
+        } set: { value in
+            coordinator.setTelemetryEnabled(value)
         }
     }
 }

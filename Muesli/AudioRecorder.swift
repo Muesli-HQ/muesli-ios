@@ -19,26 +19,44 @@ final class AudioRecorder {
         }
 
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .spokenAudio, options: [.allowBluetooth])
-        try session.setActive(true)
+        do {
+            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [])
+        } catch {
+            throw RecordingError.audioSessionFailed(stage: "category", underlying: error)
+        }
+
+        do {
+            try session.setActive(true)
+        } catch {
+            throw RecordingError.audioSessionFailed(stage: "activation", underlying: error)
+        }
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-\(UUID().uuidString)")
             .appendingPathExtension("wav")
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 16_000,
+            AVSampleRateKey: 16_000.0,
             AVNumberOfChannelsKey: 1,
             AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
         ]
 
         outputURL = url
-        let recorder = try AVAudioRecorder(url: url, settings: settings)
+        let recorder: AVAudioRecorder
+        do {
+            recorder = try AVAudioRecorder(url: url, settings: settings)
+        } catch {
+            throw RecordingError.recorderSetupFailed(stage: "create", underlying: error)
+        }
         recorder.isMeteringEnabled = false
-        guard recorder.prepareToRecord(), recorder.record() else {
-            throw RecordingError.startFailed
+        guard recorder.prepareToRecord() else {
+            throw RecordingError.startFailed(stage: "prepare")
+        }
+        guard recorder.record() else {
+            throw RecordingError.startFailed(stage: "record")
         }
         self.recorder = recorder
     }
@@ -61,7 +79,9 @@ final class AudioRecorder {
     enum RecordingError: LocalizedError {
         case microphonePermissionDenied
         case noRecording
-        case startFailed
+        case audioSessionFailed(stage: String, underlying: Error)
+        case recorderSetupFailed(stage: String, underlying: Error)
+        case startFailed(stage: String)
 
         var errorDescription: String? {
             switch self {
@@ -69,8 +89,12 @@ final class AudioRecorder {
                 "Microphone permission is required for dictation."
             case .noRecording:
                 "No recording is available."
-            case .startFailed:
-                "Could not start microphone recording. Try again."
+            case .audioSessionFailed(let stage, let underlying):
+                "Audio session \(stage) failed: \(underlying.localizedDescription)"
+            case .recorderSetupFailed(let stage, let underlying):
+                "Audio recorder \(stage) failed: \(underlying.localizedDescription)"
+            case .startFailed(let stage):
+                "Audio recorder \(stage) failed. Try again."
             }
         }
     }

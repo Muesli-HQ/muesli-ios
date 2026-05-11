@@ -11,8 +11,17 @@ final class KeyboardViewController: UIInputViewController {
         controller.textInserter = { [weak self] text in
             self?.textDocumentProxy.insertText(text)
         }
-        controller.appOpener = { [weak self] url in
-            self?.extensionContext?.open(url)
+        controller.appOpener = { [weak self] url, completion in
+            guard let extensionContext = self?.extensionContext else {
+                completion(false)
+                return
+            }
+
+            extensionContext.open(url) { opened in
+                Task { @MainActor in
+                    completion(opened)
+                }
+            }
         }
 
         let rootView = KeyboardRootView(controller: controller)

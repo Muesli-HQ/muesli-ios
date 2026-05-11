@@ -4,6 +4,7 @@ import Observation
 @MainActor
 @Observable
 final class KeyboardController {
+    private static let stopHandoffTimeout: TimeInterval = 8
     private static let transcriptionTimeout: TimeInterval = 90
 
     private let store = SharedStore()
@@ -16,7 +17,7 @@ final class KeyboardController {
     var isWaitingForResult = false
     var currentPhase: DictationPhase = .idle
     var textInserter: (@MainActor (String) -> Void)?
-    var appOpener: (@MainActor (URL) -> Void)?
+    var appOpener: (@MainActor (URL, @escaping @MainActor (Bool) -> Void) -> Void)?
 
     var primaryButtonTitle: String {
         if hasStopBeenRequested {
@@ -86,7 +87,16 @@ final class KeyboardController {
 
         do {
             try store.saveRequest(request)
-            appOpener?(dictationURL(for: request, action: MuesliAppConstants.startAction))
+            appOpener?(dictationURL(for: request, action: MuesliAppConstants.startAction)) { [weak self] opened in
+                guard let self else { return }
+                if !opened {
+                    self.activeRequestID = nil
+                    self.isWaitingForResult = false
+                    self.hasStopBeenRequested = false
+                    self.currentPhase = .failed
+                    self.statusText = "Could not open Muesli"
+                }
+            }
             startPolling()
         } catch {
             isWaitingForResult = false
@@ -100,10 +110,14 @@ final class KeyboardController {
         guard let activeRequestID else { return }
         hasStopBeenRequested = true
         stopRequestedAt = .now
-        currentPhase = .transcribing
+        currentPhase = .recording
         statusText = "Stopping"
-        try? store.saveStatus(.init(requestID: activeRequestID, phase: .transcribing, message: "Stopping"))
-        appOpener?(dictationURL(requestID: activeRequestID, action: MuesliAppConstants.stopAction))
+        appOpener?(dictationURL(requestID: activeRequestID, action: MuesliAppConstants.stopAction)) { [weak self] opened in
+            guard let self else { return }
+            if !opened {
+                self.failActiveRequest(message: "Could not open Muesli")
+            }
+        }
     }
 
     func insertSpace() {
@@ -161,14 +175,13 @@ final class KeyboardController {
 
             let status = try store.status()
             if status.requestID == activeRequestID {
-                if hasStopTimedOut {
-                    self.activeRequestID = nil
-                    isWaitingForResult = false
-                    hasStopBeenRequested = false
-                    stopRequestedAt = nil
-                    currentPhase = .failed
-                    statusText = "Timed out. Try again."
-                    try? store.saveStatus(.init(requestID: activeRequestID, phase: .failed, message: "Timed out. Try again."))
+                if hasStopHandoffTimedOut(status: status) {
+                    failActiveRequest(message: "Muesli did not receive stop")
+                    return
+                }
+
+                if hasTranscriptionTimedOut(status: status) {
+                    failActiveRequest(message: "Transcription timed out")
                     return
                 }
 
@@ -189,6 +202,22 @@ final class KeyboardController {
         } catch {
             statusText = "Waiting for Full Access"
         }
+    }
+
+    private func failActiveRequest(message: String) {
+        guard let activeRequestID else {
+            statusText = message
+            currentPhase = .failed
+            return
+        }
+
+        self.activeRequestID = nil
+        isWaitingForResult = false
+        hasStopBeenRequested = false
+        stopRequestedAt = nil
+        currentPhase = .failed
+        statusText = message
+        try? store.saveStatus(.init(requestID: activeRequestID, phase: .failed, message: message))
     }
 
     private func dictationURL(for request: DictationRequest, action: String) -> URL {
@@ -223,8 +252,15 @@ final class KeyboardController {
         }
     }
 
-    private var hasStopTimedOut: Bool {
+    private func hasStopHandoffTimedOut(status: DictationStatus) -> Bool {
         guard let stopRequestedAt else { return false }
+        guard status.phase == .requested || status.phase == .recording else { return false }
+        return Date().timeIntervalSince(stopRequestedAt) > Self.stopHandoffTimeout
+    }
+
+    private func hasTranscriptionTimedOut(status: DictationStatus) -> Bool {
+        guard let stopRequestedAt else { return false }
+        guard status.phase == .transcribing else { return false }
         return Date().timeIntervalSince(stopRequestedAt) > Self.transcriptionTimeout
     }
 }

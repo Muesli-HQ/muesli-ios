@@ -4,12 +4,14 @@ import Observation
 @MainActor
 @Observable
 final class KeyboardController {
+    private static let startHandoffTimeout: TimeInterval = 8
     private static let stopHandoffTimeout: TimeInterval = 8
     private static let transcriptionTimeout: TimeInterval = 90
 
     private let store = SharedStore()
     private var pollingTask: Task<Void, Never>?
     private var activeRequestID: UUID?
+    private var requestStartedAt: Date?
     private var hasStopBeenRequested = false
     private var stopRequestedAt: Date?
 
@@ -80,25 +82,29 @@ final class KeyboardController {
 
         let request = DictationRequest()
         activeRequestID = request.id
+        requestStartedAt = .now
         isWaitingForResult = true
         hasStopBeenRequested = false
         currentPhase = .requested
         statusText = "Opening Muesli"
 
         do {
+            guard let appOpener else {
+                failActiveRequest(message: "Could not open Muesli")
+                return
+            }
+
             try store.saveRequest(request)
-            appOpener?(dictationURL(for: request, action: MuesliAppConstants.startAction)) { [weak self] opened in
+            appOpener(dictationURL(for: request, action: MuesliAppConstants.startAction)) { [weak self] opened in
                 guard let self else { return }
                 if !opened {
-                    self.activeRequestID = nil
-                    self.isWaitingForResult = false
-                    self.hasStopBeenRequested = false
-                    self.currentPhase = .failed
-                    self.statusText = "Could not open Muesli"
+                    self.failActiveRequest(message: "Could not open Muesli")
                 }
             }
             startPolling()
         } catch {
+            activeRequestID = nil
+            requestStartedAt = nil
             isWaitingForResult = false
             hasStopBeenRequested = false
             currentPhase = .failed
@@ -154,8 +160,9 @@ final class KeyboardController {
 
     private func pollOnce() {
         guard let activeRequestID else {
-            if let status = try? store.status(), status.phase != .idle {
-                statusText = status.message ?? label(for: status.phase)
+            if currentPhase != .failed {
+                currentPhase = .idle
+                statusText = "Tap to dictate"
             }
             return
         }
@@ -165,6 +172,7 @@ final class KeyboardController {
                 textInserter?(result.text)
                 try store.clearResult(for: activeRequestID)
                 self.activeRequestID = nil
+                requestStartedAt = nil
                 isWaitingForResult = false
                 hasStopBeenRequested = false
                 stopRequestedAt = nil
@@ -175,6 +183,11 @@ final class KeyboardController {
 
             let status = try store.status()
             if status.requestID == activeRequestID {
+                if hasStartHandoffTimedOut(status: status) {
+                    failActiveRequest(message: "Muesli did not start")
+                    return
+                }
+
                 if hasStopHandoffTimedOut(status: status) {
                     failActiveRequest(message: "Muesli did not receive stop")
                     return
@@ -193,6 +206,7 @@ final class KeyboardController {
                 currentPhase = status.phase
                 if status.phase == .failed {
                     self.activeRequestID = nil
+                    requestStartedAt = nil
                     isWaitingForResult = false
                     hasStopBeenRequested = false
                     stopRequestedAt = nil
@@ -212,6 +226,7 @@ final class KeyboardController {
         }
 
         self.activeRequestID = nil
+        requestStartedAt = nil
         isWaitingForResult = false
         hasStopBeenRequested = false
         stopRequestedAt = nil
@@ -256,6 +271,12 @@ final class KeyboardController {
         guard let stopRequestedAt else { return false }
         guard status.phase == .requested || status.phase == .recording else { return false }
         return Date().timeIntervalSince(stopRequestedAt) > Self.stopHandoffTimeout
+    }
+
+    private func hasStartHandoffTimedOut(status: DictationStatus) -> Bool {
+        guard !hasStopBeenRequested, let requestStartedAt else { return false }
+        guard status.phase == .requested else { return false }
+        return Date().timeIntervalSince(requestStartedAt) > Self.startHandoffTimeout
     }
 
     private func hasTranscriptionTimedOut(status: DictationStatus) -> Bool {

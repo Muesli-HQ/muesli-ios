@@ -6,6 +6,8 @@ import Observation
 @Observable
 final class DictationCoordinator {
     private static let onboardingCompletedKey = "muesli.onboarding.completed"
+    private static let userNameKey = "muesli.onboarding.userName"
+    private static let useCaseKey = "muesli.onboarding.useCase"
 
     private let store = SharedStore()
     private let engine = FluidAudioTranscriptionEngine()
@@ -14,8 +16,14 @@ final class DictationCoordinator {
 
     private var activeRequest: DictationRequest?
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
+    var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
+    var selectedUseCase = OnboardingUseCase(
+        rawValue: UserDefaults.standard.string(forKey: useCaseKey) ?? ""
+    ) ?? .keyboardDictation
     var modelPreparation = ModelPreparationState()
-    var telemetryEnabled = AppTelemetry.isEnabled
+    var isOnboardingTestRecording = false
+    var onboardingTestTranscript = ""
+    var onboardingTestError: String?
     var isRecording = false
     var statusText = "Ready"
     var lastTranscript = ""
@@ -39,6 +47,20 @@ final class DictationCoordinator {
         } else {
             startRecording(for: DictationRequest(), source: "app")
         }
+    }
+
+    func saveOnboardingProfile(name: String, useCase: OnboardingUseCase) {
+        userName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        selectedUseCase = useCase
+        UserDefaults.standard.set(userName, forKey: Self.userNameKey)
+        UserDefaults.standard.set(useCase.rawValue, forKey: Self.useCaseKey)
+        AppTelemetry.signal(
+            "onboarding_profile_saved",
+            parameters: [
+                "has_name": userName.isEmpty ? "false" : "true",
+                "use_case": useCase.rawValue
+            ]
+        )
     }
 
     func prepareModelForOnboarding() {
@@ -97,19 +119,67 @@ final class DictationCoordinator {
         }
     }
 
-    func completeOnboarding(telemetryEnabled: Bool) {
-        setTelemetryEnabled(telemetryEnabled)
+    func startOnboardingTestDictation() {
+        guard !isOnboardingTestRecording else { return }
+        onboardingTestTranscript = ""
+        onboardingTestError = nil
+
+        Task {
+            do {
+                try await recorder.requestPermission()
+                try recorder.start()
+                isOnboardingTestRecording = true
+                AppTelemetry.signal("onboarding_test_started")
+            } catch {
+                onboardingTestError = error.localizedDescription
+                AppTelemetry.signal("onboarding_test_failed", parameters: ["stage": "recording"])
+            }
+        }
+    }
+
+    func stopOnboardingTestDictation() {
+        guard isOnboardingTestRecording else { return }
+        isOnboardingTestRecording = false
+        onboardingTestError = nil
+
+        Task {
+            do {
+                let audioURL = try recorder.stop()
+                let text = try await engine.transcribe(audioURL: audioURL)
+                if text.isEmpty {
+                    onboardingTestError = "No speech detected. Try again."
+                    AppTelemetry.signal("onboarding_test_empty", parameters: ["engine": engine.identifier])
+                    return
+                }
+                onboardingTestTranscript = text
+                AppTelemetry.signal(
+                    "onboarding_test_completed",
+                    parameters: ["engine": engine.identifier]
+                )
+            } catch {
+                onboardingTestError = error.localizedDescription
+                AppTelemetry.signal(
+                    "onboarding_test_failed",
+                    parameters: [
+                        "stage": "transcription",
+                        "engine": engine.identifier,
+                        "error": String(describing: type(of: error))
+                    ]
+                )
+            }
+        }
+    }
+
+    func completeOnboarding() {
         hasCompletedOnboarding = true
         UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
         AppTelemetry.signal(
             "onboarding_completed",
-            parameters: ["model_ready": modelPreparation.isReady ? "true" : "false"]
+            parameters: [
+                "model_ready": modelPreparation.isReady ? "true" : "false",
+                "use_case": selectedUseCase.rawValue
+            ]
         )
-    }
-
-    func setTelemetryEnabled(_ enabled: Bool) {
-        telemetryEnabled = enabled
-        AppTelemetry.setEnabled(enabled)
     }
 
     private func applyModelPreparationProgress(_ progress: Double, status: String?) {

@@ -36,21 +36,6 @@ struct SettingsView: View {
                         }
                         .padding(MuesliTheme.spacing16)
                     }
-
-                    MuesliSurface {
-                        Toggle(isOn: telemetryBinding) {
-                            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                                Text("Anonymous Telemetry")
-                                    .font(MuesliTheme.headline())
-                                    .foregroundStyle(MuesliTheme.textPrimary)
-                                Text("No audio or transcript text is sent.")
-                                    .font(MuesliTheme.caption())
-                                    .foregroundStyle(MuesliTheme.textTertiary)
-                            }
-                        }
-                        .toggleStyle(.switch)
-                        .padding(MuesliTheme.spacing16)
-                    }
                 }
                 .padding(MuesliTheme.spacing20)
             }
@@ -82,14 +67,6 @@ struct SettingsView: View {
             "Paused"
         case .idle:
             "Not prepared"
-        }
-    }
-
-    private var telemetryBinding: Binding<Bool> {
-        Binding {
-            coordinator.telemetryEnabled
-        } set: { value in
-            coordinator.setTelemetryEnabled(value)
         }
     }
 }

@@ -45,13 +45,12 @@ group.com.phequals7.muesli
 
 ## Current Status
 
-This repo is intentionally private while the iOS product shape, App Store model, and monetization are being validated. The scaffold includes the handoff path and a pluggable transcription engine boundary, but the real CoreML/ANE-backed model runtime is not wired yet.
+This repo is intentionally private while the iOS product shape, App Store model, and monetization are being validated. The scaffold includes the keyboard handoff path and a pluggable transcription engine boundary. The containing app now uses FluidAudio Parakeet v3 for on-device CoreML/ANE transcription; the model downloads on first transcription and is cached by FluidAudio.
 
 ## Next Milestones
 
-1. Replace `PlaceholderSpeechEngine` with the first supported on-device engine.
-2. Add model download/state management.
-3. Persist local history in the app container.
-4. Add onboarding for keyboard installation and Full Access.
-5. Decide what belongs in a future shared Muesli Swift package.
-
+1. Add explicit model download/state management UI.
+2. Persist local history in the app container.
+3. Add onboarding for keyboard installation and Full Access.
+4. Decide what belongs in a future shared Muesli Swift package.
+5. Add a WhisperKit backend if model choice becomes important on iOS.

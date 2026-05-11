@@ -6,7 +6,7 @@ import Observation
 @Observable
 final class DictationCoordinator {
     private let store = SharedStore()
-    private let engine: TranscriptionEngine = PlaceholderSpeechEngine()
+    private let engine: TranscriptionEngine = FluidAudioTranscriptionEngine()
     private let recorder = AudioRecorder()
 
     private var activeRequest: DictationRequest?
@@ -75,4 +75,3 @@ final class DictationCoordinator {
         }
     }
 }
-

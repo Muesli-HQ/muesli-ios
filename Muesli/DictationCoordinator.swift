@@ -263,11 +263,11 @@ final class DictationCoordinator {
         guard let request = activeRequest, request.id == requestID else { return }
         isRecording = false
         statusText = "Transcribing"
+        try? store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: "Transcribing"))
 
         Task {
             do {
                 let audioURL = try recorder.stop()
-                try store.saveStatus(.init(requestID: request.id, phase: .transcribing))
                 let text = try await engine.transcribe(audioURL: audioURL)
                 let result = DictationResult(requestID: request.id, text: text, engineIdentifier: engine.identifier)
                 try store.saveResult(result)

@@ -7,6 +7,7 @@ final class KeyboardController {
     private let store = SharedStore()
     private var pollingTask: Task<Void, Never>?
     private var activeRequestID: UUID?
+    private var hasStopBeenRequested = false
 
     var statusText = "Tap to dictate"
     var isWaitingForResult = false
@@ -15,6 +16,9 @@ final class KeyboardController {
     var appOpener: (@MainActor (URL) -> Void)?
 
     var primaryButtonTitle: String {
+        if hasStopBeenRequested {
+            return currentPhase == .transcribing ? "Transcribing..." : "Stopping..."
+        }
         if currentPhase == .recording || currentPhase == .requested {
             return "Stop Dictation"
         }
@@ -25,6 +29,9 @@ final class KeyboardController {
     }
 
     var primaryButtonIcon: String {
+        if hasStopBeenRequested {
+            return "waveform"
+        }
         if currentPhase == .recording || currentPhase == .requested {
             return "stop.fill"
         }
@@ -35,6 +42,9 @@ final class KeyboardController {
     }
 
     var primaryButtonColor: ColorToken {
+        if hasStopBeenRequested {
+            return .transcribing
+        }
         if currentPhase == .recording || currentPhase == .requested {
             return .recording
         }
@@ -45,10 +55,15 @@ final class KeyboardController {
     }
 
     var isPrimaryButtonDisabled: Bool {
-        isWaitingForResult && currentPhase != .recording && currentPhase != .requested
+        if hasStopBeenRequested {
+            return true
+        }
+        return isWaitingForResult && currentPhase != .recording && currentPhase != .requested
     }
 
     func toggleDictation() {
+        guard !hasStopBeenRequested else { return }
+
         if currentPhase == .recording || currentPhase == .requested {
             stopDictation()
         } else {
@@ -62,6 +77,7 @@ final class KeyboardController {
         let request = DictationRequest()
         activeRequestID = request.id
         isWaitingForResult = true
+        hasStopBeenRequested = false
         currentPhase = .requested
         statusText = "Opening Muesli"
 
@@ -71,6 +87,7 @@ final class KeyboardController {
             startPolling()
         } catch {
             isWaitingForResult = false
+            hasStopBeenRequested = false
             currentPhase = .failed
             statusText = "Enable Full Access"
         }
@@ -78,8 +95,10 @@ final class KeyboardController {
 
     private func stopDictation() {
         guard let activeRequestID else { return }
+        hasStopBeenRequested = true
         currentPhase = .transcribing
         statusText = "Stopping"
+        try? store.saveStatus(.init(requestID: activeRequestID, phase: .transcribing, message: "Stopping"))
         appOpener?(dictationURL(requestID: activeRequestID, action: MuesliAppConstants.stopAction))
     }
 
@@ -120,6 +139,7 @@ final class KeyboardController {
                 try store.clearResult(for: activeRequestID)
                 self.activeRequestID = nil
                 isWaitingForResult = false
+                hasStopBeenRequested = false
                 currentPhase = .idle
                 statusText = "Inserted"
                 return
@@ -127,7 +147,17 @@ final class KeyboardController {
 
             let status = try store.status()
             if status.requestID == activeRequestID {
+                if hasStopBeenRequested && (status.phase == .requested || status.phase == .recording) {
+                    statusText = "Stopping"
+                    return
+                }
+
                 currentPhase = status.phase
+                if status.phase == .failed {
+                    self.activeRequestID = nil
+                    isWaitingForResult = false
+                    hasStopBeenRequested = false
+                }
             }
             statusText = status.message ?? label(for: status.phase)
         } catch {

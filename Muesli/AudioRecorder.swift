@@ -3,8 +3,7 @@ import Foundation
 
 @MainActor
 final class AudioRecorder {
-    private let engine = AVAudioEngine()
-    private var outputFile: AVAudioFile?
+    private var recorder: AVAudioRecorder?
     private var outputURL: URL?
 
     func requestPermission() async throws {
@@ -15,36 +14,39 @@ final class AudioRecorder {
     }
 
     func start() throws {
-        if engine.isRunning {
+        if recorder?.isRecording == true {
             try stop()
         }
 
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .spokenAudio, options: [.allowBluetoothHFP])
+        try session.setCategory(.record, mode: .spokenAudio, options: [.allowBluetooth])
         try session.setActive(true)
 
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-\(UUID().uuidString)")
-            .appendingPathExtension("caf")
+            .appendingPathExtension("wav")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false
+        ]
+
         outputURL = url
-        outputFile = try AVAudioFile(forWriting: url, settings: format.settings)
-
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4_096, format: format) { [weak self] buffer, _ in
-            try? self?.outputFile?.write(from: buffer)
+        let recorder = try AVAudioRecorder(url: url, settings: settings)
+        recorder.isMeteringEnabled = false
+        guard recorder.prepareToRecord(), recorder.record() else {
+            throw RecordingError.startFailed
         }
-
-        engine.prepare()
-        try engine.start()
+        self.recorder = recorder
     }
 
     @discardableResult
     func stop() throws -> URL {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        outputFile = nil
+        recorder?.stop()
+        recorder = nil
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
@@ -59,6 +61,7 @@ final class AudioRecorder {
     enum RecordingError: LocalizedError {
         case microphonePermissionDenied
         case noRecording
+        case startFailed
 
         var errorDescription: String? {
             switch self {
@@ -66,6 +69,8 @@ final class AudioRecorder {
                 "Microphone permission is required for dictation."
             case .noRecording:
                 "No recording is available."
+            case .startFailed:
+                "Could not start microphone recording. Try again."
             }
         }
     }

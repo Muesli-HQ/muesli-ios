@@ -112,6 +112,7 @@ final class KeyboardController {
     }
 
     func startDictation() {
+        MuesliHaptics.dictationStart()
         let request = preparedRequest ?? DictationRequest()
         preparedRequest = nil
         launchURL = makeLaunchURL(for: request)
@@ -142,6 +143,7 @@ final class KeyboardController {
             return
         }
 
+        MuesliHaptics.dictationStop()
         do {
             try store.saveCommand(.init(requestID: activeRequestID, action: .stop))
             try store.saveStatus(.init(requestID: activeRequestID, phase: .transcribing, message: "Stopping"))

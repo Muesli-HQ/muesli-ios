@@ -68,8 +68,10 @@ final class DictationCoordinator {
 
     func toggleRecording() {
         if isRecording {
+            MuesliHaptics.dictationStop()
             stopRecording()
         } else if statusText != "Transcribing" {
+            MuesliHaptics.dictationStart()
             startRecording(for: DictationRequest(), source: "app")
         }
     }
@@ -168,6 +170,7 @@ final class DictationCoordinator {
 
     func startOnboardingTestDictation() {
         guard !isOnboardingTestRecording else { return }
+        MuesliHaptics.dictationStart()
         onboardingTestTranscript = ""
         onboardingTestError = nil
         isOnboardingTestTranscribing = false
@@ -191,6 +194,7 @@ final class DictationCoordinator {
 
     func stopOnboardingTestDictation() {
         guard isOnboardingTestRecording else { return }
+        MuesliHaptics.dictationStop()
         isOnboardingTestRecording = false
         isOnboardingTestTranscribing = true
         stopMetering()

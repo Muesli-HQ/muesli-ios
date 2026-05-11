@@ -4,37 +4,47 @@ struct KeyboardRootView: View {
     @Bindable var controller: KeyboardController
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
+        VStack(spacing: MuesliTheme.spacing12) {
+            HStack(spacing: MuesliTheme.spacing12) {
                 Button {
                     controller.beginDictation()
                 } label: {
                     Image(systemName: controller.isWaitingForResult ? "waveform" : "mic.fill")
-                        .font(.system(size: 24, weight: .semibold))
-                        .frame(width: 52, height: 52)
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                .background(controller.isWaitingForResult ? MuesliTheme.transcribing : MuesliTheme.accent)
                 .clipShape(Circle())
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Muesli")
-                        .font(.headline)
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text("muesli")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
                     Text(controller.statusText)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
                         .lineLimit(1)
                 }
 
                 Spacer()
             }
+            .padding(MuesliTheme.spacing12)
+            .background(MuesliTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            )
 
-            HStack(spacing: 8) {
+            HStack(spacing: MuesliTheme.spacing8) {
                 KeyboardKey(title: "space") {}
                 KeyboardKey(title: "return") {}
             }
         }
-        .padding(12)
-        .background(.background)
+        .padding(MuesliTheme.spacing12)
+        .background(MuesliTheme.backgroundDeep)
     }
 }
 
@@ -45,11 +55,17 @@ private struct KeyboardKey: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.body)
+                .font(MuesliTheme.callout())
+                .foregroundStyle(MuesliTheme.textSecondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.plain)
+        .background(MuesliTheme.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
     }
 }
-

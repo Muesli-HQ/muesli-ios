@@ -55,24 +55,12 @@ struct DictationView: View {
                     }
 
                     Spacer()
-
-                    MuesliWaveformView(
-                        isActive: isWaveformActive,
-                        color: statusColor,
-                        level: coordinator.isRecording ? coordinator.inputLevel : nil,
-                        barCount: 9,
-                        spacing: 2
-                    )
-                    .frame(width: 34, height: 30)
-                    .padding(11)
-                        .background(statusColor.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
 
                 if isWaveformActive {
                     VStack(spacing: MuesliTheme.spacing8) {
                         MuesliWaveformView(
-                            isActive: true,
+                            isActive: coordinator.isRecording,
                             color: statusColor,
                             level: coordinator.isRecording ? coordinator.inputLevel : nil,
                             barCount: 13,
@@ -94,17 +82,18 @@ struct DictationView: View {
                     coordinator.toggleRecording()
                 } label: {
                     HStack(spacing: MuesliTheme.spacing8) {
-                        Image(systemName: coordinator.isRecording ? "stop.fill" : "mic.fill")
-                        Text(coordinator.isRecording ? "Stop Recording" : "Start Dictation")
+                        Image(systemName: dictationButtonIcon)
+                        Text(dictationButtonTitle)
                     }
                     .font(MuesliTheme.headline())
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(statusColor)
+                .foregroundStyle(isDictationButtonDisabled ? MuesliTheme.textTertiary : .white)
+                .background(isDictationButtonDisabled ? MuesliTheme.surfacePrimary : statusColor)
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .disabled(isDictationButtonDisabled)
             }
             .padding()
         }
@@ -179,6 +168,34 @@ struct DictationView: View {
 
     private var isWaveformActive: Bool {
         coordinator.isRecording || coordinator.statusText == "Transcribing"
+    }
+
+    private var isTranscribing: Bool {
+        coordinator.statusText == "Transcribing"
+    }
+
+    private var isDictationButtonDisabled: Bool {
+        isTranscribing
+    }
+
+    private var dictationButtonTitle: String {
+        if coordinator.isRecording {
+            "Stop Recording"
+        } else if isTranscribing {
+            "Transcribing"
+        } else {
+            "Start Dictation"
+        }
+    }
+
+    private var dictationButtonIcon: String {
+        if coordinator.isRecording {
+            "stop.fill"
+        } else if isTranscribing {
+            "waveform"
+        } else {
+            "mic.fill"
+        }
     }
 }
 

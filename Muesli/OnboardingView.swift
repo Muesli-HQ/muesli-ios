@@ -395,7 +395,7 @@ struct OnboardingView: View {
                     if isOnboardingTestActive {
                         VStack(spacing: MuesliTheme.spacing8) {
                             MuesliWaveformView(
-                                isActive: true,
+                                isActive: coordinator.isOnboardingTestRecording,
                                 color: onboardingTestColor,
                                 level: coordinator.isOnboardingTestRecording ? coordinator.onboardingTestInputLevel : nil,
                                 barCount: 13,

@@ -62,7 +62,7 @@ final class DictationCoordinator {
     func toggleRecording() {
         if isRecording {
             stopRecording()
-        } else {
+        } else if statusText != "Transcribing" {
             startRecording(for: DictationRequest(), source: "app")
         }
     }
@@ -248,6 +248,7 @@ final class DictationCoordinator {
     }
 
     private func startRecording(for request: DictationRequest, source: String) {
+        guard !isRecording, statusText != "Transcribing" else { return }
         activeRequest = request
 
         Task {
@@ -304,6 +305,7 @@ final class DictationCoordinator {
                 try store.clearPendingRequest()
                 refreshHistory()
                 lastTranscript = text
+                activeRequest = nil
                 statusText = "Ready"
                 AppTelemetry.signal(
                     "dictation_completed",
@@ -313,6 +315,7 @@ final class DictationCoordinator {
                     ]
                 )
             } catch {
+                activeRequest = nil
                 statusText = error.localizedDescription
                 AppTelemetry.signal(
                     "dictation_failed",

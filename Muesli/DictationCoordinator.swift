@@ -15,8 +15,11 @@ final class DictationCoordinator {
     private let recorder = AudioRecorder()
     private var modelPreparationTask: Task<Void, Never>?
     private var meteringTask: Task<Void, Never>?
+    private var commandPollingTask: Task<Void, Never>?
+    private var transcriptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     private var activeRequest: DictationRequest?
+    var isKeyboardHandoffActive = false
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
     var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
     var selectedUseCase = OnboardingUseCase(
@@ -54,7 +57,11 @@ final class DictationCoordinator {
             return
         }
 
-        let request = DictationRequest(id: requestID)
+        let pendingRequest = try? store.pendingRequest()
+        let request = pendingRequest?.id == requestID
+            ? pendingRequest!
+            : DictationRequest(id: requestID)
+        isKeyboardHandoffActive = true
         activeRequest = request
         startRecording(for: request, source: "keyboard")
     }
@@ -259,6 +266,9 @@ final class DictationCoordinator {
                 startMetering { [weak self] level in
                     self?.inputLevel = level
                 }
+                if source == "keyboard" {
+                    startCommandPolling(for: request.id)
+                }
                 statusText = "Recording"
                 AppTelemetry.signal("dictation_started", parameters: ["source": source])
                 try store.saveRequest(request)
@@ -293,10 +303,14 @@ final class DictationCoordinator {
 
         isRecording = false
         stopMetering()
+        stopCommandPolling()
         statusText = "Transcribing"
         try? store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: "Transcribing"))
 
+        beginTranscriptionBackgroundTask()
         Task {
+            defer { endTranscriptionBackgroundTask() }
+
             do {
                 let audioURL = try recorder.stop()
                 let text = try await engine.transcribe(audioURL: audioURL)
@@ -306,6 +320,7 @@ final class DictationCoordinator {
                 refreshHistory()
                 lastTranscript = text
                 activeRequest = nil
+                isKeyboardHandoffActive = false
                 statusText = "Ready"
                 AppTelemetry.signal(
                     "dictation_completed",
@@ -316,6 +331,7 @@ final class DictationCoordinator {
                 )
             } catch {
                 activeRequest = nil
+                isKeyboardHandoffActive = false
                 statusText = error.localizedDescription
                 AppTelemetry.signal(
                     "dictation_failed",
@@ -351,5 +367,59 @@ final class DictationCoordinator {
         meteringTask = nil
         inputLevel = 0
         onboardingTestInputLevel = 0
+    }
+
+    private func startCommandPolling(for requestID: UUID) {
+        commandPollingTask?.cancel()
+        commandPollingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if let command = try? self.store.pendingCommand(), command.requestID == requestID {
+                    try? self.store.clearPendingCommand()
+                    switch command.action {
+                    case .stop:
+                        self.stopRecording(requestID: requestID)
+                    case .cancel:
+                        self.cancelRecording(requestID: requestID)
+                    }
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    private func stopCommandPolling() {
+        commandPollingTask?.cancel()
+        commandPollingTask = nil
+    }
+
+    private func beginTranscriptionBackgroundTask() {
+        endTranscriptionBackgroundTask()
+        transcriptionBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "MuesliTranscription") { [weak self] in
+            Task { @MainActor in
+                self?.endTranscriptionBackgroundTask()
+            }
+        }
+    }
+
+    private func endTranscriptionBackgroundTask() {
+        guard transcriptionBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(transcriptionBackgroundTask)
+        transcriptionBackgroundTask = .invalid
+    }
+
+    private func cancelRecording(requestID: UUID) {
+        guard activeRequest?.id == requestID else { return }
+        isRecording = false
+        stopMetering()
+        stopCommandPolling()
+        _ = try? recorder.stop()
+        activeRequest = nil
+        isKeyboardHandoffActive = false
+        statusText = "Ready"
+        try? store.clearPendingCommand()
+        try? store.clearPendingRequest()
+        try? store.saveStatus(.idle)
     }
 }

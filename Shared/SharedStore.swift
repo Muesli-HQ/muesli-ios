@@ -14,6 +14,7 @@ enum SharedStoreError: Error, LocalizedError {
 struct SharedStore: Sendable {
     private static let resultsHistoryFileName = "dictation-history.json"
     private static let keyboardStatusFileName = "keyboard-status.json"
+    private static let pendingCommandFileName = "pending-command.json"
     private static let maxStoredResults = 200
 
     private let appGroupIdentifier: String
@@ -42,6 +43,18 @@ struct SharedStore: Sendable {
 
     func clearPendingRequest() throws {
         try remove("pending-request.json")
+    }
+
+    func saveCommand(_ command: DictationCommand) throws {
+        try write(command, to: Self.pendingCommandFileName)
+    }
+
+    func pendingCommand() throws -> DictationCommand? {
+        try read(DictationCommand.self, from: Self.pendingCommandFileName)
+    }
+
+    func clearPendingCommand() throws {
+        try remove(Self.pendingCommandFileName)
     }
 
     func saveStatus(_ status: DictationStatus) throws {

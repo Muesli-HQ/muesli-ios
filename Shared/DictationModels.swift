@@ -9,6 +9,11 @@ enum DictationPhase: String, Codable, Sendable, Equatable {
     case failed
 }
 
+enum DictationCommandAction: String, Codable, Sendable, Equatable {
+    case stop
+    case cancel
+}
+
 struct DictationRequest: Codable, Sendable, Equatable, Identifiable {
     let id: UUID
     let createdAt: Date
@@ -22,6 +27,22 @@ struct DictationRequest: Codable, Sendable, Equatable, Identifiable {
         self.id = id
         self.createdAt = createdAt
         self.sourceBundleIdentifier = sourceBundleIdentifier
+    }
+}
+
+struct DictationCommand: Codable, Sendable, Equatable {
+    let requestID: UUID
+    let action: DictationCommandAction
+    let createdAt: Date
+
+    init(
+        requestID: UUID,
+        action: DictationCommandAction,
+        createdAt: Date = .now
+    ) {
+        self.requestID = requestID
+        self.action = action
+        self.createdAt = createdAt
     }
 }
 

@@ -32,7 +32,7 @@ struct KeyboardRootView: View {
                 }
 
                 Button {
-                    controller.insertLatestDictation()
+                    controller.primaryAction()
                 } label: {
                     Label(
                         controller.primaryButtonTitle,
@@ -47,6 +47,21 @@ struct KeyboardRootView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(controller.isPrimaryButtonDisabled)
+
+                if controller.canInsertLatest {
+                    Button {
+                        controller.insertLatestDictation()
+                    } label: {
+                        Label("Insert Latest", systemImage: "text.insert")
+                            .font(MuesliTheme.captionMedium())
+                            .foregroundStyle(MuesliTheme.accent)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 36)
+                            .background(MuesliTheme.accentSubtle)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(MuesliTheme.spacing12)
             .background(MuesliTheme.backgroundRaised)

@@ -12,6 +12,11 @@ struct RootView: View {
                 OnboardingView(coordinator: coordinator)
             }
         }
+        .overlay {
+            if coordinator.isKeyboardHandoffActive {
+                KeyboardHandoffOverlay(coordinator: coordinator)
+            }
+        }
         .background(MuesliTheme.backgroundBase)
         .tint(MuesliTheme.accent)
     }
@@ -53,6 +58,64 @@ struct RootView: View {
             DictationView(coordinator: coordinator)
         case .settings:
             SettingsView(coordinator: coordinator)
+        }
+    }
+}
+
+private struct KeyboardHandoffOverlay: View {
+    @Bindable var coordinator: DictationCoordinator
+
+    var body: some View {
+        ZStack {
+            MuesliTheme.backgroundBase
+                .ignoresSafeArea()
+
+            VStack(spacing: MuesliTheme.spacing32) {
+                Spacer(minLength: MuesliTheme.spacing32)
+
+                VStack(spacing: MuesliTheme.spacing16) {
+                    MuesliWaveformView(
+                        isActive: coordinator.isRecording,
+                        color: coordinator.isRecording ? MuesliTheme.recording : MuesliTheme.transcribing,
+                        level: coordinator.isRecording ? coordinator.inputLevel : nil,
+                        barCount: 13,
+                        spacing: 4
+                    )
+                    .frame(width: 148, height: 46)
+
+                    Text(coordinator.isRecording ? "Listening" : "Transcribing")
+                        .font(MuesliTheme.title2())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+
+                    Text(coordinator.isRecording ? "iPhone Microphone" : "Preparing text for the keyboard")
+                        .font(MuesliTheme.callout())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+
+                VStack(spacing: MuesliTheme.spacing12) {
+                    Text("Swipe back to your app")
+                        .font(MuesliTheme.title1())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .multilineTextAlignment(.center)
+
+                    Text("Keep Muesli recording in the background, then tap Stop Dictation on the Muesli keyboard. The transcript will insert into the focused text box.")
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                Label("Use the app switcher or swipe gesture to return", systemImage: "arrow.left.arrow.right")
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(MuesliTheme.backgroundRaised)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            }
+            .padding(MuesliTheme.spacing24)
         }
     }
 }

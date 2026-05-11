@@ -11,6 +11,9 @@ final class KeyboardViewController: UIInputViewController {
         controller.textInserter = { [weak self] text in
             self?.textDocumentProxy.insertText(text)
         }
+        controller.appOpener = { [weak self] url in
+            self?.openContainingApp(url) ?? false
+        }
         let rootView = KeyboardRootView(controller: controller)
         let hostingController = UIHostingController(rootView: rootView)
         self.hostingController = hostingController
@@ -37,5 +40,21 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         controller.stopPolling()
+    }
+
+    private func openContainingApp(_ url: URL) -> Bool {
+        let selector = Selector(("openURL:"))
+        var responder: UIResponder? = self
+
+        while let currentResponder = responder {
+            if currentResponder.responds(to: selector) {
+                currentResponder.perform(selector, with: url)
+                return true
+            }
+            responder = currentResponder.next
+        }
+
+        extensionContext?.open(url, completionHandler: nil)
+        return extensionContext != nil
     }
 }

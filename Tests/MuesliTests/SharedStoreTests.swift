@@ -54,4 +54,26 @@ final class SharedStoreTests: XCTestCase {
 
         XCTAssertEqual(try store.resultsHistory().map(\.text), ["replacement"])
     }
+
+    func testPendingCommandRoundTripsAndClears() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let command = DictationCommand(
+            requestID: requestID,
+            action: .stop,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+
+        try store.saveCommand(command)
+
+        XCTAssertEqual(try store.pendingCommand(), command)
+
+        try store.clearPendingCommand()
+
+        XCTAssertNil(try store.pendingCommand())
+    }
 }

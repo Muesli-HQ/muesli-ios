@@ -34,6 +34,7 @@ targets:
     sources:
       - path: Muesli
       - path: Shared
+      - path: LiveActivityShared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios
@@ -44,8 +45,23 @@ targets:
         MUESLI_TELEMETRYDECK_APP_ID: ""
     dependencies:
       - target: MuesliKeyboard
+      - target: MuesliLiveActivityExtension
       - package: FluidAudio
       - package: TelemetryDeck
+
+  MuesliLiveActivityExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: MuesliLiveActivityExtension
+      - path: LiveActivityShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.liveactivity
+        PRODUCT_NAME: MuesliLiveActivityExtension
+        INFOPLIST_FILE: MuesliLiveActivityExtension/Info.plist
+        SKIP_INSTALL: true
+        APPLICATION_EXTENSION_API_ONLY: true
 
   MuesliKeyboard:
     type: app-extension
@@ -80,6 +96,7 @@ schemes:
       targets:
         Muesli: all
         MuesliKeyboard: all
+        MuesliLiveActivityExtension: all
     run:
       config: Debug
     test:

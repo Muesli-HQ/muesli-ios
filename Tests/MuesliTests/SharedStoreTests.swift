@@ -77,6 +77,30 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertNil(try store.pendingCommand())
     }
 
+    func testKeyboardRuntimeStatusRoundTripsAndClears() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let status = KeyboardRuntimeStatus(
+            isActive: true,
+            activeRequestID: requestID,
+            phase: .recording,
+            message: "Listening",
+            updatedAt: Date(timeIntervalSince1970: 500)
+        )
+
+        try store.saveKeyboardRuntimeStatus(status)
+
+        XCTAssertEqual(try store.keyboardRuntimeStatus(), status)
+
+        try store.clearKeyboardRuntimeStatus()
+
+        XCTAssertNil(try store.keyboardRuntimeStatus())
+    }
+
     func testSavingPendingRequestDoesNotOverwriteStatus() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)

@@ -18,6 +18,7 @@ final class KeyboardController {
     var textInserter: (@MainActor (String) -> Void)?
     var textDeleter: (@MainActor (Int) -> Void)?
     private var lastInsertedCharacterCount = 0
+    private var canUseRuntimeStart = false
 
     var primaryButtonTitle: String {
         switch dictationPhase {
@@ -67,7 +68,8 @@ final class KeyboardController {
     }
 
     var opensMuesliFromPrimaryButton: Bool {
-        dictationPhase == .idle || dictationPhase == .failed || (dictationPhase == .requested && activeRequestID == nil)
+        !canUseRuntimeStart
+            && (dictationPhase == .idle || dictationPhase == .failed || (dictationPhase == .requested && activeRequestID == nil))
     }
 
     func primaryAction() {
@@ -126,7 +128,12 @@ final class KeyboardController {
         do {
             try store.clearPendingCommand()
             try store.saveRequest(request)
-            try store.saveStatus(.init(requestID: request.id, phase: .requested, message: "Opening Muesli"))
+            if canUseRuntimeStart {
+                try store.saveCommand(.init(requestID: request.id, action: .start))
+                try store.saveStatus(.init(requestID: request.id, phase: .requested, message: "Starting"))
+            } else {
+                try store.saveStatus(.init(requestID: request.id, phase: .requested, message: "Opening Muesli"))
+            }
         } catch {
             statusText = "Enable Full Access"
             activeRequestID = nil
@@ -134,7 +141,7 @@ final class KeyboardController {
             return
         }
 
-        statusText = "Recording in Muesli"
+        statusText = canUseRuntimeStart ? "Starting" : "Recording in Muesli"
     }
 
     private func stopActiveDictation() {
@@ -199,6 +206,7 @@ final class KeyboardController {
 
     private func refreshLatestDictation() {
         do {
+            apply(runtimeStatus: try store.keyboardRuntimeStatus())
             let status = try store.status()
             apply(status: status)
 
@@ -227,6 +235,16 @@ final class KeyboardController {
             }
         } catch {
             statusText = "Waiting for Full Access"
+        }
+    }
+
+    private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
+        let isRecent = runtimeStatus.map { Date().timeIntervalSince($0.updatedAt) < 8 } ?? false
+        canUseRuntimeStart = runtimeStatus?.isActive == true && isRecent
+
+        guard activeRequestID == nil, canUseRuntimeStart else { return }
+        if runtimeStatus?.phase == .idle, statusText == "Ready" || statusText == "Record in Muesli first" {
+            statusText = "Runtime ready"
         }
     }
 

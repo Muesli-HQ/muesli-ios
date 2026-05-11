@@ -10,6 +10,7 @@ enum DictationPhase: String, Codable, Sendable, Equatable {
 }
 
 enum DictationCommandAction: String, Codable, Sendable, Equatable {
+    case start
     case stop
     case cancel
 }
@@ -191,4 +192,26 @@ struct DictationStatus: Codable, Sendable, Equatable {
 struct KeyboardExtensionStatus: Codable, Sendable, Equatable {
     let lastSeenAt: Date
     let hasOpenAccess: Bool
+}
+
+struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
+    let isActive: Bool
+    let activeRequestID: UUID?
+    let phase: DictationPhase
+    let message: String?
+    let updatedAt: Date
+
+    init(
+        isActive: Bool,
+        activeRequestID: UUID? = nil,
+        phase: DictationPhase = .idle,
+        message: String? = nil,
+        updatedAt: Date = .now
+    ) {
+        self.isActive = isActive
+        self.activeRequestID = activeRequestID
+        self.phase = phase
+        self.message = message
+        self.updatedAt = updatedAt
+    }
 }

@@ -16,6 +16,7 @@ struct SharedStore: Sendable {
     private static let sessionsFileName = "recording-sessions.json"
     private static let transcriptsFileName = "transcripts.json"
     private static let keyboardStatusFileName = "keyboard-status.json"
+    private static let keyboardRuntimeStatusFileName = "keyboard-runtime-status.json"
     private static let pendingCommandFileName = "pending-command.json"
     private static let maxStoredResults = 200
     private static let maxStoredSessions = 500
@@ -92,6 +93,18 @@ struct SharedStore: Sendable {
 
     func keyboardExtensionStatus() throws -> KeyboardExtensionStatus? {
         try read(KeyboardExtensionStatus.self, from: Self.keyboardStatusFileName)
+    }
+
+    func saveKeyboardRuntimeStatus(_ status: KeyboardRuntimeStatus) throws {
+        try write(status, to: Self.keyboardRuntimeStatusFileName)
+    }
+
+    func keyboardRuntimeStatus() throws -> KeyboardRuntimeStatus? {
+        try read(KeyboardRuntimeStatus.self, from: Self.keyboardRuntimeStatusFileName)
+    }
+
+    func clearKeyboardRuntimeStatus() throws {
+        try remove(Self.keyboardRuntimeStatusFileName)
     }
 
     func saveSession(_ session: RecordingSession) throws {

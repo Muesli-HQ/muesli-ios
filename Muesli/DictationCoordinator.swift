@@ -13,9 +13,11 @@ final class DictationCoordinator {
     private let store = SharedStore()
     private let engine = FluidAudioTranscriptionEngine()
     private let recorder = AudioRecorder()
+    private let liveActivityController = MuesliLiveActivityController()
     private var modelPreparationTask: Task<Void, Never>?
     private var meteringTask: Task<Void, Never>?
     private var commandPollingTask: Task<Void, Never>?
+    private var keyboardRuntimePollingTask: Task<Void, Never>?
     private var transcriptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     private var activeRequest: DictationRequest?
@@ -69,6 +71,7 @@ final class DictationCoordinator {
             : DictationRequest(id: requestID)
         isKeyboardHandoffActive = true
         activeRequest = request
+        startKeyboardRuntimePolling()
         startRecording(for: request, source: "keyboard")
     }
 
@@ -298,6 +301,15 @@ final class DictationCoordinator {
                 try recorder.start(outputURL: audioURL)
                 activeSession = session
                 isRecording = true
+                if source == "keyboard" {
+                    startKeyboardRuntimePolling()
+                    saveKeyboardRuntimeStatus(
+                        isActive: true,
+                        activeRequestID: request.id,
+                        phase: .recording,
+                        message: "Listening"
+                    )
+                }
                 startMetering { [weak self] level in
                     self?.inputLevel = level
                 }
@@ -308,6 +320,14 @@ final class DictationCoordinator {
                 AppTelemetry.signal("dictation_started", parameters: ["source": source])
                 try store.saveRequest(request)
                 try store.saveStatus(.init(requestID: request.id, phase: .recording))
+                Task {
+                    await liveActivityController.start(
+                        session: session,
+                        requestID: request.id,
+                        phase: "Listening",
+                        detail: source == "keyboard" ? "Keyboard dictation active" : "Recording dictation"
+                    )
+                }
             } catch {
                 session.phase = .failed
                 session.errorMessage = error.localizedDescription
@@ -348,11 +368,26 @@ final class DictationCoordinator {
         stopCommandPolling()
         statusText = "Transcribing"
         try? store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: "Transcribing"))
+        if isKeyboardHandoffActive {
+            saveKeyboardRuntimeStatus(
+                isActive: true,
+                activeRequestID: request.id,
+                phase: .transcribing,
+                message: "Transcribing"
+            )
+        }
         if var session {
             session.phase = .transcribing
             session.endedAt = .now
             try? store.saveSession(session)
             activeSession = session
+            Task {
+                await liveActivityController.update(
+                    phase: "Transcribing",
+                    detail: "Preparing text for the keyboard",
+                    session: session
+                )
+            }
         }
 
         beginTranscriptionBackgroundTask()
@@ -362,7 +397,7 @@ final class DictationCoordinator {
             do {
                 let audioURL = try recorder.stop()
                 let text = try await engine.transcribe(audioURL: audioURL)
-                var completedSession = activeSession ?? session
+                let completedSession = activeSession ?? session
                 let transcript: Transcript?
                 if var completedSession {
                     let savedTranscript = Transcript(
@@ -393,8 +428,34 @@ final class DictationCoordinator {
                 lastTranscript = text
                 activeRequest = nil
                 activeSession = nil
+                if isKeyboardHandoffActive {
+                    saveKeyboardRuntimeStatus(
+                        isActive: true,
+                        activeRequestID: nil,
+                        phase: .idle,
+                        message: "Ready"
+                    )
+                }
+                let wasKeyboardHandoff = isKeyboardHandoffActive
                 isKeyboardHandoffActive = false
                 statusText = "Ready"
+                if let completedSession = try? store.recordingSession(requestID: request.id) {
+                    Task {
+                        if wasKeyboardHandoff {
+                            await liveActivityController.update(
+                                phase: "Ready",
+                                detail: "Keyboard runtime ready",
+                                session: completedSession
+                            )
+                        } else {
+                            await liveActivityController.end(
+                                phase: "Completed",
+                                detail: "Transcript saved",
+                                session: completedSession
+                            )
+                        }
+                    }
+                }
                 AppTelemetry.signal(
                     "dictation_completed",
                     parameters: [
@@ -410,6 +471,12 @@ final class DictationCoordinator {
                 }
                 activeRequest = nil
                 activeSession = nil
+                saveKeyboardRuntimeStatus(
+                    isActive: isKeyboardHandoffActive,
+                    activeRequestID: nil,
+                    phase: .failed,
+                    message: error.localizedDescription
+                )
                 isKeyboardHandoffActive = false
                 statusText = error.localizedDescription
                 refreshHistory()
@@ -450,6 +517,14 @@ final class DictationCoordinator {
                 }
                 refreshHistory()
                 AppTelemetry.signal("meeting_recording_started")
+                Task {
+                    await liveActivityController.start(
+                        session: session,
+                        requestID: nil,
+                        phase: "Recording",
+                        detail: "Meeting recording active"
+                    )
+                }
             } catch {
                 session.phase = .failed
                 session.errorMessage = error.localizedDescription
@@ -478,6 +553,13 @@ final class DictationCoordinator {
             try store.saveSession(session)
             activeSession = nil
             refreshHistory()
+            Task {
+                await liveActivityController.end(
+                    phase: queueForTranscription ? "Queued" : "Transcribing",
+                    detail: queueForTranscription ? "Saved for delayed transcription" : "Transcribing locally",
+                    session: session
+                )
+            }
             AppTelemetry.signal("meeting_recording_stopped", parameters: [
                 "queued": queueForTranscription ? "true" : "false"
             ])
@@ -506,6 +588,14 @@ final class DictationCoordinator {
         refreshHistory()
         isMeetingTranscribing = true
         meetingStatusText = "Transcribing"
+        Task {
+            await liveActivityController.start(
+                session: session,
+                requestID: nil,
+                phase: "Transcribing",
+                detail: "Transcribing meeting locally"
+            )
+        }
 
         beginTranscriptionBackgroundTask()
         Task {
@@ -530,6 +620,11 @@ final class DictationCoordinator {
                 try store.saveSession(session)
                 meetingStatusText = "Ready"
                 refreshHistory()
+                await liveActivityController.end(
+                    phase: "Completed",
+                    detail: "Meeting transcript saved",
+                    session: session
+                )
                 AppTelemetry.signal("meeting_transcription_completed", parameters: [
                     "engine": engine.identifier,
                     "empty": text.isEmpty ? "true" : "false"
@@ -540,6 +635,11 @@ final class DictationCoordinator {
                 try? store.saveSession(session)
                 meetingStatusText = error.localizedDescription
                 refreshHistory()
+                await liveActivityController.end(
+                    phase: "Failed",
+                    detail: "Transcription failed",
+                    session: session
+                )
                 AppTelemetry.signal("meeting_transcription_failed", parameters: [
                     "engine": engine.identifier,
                     "error": String(describing: type(of: error))
@@ -579,6 +679,8 @@ final class DictationCoordinator {
                 if let command = try? self.store.pendingCommand(), command.requestID == requestID {
                     try? self.store.clearPendingCommand()
                     switch command.action {
+                    case .start:
+                        break
                     case .stop:
                         self.stopRecording(requestID: requestID)
                     case .cancel:
@@ -594,6 +696,78 @@ final class DictationCoordinator {
     private func stopCommandPolling() {
         commandPollingTask?.cancel()
         commandPollingTask = nil
+    }
+
+    private func startKeyboardRuntimePolling() {
+        guard keyboardRuntimePollingTask == nil else { return }
+        refreshKeyboardRuntimeHeartbeat()
+
+        keyboardRuntimePollingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.refreshKeyboardRuntimeHeartbeat()
+
+                if let command = try? self.store.pendingCommand(), command.action == .start {
+                    try? self.store.clearPendingCommand()
+                    guard !self.isRecording, !self.isMeetingRecording, self.statusText != "Transcribing" else {
+                        try? self.store.saveStatus(.init(
+                            requestID: command.requestID,
+                            phase: .failed,
+                            message: "Muesli is busy"
+                        ))
+                        try? await Task.sleep(for: .milliseconds(500))
+                        continue
+                    }
+
+                    let pendingRequest = try? self.store.pendingRequest()
+                    let request = pendingRequest?.id == command.requestID
+                        ? pendingRequest!
+                        : DictationRequest(id: command.requestID)
+                    self.isKeyboardHandoffActive = true
+                    self.activeRequest = request
+                    self.startRecording(for: request, source: "keyboard")
+                }
+
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private func refreshKeyboardRuntimeHeartbeat() {
+        let phase: DictationPhase
+        let message: String
+
+        if isRecording {
+            phase = .recording
+            message = "Listening"
+        } else if activeRequest != nil && statusText == "Transcribing" {
+            phase = .transcribing
+            message = "Transcribing"
+        } else {
+            phase = .idle
+            message = "Ready"
+        }
+
+        saveKeyboardRuntimeStatus(
+            isActive: true,
+            activeRequestID: activeRequest?.id,
+            phase: phase,
+            message: message
+        )
+    }
+
+    private func saveKeyboardRuntimeStatus(
+        isActive: Bool,
+        activeRequestID: UUID?,
+        phase: DictationPhase,
+        message: String?
+    ) {
+        try? store.saveKeyboardRuntimeStatus(.init(
+            isActive: isActive,
+            activeRequestID: activeRequestID,
+            phase: phase,
+            message: message
+        ))
     }
 
     private func beginTranscriptionBackgroundTask() {
@@ -621,9 +795,17 @@ final class DictationCoordinator {
             session.phase = .cancelled
             session.endedAt = .now
             try? store.saveSession(session)
+            Task {
+                await liveActivityController.end(
+                    phase: "Cancelled",
+                    detail: "Recording cancelled",
+                    session: session
+                )
+            }
         }
         activeRequest = nil
         activeSession = nil
+        saveKeyboardRuntimeStatus(isActive: true, activeRequestID: nil, phase: .idle, message: "Ready")
         isKeyboardHandoffActive = false
         statusText = "Ready"
         try? store.clearPendingCommand()

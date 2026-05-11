@@ -37,6 +37,10 @@
 	<string>$(MUESLI_TELEMETRYDECK_APP_ID)</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Muesli records your voice so it can transcribe speech into text on device.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIApplicationSceneManifest</key>

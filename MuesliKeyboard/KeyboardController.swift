@@ -4,10 +4,13 @@ import Observation
 @MainActor
 @Observable
 final class KeyboardController {
+    private static let transcriptionTimeout: TimeInterval = 90
+
     private let store = SharedStore()
     private var pollingTask: Task<Void, Never>?
     private var activeRequestID: UUID?
     private var hasStopBeenRequested = false
+    private var stopRequestedAt: Date?
 
     var statusText = "Tap to dictate"
     var isWaitingForResult = false
@@ -96,6 +99,7 @@ final class KeyboardController {
     private func stopDictation() {
         guard let activeRequestID else { return }
         hasStopBeenRequested = true
+        stopRequestedAt = .now
         currentPhase = .transcribing
         statusText = "Stopping"
         try? store.saveStatus(.init(requestID: activeRequestID, phase: .transcribing, message: "Stopping"))
@@ -140,6 +144,7 @@ final class KeyboardController {
                 self.activeRequestID = nil
                 isWaitingForResult = false
                 hasStopBeenRequested = false
+                stopRequestedAt = nil
                 currentPhase = .idle
                 statusText = "Inserted"
                 return
@@ -147,6 +152,17 @@ final class KeyboardController {
 
             let status = try store.status()
             if status.requestID == activeRequestID {
+                if hasStopTimedOut {
+                    self.activeRequestID = nil
+                    isWaitingForResult = false
+                    hasStopBeenRequested = false
+                    stopRequestedAt = nil
+                    currentPhase = .failed
+                    statusText = "Timed out. Try again."
+                    try? store.saveStatus(.init(requestID: activeRequestID, phase: .failed, message: "Timed out. Try again."))
+                    return
+                }
+
                 if hasStopBeenRequested && (status.phase == .requested || status.phase == .recording) {
                     statusText = "Stopping"
                     return
@@ -157,6 +173,7 @@ final class KeyboardController {
                     self.activeRequestID = nil
                     isWaitingForResult = false
                     hasStopBeenRequested = false
+                    stopRequestedAt = nil
                 }
             }
             statusText = status.message ?? label(for: status.phase)
@@ -195,6 +212,11 @@ final class KeyboardController {
         case .failed:
             "Failed"
         }
+    }
+
+    private var hasStopTimedOut: Bool {
+        guard let stopRequestedAt else { return false }
+        return Date().timeIntervalSince(stopRequestedAt) > Self.transcriptionTimeout
     }
 }
 

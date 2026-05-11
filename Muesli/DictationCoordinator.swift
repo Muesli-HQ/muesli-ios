@@ -260,7 +260,19 @@ final class DictationCoordinator {
     }
 
     private func stopRecording(requestID: UUID) {
-        guard let request = activeRequest, request.id == requestID else { return }
+        let request: DictationRequest
+        if let activeRequest, activeRequest.id == requestID {
+            request = activeRequest
+        } else if let pendingRequest = try? store.pendingRequest(), pendingRequest.id == requestID {
+            request = pendingRequest
+            activeRequest = pendingRequest
+        } else {
+            let message = "No active recording found. Start a new dictation."
+            statusText = message
+            try? store.saveStatus(.init(requestID: requestID, phase: .failed, message: message))
+            return
+        }
+
         isRecording = false
         statusText = "Transcribing"
         try? store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: "Transcribing"))

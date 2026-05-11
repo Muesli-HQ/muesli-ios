@@ -392,6 +392,27 @@ struct OnboardingView: View {
 
             MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                    if isOnboardingTestActive {
+                        VStack(spacing: MuesliTheme.spacing8) {
+                            MuesliWaveformView(
+                                isActive: true,
+                                color: onboardingTestColor,
+                                level: coordinator.isOnboardingTestRecording ? coordinator.onboardingTestInputLevel : nil,
+                                barCount: 13,
+                                spacing: 4
+                            )
+                            .frame(width: 132, height: 42)
+
+                            Text(coordinator.isOnboardingTestRecording ? "Listening" : "Transcribing")
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, MuesliTheme.spacing16)
+                        .background(onboardingTestColor.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+
                     Text(coordinator.onboardingTestTranscript.isEmpty ? "Your transcription will appear here." : coordinator.onboardingTestTranscript)
                         .font(coordinator.onboardingTestTranscript.isEmpty ? MuesliTheme.body() : .system(size: 14, design: .monospaced))
                         .foregroundStyle(coordinator.onboardingTestTranscript.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
@@ -411,8 +432,8 @@ struct OnboardingView: View {
                         }
                     } label: {
                         Label(
-                            coordinator.isOnboardingTestRecording ? "Stop Recording" : "Start Test",
-                            systemImage: coordinator.isOnboardingTestRecording ? "stop.fill" : "mic.fill"
+                            onboardingTestButtonTitle,
+                            systemImage: onboardingTestButtonIcon
                         )
                         .font(MuesliTheme.headline())
                         .frame(maxWidth: .infinity)
@@ -420,9 +441,9 @@ struct OnboardingView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.white)
-                    .background(coordinator.isOnboardingTestRecording ? MuesliTheme.recording : MuesliTheme.accent)
+                    .background(onboardingTestColor)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    .disabled(!coordinator.modelPreparation.isReady)
+                    .disabled(!coordinator.modelPreparation.isReady || coordinator.isOnboardingTestTranscribing)
 
                     if !coordinator.modelPreparation.isReady {
                         Text("The test unlocks after model preparation completes.")
@@ -501,7 +522,41 @@ struct OnboardingView: View {
         case .model:
             !coordinator.modelPreparation.isPreparing
         case .test:
-            !coordinator.isOnboardingTestRecording && !coordinator.onboardingTestTranscript.isEmpty
+            !isOnboardingTestActive && !coordinator.onboardingTestTranscript.isEmpty
+        }
+    }
+
+    private var isOnboardingTestActive: Bool {
+        coordinator.isOnboardingTestRecording || coordinator.isOnboardingTestTranscribing
+    }
+
+    private var onboardingTestColor: Color {
+        if coordinator.isOnboardingTestRecording {
+            MuesliTheme.recording
+        } else if coordinator.isOnboardingTestTranscribing {
+            MuesliTheme.transcribing
+        } else {
+            MuesliTheme.accent
+        }
+    }
+
+    private var onboardingTestButtonTitle: String {
+        if coordinator.isOnboardingTestTranscribing {
+            "Transcribing"
+        } else if coordinator.isOnboardingTestRecording {
+            "Stop Recording"
+        } else {
+            "Start Test"
+        }
+    }
+
+    private var onboardingTestButtonIcon: String {
+        if coordinator.isOnboardingTestTranscribing {
+            "waveform"
+        } else if coordinator.isOnboardingTestRecording {
+            "stop.fill"
+        } else {
+            "mic.fill"
         }
     }
 

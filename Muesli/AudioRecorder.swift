@@ -51,7 +51,7 @@ final class AudioRecorder {
         } catch {
             throw RecordingError.recorderSetupFailed(stage: "create", underlying: error)
         }
-        recorder.isMeteringEnabled = false
+        recorder.isMeteringEnabled = true
         guard recorder.prepareToRecord() else {
             throw RecordingError.startFailed(stage: "prepare")
         }
@@ -59,6 +59,12 @@ final class AudioRecorder {
             throw RecordingError.startFailed(stage: "record")
         }
         self.recorder = recorder
+    }
+
+    func currentPower() -> Float {
+        guard let recorder, recorder.isRecording else { return -160 }
+        recorder.updateMeters()
+        return recorder.averagePower(forChannel: 0)
     }
 
     @discardableResult

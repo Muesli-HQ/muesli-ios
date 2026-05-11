@@ -14,6 +14,7 @@ final class DictationCoordinator {
     private let engine = FluidAudioTranscriptionEngine()
     private let recorder = AudioRecorder()
     private var modelPreparationTask: Task<Void, Never>?
+    private var meteringTask: Task<Void, Never>?
 
     private var activeRequest: DictationRequest?
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
@@ -23,9 +24,12 @@ final class DictationCoordinator {
     ) ?? .keyboardDictation
     var modelPreparation = ModelPreparationState()
     var isOnboardingTestRecording = false
+    var isOnboardingTestTranscribing = false
+    var onboardingTestInputLevel = 0.0
     var onboardingTestTranscript = ""
     var onboardingTestError: String?
     var isRecording = false
+    var inputLevel = 0.0
     var statusText = "Ready"
     var lastTranscript = ""
     var dictationHistory: [DictationResult] = []
@@ -159,15 +163,20 @@ final class DictationCoordinator {
         guard !isOnboardingTestRecording else { return }
         onboardingTestTranscript = ""
         onboardingTestError = nil
+        isOnboardingTestTranscribing = false
 
         Task {
             do {
                 try await recorder.requestPermission()
                 try recorder.start()
                 isOnboardingTestRecording = true
+                startMetering { [weak self] level in
+                    self?.onboardingTestInputLevel = level
+                }
                 AppTelemetry.signal("onboarding_test_started")
             } catch {
                 onboardingTestError = error.localizedDescription
+                stopMetering()
                 AppTelemetry.signal("onboarding_test_failed", parameters: ["stage": "recording"])
             }
         }
@@ -176,12 +185,15 @@ final class DictationCoordinator {
     func stopOnboardingTestDictation() {
         guard isOnboardingTestRecording else { return }
         isOnboardingTestRecording = false
+        isOnboardingTestTranscribing = true
+        stopMetering()
         onboardingTestError = nil
 
         Task {
             do {
                 let audioURL = try recorder.stop()
                 let text = try await engine.transcribe(audioURL: audioURL)
+                isOnboardingTestTranscribing = false
                 if text.isEmpty {
                     onboardingTestError = "No speech detected. Try again."
                     AppTelemetry.signal("onboarding_test_empty", parameters: ["engine": engine.identifier])
@@ -193,6 +205,7 @@ final class DictationCoordinator {
                     parameters: ["engine": engine.identifier]
                 )
             } catch {
+                isOnboardingTestTranscribing = false
                 onboardingTestError = error.localizedDescription
                 AppTelemetry.signal(
                     "onboarding_test_failed",
@@ -242,12 +255,16 @@ final class DictationCoordinator {
                 try await recorder.requestPermission()
                 try recorder.start()
                 isRecording = true
+                startMetering { [weak self] level in
+                    self?.inputLevel = level
+                }
                 statusText = "Recording"
                 AppTelemetry.signal("dictation_started", parameters: ["source": source])
                 try store.saveRequest(request)
                 try store.saveStatus(.init(requestID: request.id, phase: .recording))
             } catch {
                 statusText = error.localizedDescription
+                stopMetering()
                 AppTelemetry.signal("dictation_failed", parameters: ["stage": "recording"])
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
             }
@@ -274,6 +291,7 @@ final class DictationCoordinator {
         }
 
         isRecording = false
+        stopMetering()
         statusText = "Transcribing"
         try? store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: "Transcribing"))
 
@@ -307,5 +325,28 @@ final class DictationCoordinator {
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
             }
         }
+    }
+
+    private func startMetering(update: @escaping @MainActor (Double) -> Void) {
+        meteringTask?.cancel()
+        meteringTask = Task { @MainActor [weak self] in
+            var smoothedLevel = 0.0
+
+            while !Task.isCancelled {
+                guard let self else { return }
+                let power = Double(self.recorder.currentPower())
+                let normalized = min(max((power + 50) / 50, 0), 1)
+                smoothedLevel = (0.35 * normalized) + (0.65 * smoothedLevel)
+                update(smoothedLevel)
+                try? await Task.sleep(for: .milliseconds(33))
+            }
+        }
+    }
+
+    private func stopMetering() {
+        meteringTask?.cancel()
+        meteringTask = nil
+        inputLevel = 0
+        onboardingTestInputLevel = 0
     }
 }

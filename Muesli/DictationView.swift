@@ -56,15 +56,38 @@ struct DictationView: View {
 
                     Spacer()
 
-                    Image("MuesliMenuIcon")
-                        .renderingMode(.template)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 26, height: 26)
-                        .padding(13)
-                        .foregroundStyle(statusColor)
+                    MuesliWaveformView(
+                        isActive: isWaveformActive,
+                        color: statusColor,
+                        level: coordinator.isRecording ? coordinator.inputLevel : nil,
+                        barCount: 9,
+                        spacing: 2
+                    )
+                    .frame(width: 34, height: 30)
+                    .padding(11)
                         .background(statusColor.opacity(0.12))
                         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+
+                if isWaveformActive {
+                    VStack(spacing: MuesliTheme.spacing8) {
+                        MuesliWaveformView(
+                            isActive: true,
+                            color: statusColor,
+                            level: coordinator.isRecording ? coordinator.inputLevel : nil,
+                            barCount: 13,
+                            spacing: 4
+                        )
+                        .frame(width: 132, height: 42)
+
+                        Text(coordinator.isRecording ? "Listening" : "Transcribing")
+                            .font(MuesliTheme.captionMedium())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, MuesliTheme.spacing16)
+                    .background(statusColor.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
 
                 Button {
@@ -134,7 +157,7 @@ struct DictationView: View {
                     .font(MuesliTheme.headline())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text("Recorded dictations from the app or keyboard will appear here as a timeline.")
+                Text("Recorded dictations from the app will appear here as a timeline.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -152,6 +175,10 @@ struct DictationView: View {
         } else {
             MuesliTheme.accent
         }
+    }
+
+    private var isWaveformActive: Bool {
+        coordinator.isRecording || coordinator.statusText == "Transcribing"
     }
 }
 

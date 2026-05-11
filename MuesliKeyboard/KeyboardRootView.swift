@@ -7,13 +7,14 @@ struct KeyboardRootView: View {
         VStack(spacing: MuesliTheme.spacing12) {
             VStack(spacing: MuesliTheme.spacing12) {
                 HStack(spacing: MuesliTheme.spacing12) {
-                    Image("MuesliMenuIcon")
-                        .renderingMode(.template)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 22, height: 22)
+                    MuesliWaveformView(
+                        isActive: false,
+                        color: .white,
+                        barCount: 9,
+                        spacing: 1.4
+                    )
+                        .frame(width: 22, height: 20)
                         .frame(width: 44, height: 44)
-                        .foregroundStyle(.white)
                         .background(buttonColor)
                         .clipShape(Circle())
 

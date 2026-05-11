@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import UIKit
 
 @MainActor
 @Observable
@@ -27,6 +28,12 @@ final class DictationCoordinator {
     var isRecording = false
     var statusText = "Ready"
     var lastTranscript = ""
+    var dictationHistory: [DictationResult] = []
+    var clipboardStatusText: String?
+
+    init() {
+        refreshHistory()
+    }
 
     func handleOpenURL(_ url: URL) {
         guard url.scheme == MuesliAppConstants.urlScheme,
@@ -46,6 +53,28 @@ final class DictationCoordinator {
             stopRecording()
         } else {
             startRecording(for: DictationRequest(), source: "app")
+        }
+    }
+
+    func refreshHistory() {
+        do {
+            dictationHistory = try store.resultsHistory()
+            lastTranscript = dictationHistory.first?.text ?? lastTranscript
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
+    func copyToClipboard(_ result: DictationResult) {
+        UIPasteboard.general.string = result.text
+        clipboardStatusText = "Copied"
+        AppTelemetry.signal("dictation_copied")
+
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            if clipboardStatusText == "Copied" {
+                clipboardStatusText = nil
+            }
         }
     }
 
@@ -231,6 +260,7 @@ final class DictationCoordinator {
                 let result = DictationResult(requestID: request.id, text: text, engineIdentifier: engine.identifier)
                 try store.saveResult(result)
                 try store.clearPendingRequest()
+                refreshHistory()
                 lastTranscript = text
                 statusText = "Ready"
                 AppTelemetry.signal(

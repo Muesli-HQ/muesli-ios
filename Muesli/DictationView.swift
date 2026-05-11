@@ -9,8 +9,7 @@ struct DictationView: View {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                     header
                     recorderPanel
-                    transcriptPanel
-                    statusGrid
+                    historySection
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)
                 .padding(.top, MuesliTheme.spacing24)
@@ -18,6 +17,9 @@ struct DictationView: View {
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
+            .onAppear {
+                coordinator.refreshHistory()
+            }
         }
     }
 
@@ -33,7 +35,7 @@ struct DictationView: View {
                     .foregroundStyle(MuesliTheme.textPrimary)
             }
 
-            Text("Local-first voice input for iOS")
+            Text("Local-first dictation history for iOS")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
         }
@@ -86,34 +88,59 @@ struct DictationView: View {
     }
 
     @ViewBuilder
-    private var transcriptPanel: some View {
-        MuesliSurface {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                HStack {
-                    Text("Latest Transcript")
-                        .font(MuesliTheme.headline())
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text("Recent Dictations")
+                        .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Spacer()
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 14, weight: .medium))
+                    Text("\(coordinator.dictationHistory.count) saved")
+                        .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }
 
-                Text(coordinator.lastTranscript.isEmpty ? "Your next dictation will appear here." : coordinator.lastTranscript)
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(coordinator.lastTranscript.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textSecondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: 72, alignment: .topLeading)
+                Spacer()
+
+                if let status = coordinator.clipboardStatusText {
+                    Label(status, systemImage: "checkmark")
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.success)
+                }
             }
-            .padding(MuesliTheme.spacing16)
+
+            if coordinator.dictationHistory.isEmpty {
+                emptyHistory
+            } else {
+                LazyVStack(spacing: MuesliTheme.spacing12) {
+                    ForEach(coordinator.dictationHistory) { result in
+                        DictationHistoryRow(result: result) {
+                            coordinator.copyToClipboard(result)
+                        }
+                    }
+                }
+            }
         }
     }
 
-    private var statusGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: MuesliTheme.spacing12) {
-            MiniStat(icon: "keyboard", value: "Keyboard", label: "handoff ready", color: MuesliTheme.accent)
-            MiniStat(icon: "lock.shield", value: "Private", label: "local shell", color: MuesliTheme.success)
+    private var emptyHistory: some View {
+        MuesliSurface {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                Image(systemName: "text.badge.plus")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.accent)
+
+                Text("No dictations yet")
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+
+                Text("Recorded dictations from the app or keyboard will appear here as a timeline.")
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(MuesliTheme.spacing16)
         }
     }
 
@@ -128,27 +155,53 @@ struct DictationView: View {
     }
 }
 
-private struct MiniStat: View {
-    let icon: String
-    let value: String
-    let label: String
-    let color: Color
+private struct DictationHistoryRow: View {
+    let result: DictationResult
+    let onCopy: () -> Void
 
     var body: some View {
         MuesliSurface {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(color)
-            Text(value)
-                .font(MuesliTheme.headline())
-                .foregroundStyle(MuesliTheme.textPrimary)
-                Text(label)
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.textTertiary)
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                HStack(spacing: MuesliTheme.spacing12) {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        Text(result.createdAt, formatter: Self.dateFormatter)
+                            .font(MuesliTheme.captionMedium())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                        Text(result.engineIdentifier)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    Button(action: onCopy) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(MuesliTheme.accent)
+                    .background(MuesliTheme.accentSubtle)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .accessibilityLabel("Copy dictation")
+                }
+
+                Text(result.text)
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(MuesliTheme.spacing16)
         }
     }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }

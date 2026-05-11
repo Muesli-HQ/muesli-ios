@@ -12,12 +12,20 @@ enum SharedStoreError: Error, LocalizedError {
 }
 
 struct SharedStore: Sendable {
+    private static let resultsHistoryFileName = "dictation-history.json"
+    private static let maxStoredResults = 200
+
     private let appGroupIdentifier: String
+    private let overrideContainerURL: URL?
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    init(appGroupIdentifier: String = MuesliAppConstants.appGroupIdentifier) {
+    init(
+        appGroupIdentifier: String = MuesliAppConstants.appGroupIdentifier,
+        containerURL: URL? = nil
+    ) {
         self.appGroupIdentifier = appGroupIdentifier
+        self.overrideContainerURL = containerURL
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
     }
@@ -45,6 +53,7 @@ struct SharedStore: Sendable {
 
     func saveResult(_ result: DictationResult) throws {
         try write(result, to: resultFileName(for: result.requestID))
+        try appendResultToHistory(result)
         try saveStatus(.init(requestID: result.requestID, phase: .finished))
     }
 
@@ -52,8 +61,23 @@ struct SharedStore: Sendable {
         try read(DictationResult.self, from: resultFileName(for: requestID))
     }
 
+    func resultsHistory() throws -> [DictationResult] {
+        let results = try read([DictationResult].self, from: Self.resultsHistoryFileName) ?? []
+        return results.sorted { $0.createdAt > $1.createdAt }
+    }
+
     func clearResult(for requestID: UUID) throws {
         try remove(resultFileName(for: requestID))
+    }
+
+    private func appendResultToHistory(_ result: DictationResult) throws {
+        var results = try resultsHistory()
+        results.removeAll { $0.requestID == result.requestID }
+        results.insert(result, at: 0)
+        if results.count > Self.maxStoredResults {
+            results = Array(results.prefix(Self.maxStoredResults))
+        }
+        try write(results, to: Self.resultsHistoryFileName)
     }
 
     private func resultFileName(for requestID: UUID) -> String {
@@ -61,6 +85,11 @@ struct SharedStore: Sendable {
     }
 
     private func containerURL() throws -> URL {
+        if let overrideContainerURL {
+            try FileManager.default.createDirectory(at: overrideContainerURL, withIntermediateDirectories: true)
+            return overrideContainerURL
+        }
+
         guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
             throw SharedStoreError.appGroupUnavailable(appGroupIdentifier)
         }

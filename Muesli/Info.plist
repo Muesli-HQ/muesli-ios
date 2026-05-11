@@ -35,6 +35,8 @@
 	<string>public.app-category.productivity</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Muesli records your voice so it can transcribe speech into text on device.</string>
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

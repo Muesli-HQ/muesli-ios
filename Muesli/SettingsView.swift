@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
+    @State private var keyboardStatusText = "Unknown"
 
     var body: some View {
         NavigationStack {
@@ -11,7 +12,7 @@ struct SettingsView: View {
 
                     MuesliSurface {
                         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                            SettingsRow(icon: "keyboard", title: "Keyboard", value: "Not enabled")
+                            SettingsRow(icon: "keyboard", title: "Keyboard", value: keyboardStatusText)
                             Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
                                 HStack {
                                     Text("Open Keyboard Settings")
@@ -41,6 +42,7 @@ struct SettingsView: View {
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
+            .onAppear(perform: refreshKeyboardStatus)
         }
     }
 
@@ -67,6 +69,23 @@ struct SettingsView: View {
             "Paused"
         case .idle:
             "Not prepared"
+        }
+    }
+
+    private func refreshKeyboardStatus() {
+        let store = SharedStore()
+        let extensionStatus = try? store.keyboardExtensionStatus()
+        let confirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed)
+        let fullAccessConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.fullAccessConfirmed)
+
+        if extensionStatus?.hasOpenAccess == true {
+            keyboardStatusText = "Enabled"
+        } else if confirmed && fullAccessConfirmed {
+            keyboardStatusText = "Needs first use"
+        } else if confirmed {
+            keyboardStatusText = "Full Access needed"
+        } else {
+            keyboardStatusText = "Not confirmed"
         }
     }
 }

@@ -68,3 +68,7 @@ struct DictationStatus: Codable, Sendable, Equatable {
     static let idle = DictationStatus(requestID: nil, phase: .idle)
 }
 
+struct KeyboardExtensionStatus: Codable, Sendable, Equatable {
+    let lastSeenAt: Date
+    let hasOpenAccess: Bool
+}

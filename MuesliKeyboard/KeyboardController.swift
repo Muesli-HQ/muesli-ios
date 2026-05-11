@@ -115,12 +115,21 @@ final class KeyboardController {
     }
 
     func startPolling() {
+        markKeyboardVisible()
         pollingTask?.cancel()
         pollingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 self?.pollOnce()
                 try? await Task.sleep(for: .milliseconds(500))
             }
+        }
+    }
+
+    func markKeyboardVisible() {
+        do {
+            try store.saveKeyboardExtensionStatus(.init(lastSeenAt: .now, hasOpenAccess: true))
+        } catch {
+            statusText = "Enable Full Access"
         }
     }
 

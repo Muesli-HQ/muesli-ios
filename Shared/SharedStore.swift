@@ -13,6 +13,7 @@ enum SharedStoreError: Error, LocalizedError {
 
 struct SharedStore: Sendable {
     private static let resultsHistoryFileName = "dictation-history.json"
+    private static let keyboardStatusFileName = "keyboard-status.json"
     private static let maxStoredResults = 200
 
     private let appGroupIdentifier: String
@@ -68,6 +69,14 @@ struct SharedStore: Sendable {
 
     func clearResult(for requestID: UUID) throws {
         try remove(resultFileName(for: requestID))
+    }
+
+    func saveKeyboardExtensionStatus(_ status: KeyboardExtensionStatus) throws {
+        try write(status, to: Self.keyboardStatusFileName)
+    }
+
+    func keyboardExtensionStatus() throws -> KeyboardExtensionStatus? {
+        try read(KeyboardExtensionStatus.self, from: Self.keyboardStatusFileName)
     }
 
     private func appendResultToHistory(_ result: DictationResult) throws {

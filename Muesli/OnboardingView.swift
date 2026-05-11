@@ -5,16 +5,16 @@ import UIKit
 struct OnboardingView: View {
     @Bindable var coordinator: DictationCoordinator
     @State private var currentStep: OnboardingStep = OnboardingStep(
-        rawValue: UserDefaults.standard.integer(forKey: OnboardingDefaults.currentStep)
+        rawValue: UserDefaults.standard.integer(forKey: OnboardingPreferenceKeys.currentStep)
     ) ?? .profile
     @State private var nameDraft = ""
     @State private var useCaseDraft: OnboardingUseCase = .keyboardDictation
     @State private var microphoneGranted = false
     @State private var keyboardEnabledConfirmed = UserDefaults.standard.bool(
-        forKey: OnboardingDefaults.keyboardEnabledConfirmed
+        forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed
     )
     @State private var fullAccessConfirmed = UserDefaults.standard.bool(
-        forKey: OnboardingDefaults.fullAccessConfirmed
+        forKey: OnboardingPreferenceKeys.fullAccessConfirmed
     )
 
     var body: some View {
@@ -54,17 +54,17 @@ struct OnboardingView: View {
             }
         }
         .onChange(of: currentStep) { _, step in
-            UserDefaults.standard.set(step.rawValue, forKey: OnboardingDefaults.currentStep)
+            UserDefaults.standard.set(step.rawValue, forKey: OnboardingPreferenceKeys.currentStep)
             AppTelemetry.signal("onboarding_step_viewed", parameters: ["step": step.telemetryName])
             if step == .model {
                 coordinator.prepareModelForOnboarding()
             }
         }
         .onChange(of: keyboardEnabledConfirmed) { _, confirmed in
-            UserDefaults.standard.set(confirmed, forKey: OnboardingDefaults.keyboardEnabledConfirmed)
+            UserDefaults.standard.set(confirmed, forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed)
         }
         .onChange(of: fullAccessConfirmed) { _, confirmed in
-            UserDefaults.standard.set(confirmed, forKey: OnboardingDefaults.fullAccessConfirmed)
+            UserDefaults.standard.set(confirmed, forKey: OnboardingPreferenceKeys.fullAccessConfirmed)
         }
     }
 
@@ -515,7 +515,7 @@ struct OnboardingView: View {
         case .model:
             currentStep = .test
         case .test:
-            OnboardingDefaults.clear()
+            OnboardingPreferenceKeys.clear()
             coordinator.completeOnboarding()
         }
     }
@@ -620,18 +620,6 @@ private enum OnboardingStep: Int, CaseIterable {
         case .test:
             "Confirm dictation works on this device."
         }
-    }
-}
-
-private enum OnboardingDefaults {
-    static let currentStep = "muesli.onboarding.currentStep"
-    static let keyboardEnabledConfirmed = "muesli.onboarding.keyboardEnabledConfirmed"
-    static let fullAccessConfirmed = "muesli.onboarding.fullAccessConfirmed"
-
-    static func clear() {
-        UserDefaults.standard.removeObject(forKey: currentStep)
-        UserDefaults.standard.removeObject(forKey: keyboardEnabledConfirmed)
-        UserDefaults.standard.removeObject(forKey: fullAccessConfirmed)
     }
 }
 

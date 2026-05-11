@@ -34,6 +34,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        controller.markKeyboardVisible()
         controller.startPolling()
     }
 
@@ -42,4 +43,3 @@ final class KeyboardViewController: UIInputViewController {
         controller.stopPolling()
     }
 }
-

@@ -31,22 +31,23 @@ struct KeyboardRootView: View {
                     Spacer()
                 }
 
-                Button {
-                    controller.primaryAction()
-                } label: {
-                    Label(
-                        controller.primaryButtonTitle,
-                        systemImage: controller.primaryButtonIcon
-                    )
-                    .font(MuesliTheme.headline())
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(buttonColor)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                if controller.opensMuesliFromPrimaryButton, let launchURL = controller.launchURL {
+                    Link(destination: launchURL) {
+                        primaryButtonLabel
+                    }
+                    .simultaneousGesture(TapGesture().onEnded {
+                        controller.startDictation()
+                    })
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        controller.primaryAction()
+                    } label: {
+                        primaryButtonLabel
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(controller.isPrimaryButtonDisabled)
                 }
-                .buttonStyle(.plain)
-                .disabled(controller.isPrimaryButtonDisabled)
 
                 if controller.canInsertLatest {
                     Button {
@@ -82,6 +83,22 @@ struct KeyboardRootView: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundDeep)
+        .onAppear {
+            controller.prepareLaunchRequestIfNeeded()
+        }
+    }
+
+    private var primaryButtonLabel: some View {
+        Label(
+            controller.primaryButtonTitle,
+            systemImage: controller.primaryButtonIcon
+        )
+        .font(MuesliTheme.headline())
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity)
+        .frame(height: 44)
+        .background(buttonColor)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
     }
 
     private var buttonColor: Color {

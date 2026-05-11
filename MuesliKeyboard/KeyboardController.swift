@@ -7,14 +7,15 @@ final class KeyboardController {
     private let store = SharedStore()
     private var pollingTask: Task<Void, Never>?
     private var latestResultID: UUID?
+    private var preparedRequest: DictationRequest?
     private var activeRequestID: UUID?
     private var insertedRequestIDs = Set<UUID>()
 
     var statusText = "Record in Muesli first"
     var hasLatestDictation = false
     var dictationPhase: DictationPhase = .idle
+    var launchURL: URL?
     var textInserter: (@MainActor (String) -> Void)?
-    var appOpener: (@MainActor (URL) -> Bool)?
 
     var primaryButtonTitle: String {
         switch dictationPhase {
@@ -63,12 +64,16 @@ final class KeyboardController {
         hasLatestDictation && activeRequestID == nil
     }
 
+    var opensMuesliFromPrimaryButton: Bool {
+        dictationPhase == .idle || dictationPhase == .requested || dictationPhase == .failed
+    }
+
     func primaryAction() {
         switch dictationPhase {
         case .recording:
             stopActiveDictation()
         case .requested:
-            reopenActiveDictation()
+            startDictation()
         case .transcribing, .finished:
             break
         default:
@@ -94,8 +99,24 @@ final class KeyboardController {
         }
     }
 
-    func startDictation() {
+    func prepareLaunchRequestIfNeeded() {
+        guard preparedRequest == nil, activeRequestID == nil else { return }
         let request = DictationRequest()
+        preparedRequest = request
+        launchURL = makeLaunchURL(for: request)
+
+        do {
+            try store.clearPendingCommand()
+            try store.saveRequest(request)
+        } catch {
+            statusText = "Enable Full Access"
+        }
+    }
+
+    func startDictation() {
+        let request = preparedRequest ?? DictationRequest()
+        preparedRequest = nil
+        launchURL = makeLaunchURL(for: request)
         activeRequestID = request.id
         insertedRequestIDs.remove(request.id)
         dictationPhase = .requested
@@ -112,17 +133,14 @@ final class KeyboardController {
             return
         }
 
-        if openMuesli(for: request) {
-            statusText = "Swipe back after recording starts"
-        } else {
-            statusText = "Could not open Muesli"
-        }
+        statusText = "Swipe back after recording starts"
     }
 
     private func stopActiveDictation() {
         guard let activeRequestID else {
             dictationPhase = .idle
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
+            prepareLaunchRequestIfNeeded()
             return
         }
 
@@ -136,20 +154,6 @@ final class KeyboardController {
         }
     }
 
-    private func reopenActiveDictation() {
-        guard let activeRequestID else {
-            startDictation()
-            return
-        }
-
-        let request = DictationRequest(id: activeRequestID)
-        if openMuesli(for: request) {
-            statusText = "Swipe back after recording starts"
-        } else {
-            statusText = "Could not open Muesli"
-        }
-    }
-
     func insertSpace() {
         textInserter?(" ")
     }
@@ -160,6 +164,7 @@ final class KeyboardController {
 
     func startPolling() {
         markKeyboardVisible()
+        prepareLaunchRequestIfNeeded()
         pollingTask?.cancel()
         pollingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -258,10 +263,13 @@ final class KeyboardController {
         latestResultID = result.id
         hasLatestDictation = true
         activeRequestID = nil
+        preparedRequest = nil
+        launchURL = nil
         dictationPhase = .finished
         statusText = "Inserted"
         try? store.clearPendingRequest()
         try? store.clearPendingCommand()
+        prepareLaunchRequestIfNeeded()
 
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.2))
@@ -271,7 +279,7 @@ final class KeyboardController {
         }
     }
 
-    private func openMuesli(for request: DictationRequest) -> Bool {
+    private func makeLaunchURL(for request: DictationRequest) -> URL? {
         var components = URLComponents()
         components.scheme = MuesliAppConstants.urlScheme
         components.host = MuesliAppConstants.dictateHost
@@ -280,8 +288,7 @@ final class KeyboardController {
             URLQueryItem(name: MuesliAppConstants.actionQueryItem, value: MuesliAppConstants.startAction)
         ]
 
-        guard let url = components.url else { return false }
-        return appOpener?(url) ?? false
+        return components.url
     }
 }
 

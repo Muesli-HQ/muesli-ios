@@ -14,7 +14,7 @@ struct KeyboardRootView: View {
                         .frame(width: 22, height: 22)
                         .frame(width: 44, height: 44)
                         .foregroundStyle(.white)
-                        .background(controller.isWaitingForResult ? MuesliTheme.transcribing : MuesliTheme.accent)
+                        .background(buttonColor)
                         .clipShape(Circle())
 
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -31,21 +31,21 @@ struct KeyboardRootView: View {
                 }
 
                 Button {
-                    controller.beginDictation()
+                    controller.toggleDictation()
                 } label: {
                     Label(
-                        controller.isWaitingForResult ? "Dictating..." : "Start Dictation",
-                        systemImage: controller.isWaitingForResult ? "waveform" : "mic.fill"
+                        controller.primaryButtonTitle,
+                        systemImage: controller.primaryButtonIcon
                     )
                     .font(MuesliTheme.headline())
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
-                    .background(controller.isWaitingForResult ? MuesliTheme.transcribing : MuesliTheme.accent)
+                    .background(buttonColor)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .disabled(controller.isWaitingForResult)
+                .disabled(controller.isPrimaryButtonDisabled)
             }
             .padding(MuesliTheme.spacing12)
             .background(MuesliTheme.backgroundRaised)
@@ -66,6 +66,17 @@ struct KeyboardRootView: View {
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.backgroundDeep)
+    }
+
+    private var buttonColor: Color {
+        switch controller.primaryButtonColor {
+        case .accent:
+            MuesliTheme.accent
+        case .recording:
+            MuesliTheme.recording
+        case .transcribing:
+            MuesliTheme.transcribing
+        }
     }
 }
 

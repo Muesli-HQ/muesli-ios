@@ -10,25 +10,77 @@ final class KeyboardController {
 
     var statusText = "Tap to dictate"
     var isWaitingForResult = false
+    var currentPhase: DictationPhase = .idle
     var textInserter: (@MainActor (String) -> Void)?
     var appOpener: (@MainActor (URL) -> Void)?
 
-    func beginDictation() {
+    var primaryButtonTitle: String {
+        if currentPhase == .recording || currentPhase == .requested {
+            return "Stop Dictation"
+        }
+        if currentPhase == .transcribing {
+            return "Transcribing..."
+        }
+        return isWaitingForResult ? "Waiting..." : "Start Dictation"
+    }
+
+    var primaryButtonIcon: String {
+        if currentPhase == .recording || currentPhase == .requested {
+            return "stop.fill"
+        }
+        if currentPhase == .transcribing {
+            return "waveform"
+        }
+        return "mic.fill"
+    }
+
+    var primaryButtonColor: ColorToken {
+        if currentPhase == .recording || currentPhase == .requested {
+            return .recording
+        }
+        if currentPhase == .transcribing || isWaitingForResult {
+            return .transcribing
+        }
+        return .accent
+    }
+
+    var isPrimaryButtonDisabled: Bool {
+        isWaitingForResult && currentPhase != .recording && currentPhase != .requested
+    }
+
+    func toggleDictation() {
+        if currentPhase == .recording || currentPhase == .requested {
+            stopDictation()
+        } else {
+            beginDictation()
+        }
+    }
+
+    private func beginDictation() {
         guard !isWaitingForResult else { return }
 
         let request = DictationRequest()
         activeRequestID = request.id
         isWaitingForResult = true
+        currentPhase = .requested
         statusText = "Opening Muesli"
 
         do {
             try store.saveRequest(request)
-            appOpener?(dictationURL(for: request))
+            appOpener?(dictationURL(for: request, action: MuesliAppConstants.startAction))
             startPolling()
         } catch {
             isWaitingForResult = false
+            currentPhase = .failed
             statusText = "Enable Full Access"
         }
+    }
+
+    private func stopDictation() {
+        guard let activeRequestID else { return }
+        currentPhase = .transcribing
+        statusText = "Stopping"
+        appOpener?(dictationURL(requestID: activeRequestID, action: MuesliAppConstants.stopAction))
     }
 
     func insertSpace() {
@@ -68,23 +120,32 @@ final class KeyboardController {
                 try store.clearResult(for: activeRequestID)
                 self.activeRequestID = nil
                 isWaitingForResult = false
+                currentPhase = .idle
                 statusText = "Inserted"
                 return
             }
 
             let status = try store.status()
+            if status.requestID == activeRequestID {
+                currentPhase = status.phase
+            }
             statusText = status.message ?? label(for: status.phase)
         } catch {
             statusText = "Waiting for Full Access"
         }
     }
 
-    private func dictationURL(for request: DictationRequest) -> URL {
+    private func dictationURL(for request: DictationRequest, action: String) -> URL {
+        dictationURL(requestID: request.id, action: action)
+    }
+
+    private func dictationURL(requestID: UUID, action: String) -> URL {
         var components = URLComponents()
         components.scheme = MuesliAppConstants.urlScheme
         components.host = MuesliAppConstants.dictateHost
         components.queryItems = [
-            URLQueryItem(name: MuesliAppConstants.requestQueryItem, value: request.id.uuidString)
+            URLQueryItem(name: MuesliAppConstants.requestQueryItem, value: requestID.uuidString),
+            URLQueryItem(name: MuesliAppConstants.actionQueryItem, value: action)
         ]
         return components.url!
     }
@@ -105,4 +166,10 @@ final class KeyboardController {
             "Failed"
         }
     }
+}
+
+enum ColorToken {
+    case accent
+    case recording
+    case transcribing
 }

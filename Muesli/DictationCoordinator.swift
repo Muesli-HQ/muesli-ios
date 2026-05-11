@@ -43,6 +43,13 @@ final class DictationCoordinator {
               let requestID = UUID(uuidString: value)
         else { return }
 
+        let action = components.queryItems?.first(where: { $0.name == MuesliAppConstants.actionQueryItem })?.value
+            ?? MuesliAppConstants.startAction
+        if action == MuesliAppConstants.stopAction {
+            stopRecording(requestID: requestID)
+            return
+        }
+
         let request = DictationRequest(id: requestID)
         activeRequest = request
         startRecording(for: request, source: "keyboard")
@@ -249,6 +256,11 @@ final class DictationCoordinator {
 
     private func stopRecording() {
         guard let request = activeRequest else { return }
+        stopRecording(requestID: request.id)
+    }
+
+    private func stopRecording(requestID: UUID) {
+        guard let request = activeRequest, request.id == requestID else { return }
         isRecording = false
         statusText = "Transcribing"
 

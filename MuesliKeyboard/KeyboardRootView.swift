@@ -5,33 +5,47 @@ struct KeyboardRootView: View {
 
     var body: some View {
         VStack(spacing: MuesliTheme.spacing12) {
-            HStack(spacing: MuesliTheme.spacing12) {
-                Button {
-                    controller.beginDictation()
-                } label: {
+            VStack(spacing: MuesliTheme.spacing12) {
+                HStack(spacing: MuesliTheme.spacing12) {
                     Image("MuesliMenuIcon")
                         .renderingMode(.template)
                         .resizable()
                         .scaledToFit()
                         .frame(width: 22, height: 22)
                         .frame(width: 44, height: 44)
+                        .foregroundStyle(.white)
+                        .background(controller.isWaitingForResult ? MuesliTheme.transcribing : MuesliTheme.accent)
+                        .clipShape(Circle())
+
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        Text("muesli")
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                        Text(controller.statusText)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+                }
+
+                Button {
+                    controller.beginDictation()
+                } label: {
+                    Label(
+                        controller.isWaitingForResult ? "Dictating..." : "Start Dictation",
+                        systemImage: controller.isWaitingForResult ? "waveform" : "mic.fill"
+                    )
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(controller.isWaitingForResult ? MuesliTheme.transcribing : MuesliTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(controller.isWaitingForResult ? MuesliTheme.transcribing : MuesliTheme.accent)
-                .clipShape(Circle())
-
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                    Text("muesli")
-                        .font(MuesliTheme.headline())
-                        .foregroundStyle(MuesliTheme.textPrimary)
-                    Text(controller.statusText)
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .lineLimit(1)
-                }
-
-                Spacer()
+                .disabled(controller.isWaitingForResult)
             }
             .padding(MuesliTheme.spacing12)
             .background(MuesliTheme.backgroundRaised)
@@ -42,8 +56,12 @@ struct KeyboardRootView: View {
             )
 
             HStack(spacing: MuesliTheme.spacing8) {
-                KeyboardKey(title: "space") {}
-                KeyboardKey(title: "return") {}
+                KeyboardKey(title: "space") {
+                    controller.insertSpace()
+                }
+                KeyboardKey(title: "return") {
+                    controller.insertReturn()
+                }
             }
         }
         .padding(MuesliTheme.spacing12)

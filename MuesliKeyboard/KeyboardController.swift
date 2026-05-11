@@ -14,6 +14,8 @@ final class KeyboardController {
     var appOpener: (@MainActor (URL) -> Void)?
 
     func beginDictation() {
+        guard !isWaitingForResult else { return }
+
         let request = DictationRequest()
         activeRequestID = request.id
         isWaitingForResult = true
@@ -27,6 +29,14 @@ final class KeyboardController {
             isWaitingForResult = false
             statusText = "Enable Full Access"
         }
+    }
+
+    func insertSpace() {
+        textInserter?(" ")
+    }
+
+    func insertReturn() {
+        textInserter?("\n")
     }
 
     func startPolling() {

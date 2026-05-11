@@ -73,8 +73,8 @@ struct KeyboardRootView: View {
             )
 
             HStack(spacing: MuesliTheme.spacing8) {
-                KeyboardKey(title: "space") {
-                    controller.insertSpace()
+                KeyboardKey(title: "clear", systemImage: "delete.left") {
+                    controller.clearInsertedText()
                 }
                 KeyboardKey(title: "return") {
                     controller.insertReturn()
@@ -115,13 +115,18 @@ struct KeyboardRootView: View {
 
 private struct KeyboardKey: View {
     let title: String
+    let systemImage: String?
     let action: () -> Void
+
+    init(title: String, systemImage: String? = nil, action: @escaping () -> Void) {
+        self.title = title
+        self.systemImage = systemImage
+        self.action = action
+    }
 
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textSecondary)
+            label
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
         }
@@ -132,5 +137,18 @@ private struct KeyboardKey: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if let systemImage {
+            Label(title, systemImage: systemImage)
+                .font(MuesliTheme.callout())
+                .foregroundStyle(MuesliTheme.textSecondary)
+        } else {
+            Text(title)
+                .font(MuesliTheme.callout())
+                .foregroundStyle(MuesliTheme.textSecondary)
+        }
     }
 }

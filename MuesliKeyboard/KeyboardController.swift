@@ -16,6 +16,8 @@ final class KeyboardController {
     var dictationPhase: DictationPhase = .idle
     var launchURL: URL?
     var textInserter: (@MainActor (String) -> Void)?
+    var textDeleter: (@MainActor (Int) -> Void)?
+    private var lastInsertedCharacterCount = 0
 
     var primaryButtonTitle: String {
         switch dictationPhase {
@@ -88,7 +90,7 @@ final class KeyboardController {
                 return
             }
 
-            textInserter?(result.text)
+            insertText(result.text)
             latestResultID = result.id
             hasLatestDictation = true
             statusText = "Inserted"
@@ -155,11 +157,18 @@ final class KeyboardController {
     }
 
     func insertSpace() {
-        textInserter?(" ")
+        insertText(" ")
     }
 
     func insertReturn() {
-        textInserter?("\n")
+        insertText("\n")
+    }
+
+    func clearInsertedText() {
+        let deleteCount = max(lastInsertedCharacterCount, 1)
+        textDeleter?(deleteCount)
+        lastInsertedCharacterCount = 0
+        statusText = deleteCount > 1 ? "Cleared" : "Deleted"
     }
 
     func startPolling() {
@@ -273,7 +282,7 @@ final class KeyboardController {
 
     private func insertCompletedResult(_ result: DictationResult) {
         guard !insertedRequestIDs.contains(result.requestID) else { return }
-        textInserter?(result.text)
+        insertText(result.text)
         insertedRequestIDs.insert(result.requestID)
         latestResultID = result.id
         hasLatestDictation = true
@@ -305,6 +314,11 @@ final class KeyboardController {
         ]
 
         return components.url
+    }
+
+    private func insertText(_ text: String) {
+        textInserter?(text)
+        lastInsertedCharacterCount = text.count
     }
 }
 

@@ -11,6 +11,12 @@ final class KeyboardViewController: UIInputViewController {
         controller.textInserter = { [weak self] text in
             self?.textDocumentProxy.insertText(text)
         }
+        controller.textDeleter = { [weak self] count in
+            guard count > 0 else { return }
+            for _ in 0..<count {
+                self?.textDocumentProxy.deleteBackward()
+            }
+        }
         let rootView = KeyboardRootView(controller: controller)
         let hostingController = UIHostingController(rootView: rootView)
         self.hostingController = hostingController

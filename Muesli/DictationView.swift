@@ -24,9 +24,10 @@ struct DictationView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
             HStack(spacing: MuesliTheme.spacing12) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.accent)
+                Image("MuesliAppIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 42, height: 42)
                 Text("muesli")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
@@ -53,9 +54,15 @@ struct DictationView: View {
 
                     Spacer()
 
-                    Image(systemName: coordinator.isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                        .font(.system(size: 34, weight: .semibold))
+                    Image("MuesliMenuIcon")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 26, height: 26)
+                        .padding(13)
                         .foregroundStyle(statusColor)
+                        .background(statusColor.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
 
                 Button {

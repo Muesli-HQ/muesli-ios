@@ -9,8 +9,11 @@ struct KeyboardRootView: View {
                 Button {
                     controller.beginDictation()
                 } label: {
-                    Image(systemName: controller.isWaitingForResult ? "waveform" : "mic.fill")
-                        .font(.system(size: 20, weight: .semibold))
+                    Image("MuesliMenuIcon")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 22, height: 22)
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)

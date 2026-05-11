@@ -31,7 +31,7 @@ struct KeyboardRootView: View {
                 }
 
                 Button {
-                    controller.toggleDictation()
+                    controller.insertLatestDictation()
                 } label: {
                     Label(
                         controller.primaryButtonTitle,

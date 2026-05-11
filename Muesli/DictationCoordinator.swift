@@ -19,6 +19,7 @@ final class DictationCoordinator {
     private var transcriptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     private var activeRequest: DictationRequest?
+    private var activeSession: RecordingSession?
     var isKeyboardHandoffActive = false
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
     var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
@@ -34,8 +35,13 @@ final class DictationCoordinator {
     var isRecording = false
     var inputLevel = 0.0
     var statusText = "Ready"
+    var meetingStatusText = "Ready"
     var lastTranscript = ""
     var dictationHistory: [DictationResult] = []
+    var recordingSessions: [RecordingSession] = []
+    var isMeetingRecording = false
+    var isMeetingTranscribing = false
+    var activeMeetingTitle = "Untitled Meeting"
     var clipboardStatusText: String?
 
     init() {
@@ -79,6 +85,7 @@ final class DictationCoordinator {
     func refreshHistory() {
         do {
             dictationHistory = try store.resultsHistory()
+            recordingSessions = try store.recordingSessions()
             lastTranscript = dictationHistory.first?.text ?? lastTranscript
         } catch {
             statusText = error.localizedDescription
@@ -96,6 +103,23 @@ final class DictationCoordinator {
                 clipboardStatusText = nil
             }
         }
+    }
+
+    func copyTranscript(_ transcript: Transcript) {
+        UIPasteboard.general.string = transcript.text
+        clipboardStatusText = "Copied"
+        AppTelemetry.signal("transcript_copied")
+
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            if clipboardStatusText == "Copied" {
+                clipboardStatusText = nil
+            }
+        }
+    }
+
+    func transcript(for session: RecordingSession) -> Transcript? {
+        try? store.transcript(for: session.id)
     }
 
     func saveOnboardingProfile(name: String, useCase: OnboardingUseCase) {
@@ -259,13 +283,20 @@ final class DictationCoordinator {
     }
 
     private func startRecording(for request: DictationRequest, source: String) {
-        guard !isRecording, statusText != "Transcribing" else { return }
+        guard !isRecording, !isMeetingRecording, statusText != "Transcribing" else { return }
         activeRequest = request
+        let kind: RecordingSessionKind = source == "keyboard" ? .keyboardDictation : .quickDictation
+        var session = RecordingSession(requestID: request.id, kind: kind)
 
         Task {
             do {
+                let audioURL = try store.newAudioFileURL(sessionID: session.id)
+                session.audioFileName = audioURL.lastPathComponent
+                session.startedAt = .now
+                try store.saveSession(session)
                 try await recorder.requestPermission()
-                try recorder.start()
+                try recorder.start(outputURL: audioURL)
+                activeSession = session
                 isRecording = true
                 startMetering { [weak self] level in
                     self?.inputLevel = level
@@ -278,6 +309,11 @@ final class DictationCoordinator {
                 try store.saveRequest(request)
                 try store.saveStatus(.init(requestID: request.id, phase: .recording))
             } catch {
+                session.phase = .failed
+                session.errorMessage = error.localizedDescription
+                try? store.saveSession(session)
+                activeSession = nil
+                activeRequest = nil
                 statusText = error.localizedDescription
                 stopMetering()
                 AppTelemetry.signal("dictation_failed", parameters: ["stage": "recording"])
@@ -293,11 +329,13 @@ final class DictationCoordinator {
 
     private func stopRecording(requestID: UUID) {
         let request: DictationRequest
+        var session = activeSession
         if let activeRequest, activeRequest.id == requestID {
             request = activeRequest
         } else if let pendingRequest = try? store.pendingRequest(), pendingRequest.id == requestID {
             request = pendingRequest
             activeRequest = pendingRequest
+            session = try? store.recordingSession(requestID: requestID)
         } else {
             let message = "No active recording found. Start a new dictation."
             statusText = message
@@ -310,6 +348,12 @@ final class DictationCoordinator {
         stopCommandPolling()
         statusText = "Transcribing"
         try? store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: "Transcribing"))
+        if var session {
+            session.phase = .transcribing
+            session.endedAt = .now
+            try? store.saveSession(session)
+            activeSession = session
+        }
 
         beginTranscriptionBackgroundTask()
         Task {
@@ -318,12 +362,37 @@ final class DictationCoordinator {
             do {
                 let audioURL = try recorder.stop()
                 let text = try await engine.transcribe(audioURL: audioURL)
-                let result = DictationResult(requestID: request.id, text: text, engineIdentifier: engine.identifier)
+                var completedSession = activeSession ?? session
+                let transcript: Transcript?
+                if var completedSession {
+                    let savedTranscript = Transcript(
+                        sessionID: completedSession.id,
+                        text: text,
+                        engineIdentifier: engine.identifier
+                    )
+                    try store.saveTranscript(savedTranscript)
+                    completedSession.phase = .completed
+                    completedSession.audioFileName = completedSession.audioFileName ?? audioURL.lastPathComponent
+                    completedSession.transcriptID = savedTranscript.id
+                    completedSession.engineIdentifier = engine.identifier
+                    completedSession.errorMessage = nil
+                    try store.saveSession(completedSession)
+                    transcript = savedTranscript
+                } else {
+                    transcript = nil
+                }
+                let result = DictationResult(
+                    requestID: request.id,
+                    sessionID: transcript?.sessionID,
+                    text: text,
+                    engineIdentifier: engine.identifier
+                )
                 try store.saveResult(result)
                 try store.clearPendingRequest()
                 refreshHistory()
                 lastTranscript = text
                 activeRequest = nil
+                activeSession = nil
                 isKeyboardHandoffActive = false
                 statusText = "Ready"
                 AppTelemetry.signal(
@@ -334,9 +403,16 @@ final class DictationCoordinator {
                     ]
                 )
             } catch {
+                if var session = activeSession ?? session {
+                    session.phase = .failed
+                    session.errorMessage = error.localizedDescription
+                    try? store.saveSession(session)
+                }
                 activeRequest = nil
+                activeSession = nil
                 isKeyboardHandoffActive = false
                 statusText = error.localizedDescription
+                refreshHistory()
                 AppTelemetry.signal(
                     "dictation_failed",
                     parameters: [
@@ -346,6 +422,128 @@ final class DictationCoordinator {
                     ]
                 )
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
+            }
+        }
+    }
+
+    func startMeetingRecording(title: String = "Untitled Meeting") {
+        guard !isRecording, !isMeetingRecording, !isMeetingTranscribing, statusText != "Transcribing" else { return }
+        MuesliHaptics.dictationStart()
+        activeMeetingTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Untitled Meeting"
+            : title.trimmingCharacters(in: .whitespacesAndNewlines)
+        var session = RecordingSession(kind: .meeting, title: activeMeetingTitle)
+
+        Task {
+            do {
+                let audioURL = try store.newAudioFileURL(sessionID: session.id)
+                session.audioFileName = audioURL.lastPathComponent
+                session.startedAt = .now
+                try store.saveSession(session)
+                try await recorder.requestPermission()
+                try recorder.start(outputURL: audioURL)
+                activeSession = session
+                isMeetingRecording = true
+                meetingStatusText = "Recording"
+                startMetering { [weak self] level in
+                    self?.inputLevel = level
+                }
+                refreshHistory()
+                AppTelemetry.signal("meeting_recording_started")
+            } catch {
+                session.phase = .failed
+                session.errorMessage = error.localizedDescription
+                try? store.saveSession(session)
+                activeSession = nil
+                meetingStatusText = error.localizedDescription
+                stopMetering()
+                refreshHistory()
+                AppTelemetry.signal("meeting_recording_failed", parameters: ["stage": "recording"])
+            }
+        }
+    }
+
+    func stopMeetingRecording(queueForTranscription: Bool = true) {
+        guard isMeetingRecording, var session = activeSession, session.kind == .meeting else { return }
+        MuesliHaptics.dictationStop()
+        isMeetingRecording = false
+        stopMetering()
+        meetingStatusText = queueForTranscription ? "Queued for transcription" : "Transcribing"
+
+        do {
+            let audioURL = try recorder.stop()
+            session.audioFileName = session.audioFileName ?? audioURL.lastPathComponent
+            session.endedAt = .now
+            session.phase = queueForTranscription ? .transcriptionQueued : .transcribing
+            try store.saveSession(session)
+            activeSession = nil
+            refreshHistory()
+            AppTelemetry.signal("meeting_recording_stopped", parameters: [
+                "queued": queueForTranscription ? "true" : "false"
+            ])
+
+            if !queueForTranscription {
+                transcribeSession(session)
+            }
+        } catch {
+            session.phase = .failed
+            session.errorMessage = error.localizedDescription
+            try? store.saveSession(session)
+            activeSession = nil
+            meetingStatusText = error.localizedDescription
+            refreshHistory()
+            AppTelemetry.signal("meeting_recording_failed", parameters: ["stage": "stop"])
+        }
+    }
+
+    func transcribeSession(_ session: RecordingSession) {
+        guard !isRecording, !isMeetingRecording, !isMeetingTranscribing else { return }
+        guard let audioFileName = session.audioFileName else { return }
+        var session = session
+        session.phase = .transcribing
+        session.errorMessage = nil
+        try? store.saveSession(session)
+        refreshHistory()
+        isMeetingTranscribing = true
+        meetingStatusText = "Transcribing"
+
+        beginTranscriptionBackgroundTask()
+        Task {
+            defer {
+                endTranscriptionBackgroundTask()
+                isMeetingTranscribing = false
+            }
+
+            do {
+                let audioURL = try store.audioFileURL(fileName: audioFileName)
+                let text = try await engine.transcribe(audioURL: audioURL)
+                let transcript = Transcript(
+                    sessionID: session.id,
+                    text: text,
+                    engineIdentifier: engine.identifier
+                )
+                try store.saveTranscript(transcript)
+                session.phase = .completed
+                session.transcriptID = transcript.id
+                session.engineIdentifier = engine.identifier
+                session.errorMessage = nil
+                try store.saveSession(session)
+                meetingStatusText = "Ready"
+                refreshHistory()
+                AppTelemetry.signal("meeting_transcription_completed", parameters: [
+                    "engine": engine.identifier,
+                    "empty": text.isEmpty ? "true" : "false"
+                ])
+            } catch {
+                session.phase = .failed
+                session.errorMessage = error.localizedDescription
+                try? store.saveSession(session)
+                meetingStatusText = error.localizedDescription
+                refreshHistory()
+                AppTelemetry.signal("meeting_transcription_failed", parameters: [
+                    "engine": engine.identifier,
+                    "error": String(describing: type(of: error))
+                ])
             }
         }
     }
@@ -419,7 +617,13 @@ final class DictationCoordinator {
         stopMetering()
         stopCommandPolling()
         _ = try? recorder.stop()
+        if var session = activeSession {
+            session.phase = .cancelled
+            session.endedAt = .now
+            try? store.saveSession(session)
+        }
         activeRequest = nil
+        activeSession = nil
         isKeyboardHandoffActive = false
         statusText = "Ready"
         try? store.clearPendingCommand()

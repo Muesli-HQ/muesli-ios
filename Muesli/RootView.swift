@@ -56,6 +56,8 @@ struct RootView: View {
         switch selectedSection {
         case .dictations:
             DictationView(coordinator: coordinator)
+        case .meetings:
+            MeetingsView(coordinator: coordinator)
         case .settings:
             SettingsView(coordinator: coordinator)
         }
@@ -122,12 +124,15 @@ private struct KeyboardHandoffOverlay: View {
 
 private enum AppSection: String, CaseIterable {
     case dictations
+    case meetings
     case settings
 
     var title: String {
         switch self {
         case .dictations:
             "Dictations"
+        case .meetings:
+            "Meetings"
         case .settings:
             "Settings"
         }
@@ -137,6 +142,8 @@ private enum AppSection: String, CaseIterable {
         switch self {
         case .dictations:
             "waveform"
+        case .meetings:
+            "person.2.wave.2"
         case .settings:
             "gearshape.fill"
         }

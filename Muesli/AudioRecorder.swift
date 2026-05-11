@@ -13,7 +13,7 @@ final class AudioRecorder {
         }
     }
 
-    func start() throws {
+    func start(outputURL preferredOutputURL: URL? = nil) throws {
         if recorder?.isRecording == true {
             try stop()
         }
@@ -31,9 +31,10 @@ final class AudioRecorder {
             throw RecordingError.audioSessionFailed(stage: "activation", underlying: error)
         }
 
-        let url = FileManager.default.temporaryDirectory
+        let url = preferredOutputURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-\(UUID().uuidString)")
             .appendingPathExtension("wav")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: 16_000.0,

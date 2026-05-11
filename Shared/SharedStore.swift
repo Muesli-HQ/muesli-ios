@@ -13,9 +13,12 @@ enum SharedStoreError: Error, LocalizedError {
 
 struct SharedStore: Sendable {
     private static let resultsHistoryFileName = "dictation-history.json"
+    private static let sessionsFileName = "recording-sessions.json"
+    private static let transcriptsFileName = "transcripts.json"
     private static let keyboardStatusFileName = "keyboard-status.json"
     private static let pendingCommandFileName = "pending-command.json"
     private static let maxStoredResults = 200
+    private static let maxStoredSessions = 500
 
     private let appGroupIdentifier: String
     private let overrideContainerURL: URL?
@@ -91,6 +94,61 @@ struct SharedStore: Sendable {
         try read(KeyboardExtensionStatus.self, from: Self.keyboardStatusFileName)
     }
 
+    func saveSession(_ session: RecordingSession) throws {
+        var sessions = try recordingSessions()
+        sessions.removeAll { $0.id == session.id }
+        sessions.insert(session, at: 0)
+        sessions.sort { $0.createdAt > $1.createdAt }
+        if sessions.count > Self.maxStoredSessions {
+            sessions = Array(sessions.prefix(Self.maxStoredSessions))
+        }
+        try write(sessions, to: Self.sessionsFileName)
+    }
+
+    func recordingSessions() throws -> [RecordingSession] {
+        let sessions = try read([RecordingSession].self, from: Self.sessionsFileName) ?? []
+        return sessions.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func recordingSession(id: UUID) throws -> RecordingSession? {
+        try recordingSessions().first { $0.id == id }
+    }
+
+    func recordingSession(requestID: UUID) throws -> RecordingSession? {
+        try recordingSessions().first { $0.requestID == requestID }
+    }
+
+    func saveTranscript(_ transcript: Transcript) throws {
+        var transcripts = try transcripts()
+        transcripts.removeAll { $0.id == transcript.id || $0.sessionID == transcript.sessionID }
+        transcripts.insert(transcript, at: 0)
+        transcripts.sort { $0.createdAt > $1.createdAt }
+        try write(transcripts, to: Self.transcriptsFileName)
+    }
+
+    func transcripts() throws -> [Transcript] {
+        let transcripts = try read([Transcript].self, from: Self.transcriptsFileName) ?? []
+        return transcripts.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func transcript(for sessionID: UUID) throws -> Transcript? {
+        try transcripts().first { $0.sessionID == sessionID }
+    }
+
+    func newAudioFileURL(sessionID: UUID) throws -> URL {
+        let fileName = audioFileName(sessionID: sessionID)
+        return try audioFileURL(fileName: fileName)
+    }
+
+    func audioFileURL(fileName: String) throws -> URL {
+        let directory = try recordingsDirectoryURL()
+        return directory.appendingPathComponent(fileName)
+    }
+
+    func audioFileName(sessionID: UUID) -> String {
+        "session-\(sessionID.uuidString).wav"
+    }
+
     private func appendResultToHistory(_ result: DictationResult) throws {
         var results = try resultsHistory()
         results.removeAll { $0.requestID == result.requestID }
@@ -103,6 +161,12 @@ struct SharedStore: Sendable {
 
     private func resultFileName(for requestID: UUID) -> String {
         "result-\(requestID.uuidString).json"
+    }
+
+    private func recordingsDirectoryURL() throws -> URL {
+        let directory = try containerURL().appendingPathComponent("Recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     private func containerURL() throws -> URL {

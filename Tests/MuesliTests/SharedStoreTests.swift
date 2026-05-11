@@ -91,4 +91,59 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try store.status().requestID, activeRequestID)
         XCTAssertEqual(try store.status().phase, .recording)
     }
+
+    func testRecordingSessionsPersistSortedAndReplaceByID() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let sessionID = UUID()
+        let older = RecordingSession(
+            id: sessionID,
+            kind: .meeting,
+            createdAt: Date(timeIntervalSince1970: 100),
+            phase: .recording
+        )
+        var replacement = older
+        replacement.phase = .transcriptionQueued
+        let newer = RecordingSession(
+            kind: .quickDictation,
+            createdAt: Date(timeIntervalSince1970: 200),
+            phase: .completed
+        )
+
+        try store.saveSession(older)
+        try store.saveSession(replacement)
+        try store.saveSession(newer)
+
+        let sessions = try store.recordingSessions()
+        XCTAssertEqual(sessions.map(\.id), [newer.id, sessionID])
+        XCTAssertEqual(try store.recordingSession(id: sessionID)?.phase, .transcriptionQueued)
+    }
+
+    func testTranscriptReplacesExistingTranscriptForSession() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let sessionID = UUID()
+
+        try store.saveTranscript(.init(
+            sessionID: sessionID,
+            text: "first",
+            createdAt: Date(timeIntervalSince1970: 100),
+            engineIdentifier: "test"
+        ))
+        try store.saveTranscript(.init(
+            sessionID: sessionID,
+            text: "replacement",
+            createdAt: Date(timeIntervalSince1970: 200),
+            engineIdentifier: "test"
+        ))
+
+        XCTAssertEqual(try store.transcripts().map(\.text), ["replacement"])
+        XCTAssertEqual(try store.transcript(for: sessionID)?.text, "replacement")
+    }
 }

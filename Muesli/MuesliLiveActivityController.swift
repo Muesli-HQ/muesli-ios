@@ -11,6 +11,8 @@ actor MuesliLiveActivityController {
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
+        await endInactiveActivities()
+        activity = activity ?? existingActivity(for: session)
         if activity != nil {
             await update(phase: phase, detail: detail, session: session)
             return
@@ -41,6 +43,7 @@ actor MuesliLiveActivityController {
             await endActivities(for: session.kind, phase: "Off", detail: "Live Activities disabled")
             return
         }
+        activity = activity ?? existingActivity(for: session)
         guard let activity else { return }
         await activity.update(ActivityContent(
             state: contentState(phase: phase, detail: detail, session: session),
@@ -49,6 +52,7 @@ actor MuesliLiveActivityController {
     }
 
     func end(phase: String, detail: String, session: RecordingSession, dismissal: ActivityUIDismissalPolicy = .default) async {
+        activity = activity ?? existingActivity(for: session)
         guard let activity else { return }
         await activity.end(
             ActivityContent(
@@ -58,6 +62,29 @@ actor MuesliLiveActivityController {
             dismissalPolicy: dismissal
         )
         self.activity = nil
+    }
+
+    func endInactiveActivities() async {
+        for visibleActivity in Activity<MuesliLiveActivityAttributes>.activities
+            where !isActiveSessionPhase(visibleActivity.content.state.phase) {
+            await visibleActivity.end(
+                ActivityContent(
+                    state: MuesliLiveActivityAttributes.ContentState(
+                        title: visibleActivity.content.state.title,
+                        phase: "Ended",
+                        detail: "Session ended",
+                        startedAt: visibleActivity.content.state.startedAt,
+                        accent: "blue"
+                    ),
+                    staleDate: nil
+                ),
+                dismissalPolicy: .immediate
+            )
+
+            if visibleActivity.id == activity?.id {
+                activity = nil
+            }
+        }
     }
 
     func endDisabledActivities() async {
@@ -109,6 +136,21 @@ actor MuesliLiveActivityController {
             startedAt: session.startedAt ?? session.createdAt,
             accent: accent(for: phase)
         )
+    }
+
+    private func existingActivity(for session: RecordingSession) -> Activity<MuesliLiveActivityAttributes>? {
+        Activity<MuesliLiveActivityAttributes>.activities.first {
+            $0.attributes.sessionID == session.id.uuidString
+        }
+    }
+
+    private func isActiveSessionPhase(_ phase: String) -> Bool {
+        switch phase.lowercased() {
+        case "listening", "recording", "transcribing":
+            true
+        default:
+            false
+        }
     }
 
     private func accent(for phase: String) -> String {

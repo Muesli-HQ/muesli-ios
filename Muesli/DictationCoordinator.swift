@@ -48,6 +48,9 @@ final class DictationCoordinator {
 
     init() {
         refreshHistory()
+        Task {
+            await liveActivityController.endInactiveActivities()
+        }
     }
 
     func handleOpenURL(_ url: URL) {
@@ -442,24 +445,16 @@ final class DictationCoordinator {
                         message: "Ready"
                     )
                 }
-                let wasKeyboardHandoff = isKeyboardHandoffActive
                 isKeyboardHandoffActive = false
                 statusText = "Ready"
                 if let completedSession = try? store.recordingSession(requestID: request.id) {
                     Task {
-                        if wasKeyboardHandoff {
-                            await liveActivityController.update(
-                                phase: "Ready",
-                                detail: "Keyboard runtime ready",
-                                session: completedSession
-                            )
-                        } else {
-                            await liveActivityController.end(
-                                phase: "Completed",
-                                detail: "Transcript saved",
-                                session: completedSession
-                            )
-                        }
+                        await liveActivityController.end(
+                            phase: "Completed",
+                            detail: "Transcript saved",
+                            session: completedSession,
+                            dismissal: .immediate
+                        )
                     }
                 }
                 AppTelemetry.signal(

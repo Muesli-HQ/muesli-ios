@@ -121,6 +121,12 @@ final class DictationCoordinator {
         }
     }
 
+    func applyLiveActivityPreferences() {
+        Task {
+            await liveActivityController.endDisabledActivities()
+        }
+    }
+
     func transcript(for session: RecordingSession) -> Transcript? {
         try? store.transcript(for: session.id)
     }

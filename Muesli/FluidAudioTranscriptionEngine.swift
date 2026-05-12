@@ -2,7 +2,7 @@ import Foundation
 import FluidAudio
 
 actor FluidAudioTranscriptionEngine: TranscriptionEngine {
-    nonisolated let identifier = "fluidaudio-parakeet-v3"
+    nonisolated let identifier = "parakeet-v3"
 
     private var manager: AsrManager?
 

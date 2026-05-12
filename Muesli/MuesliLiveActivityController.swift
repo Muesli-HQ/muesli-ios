@@ -5,6 +5,10 @@ actor MuesliLiveActivityController {
     private var activity: Activity<MuesliLiveActivityAttributes>?
 
     func start(session: RecordingSession, requestID: UUID?, phase: String, detail: String) async {
+        guard MuesliPreferences.liveActivitiesEnabled(for: session.kind) else {
+            await endActivities(for: session.kind, phase: "Off", detail: "Live Activities disabled")
+            return
+        }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         if activity != nil {
@@ -33,6 +37,10 @@ actor MuesliLiveActivityController {
     }
 
     func update(phase: String, detail: String, session: RecordingSession) async {
+        guard MuesliPreferences.liveActivitiesEnabled(for: session.kind) else {
+            await endActivities(for: session.kind, phase: "Off", detail: "Live Activities disabled")
+            return
+        }
         guard let activity else { return }
         await activity.update(ActivityContent(
             state: contentState(phase: phase, detail: detail, session: session),
@@ -50,6 +58,47 @@ actor MuesliLiveActivityController {
             dismissalPolicy: dismissal
         )
         self.activity = nil
+    }
+
+    func endDisabledActivities() async {
+        if !MuesliPreferences.liveActivitiesForDictationsEnabled {
+            await endActivities(forKinds: [.quickDictation, .keyboardDictation])
+        }
+        if !MuesliPreferences.liveActivitiesForMeetingsEnabled {
+            await endActivities(forKinds: [.meeting])
+        }
+    }
+
+    private func endActivities(for kind: RecordingSessionKind, phase: String, detail: String) async {
+        await endActivities(forKinds: [kind], phase: phase, detail: detail)
+    }
+
+    private func endActivities(
+        forKinds kinds: [RecordingSessionKind],
+        phase: String = "Off",
+        detail: String = "Live Activities disabled"
+    ) async {
+        let enabledKindTitles = Set(kinds.map(\.title))
+        for visibleActivity in Activity<MuesliLiveActivityAttributes>.activities
+            where enabledKindTitles.contains(visibleActivity.attributes.kind) {
+            await visibleActivity.end(
+                ActivityContent(
+                    state: MuesliLiveActivityAttributes.ContentState(
+                        title: visibleActivity.attributes.kind,
+                        phase: phase,
+                        detail: detail,
+                        startedAt: .now,
+                        accent: "blue"
+                    ),
+                    staleDate: nil
+                ),
+                dismissalPolicy: .immediate
+            )
+
+            if visibleActivity.id == activity?.id {
+                activity = nil
+            }
+        }
     }
 
     private func contentState(phase: String, detail: String, session: RecordingSession) -> MuesliLiveActivityAttributes.ContentState {

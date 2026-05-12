@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
+    @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
+    @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @State private var keyboardStatusText = "Unknown"
 
     var body: some View {
@@ -37,12 +39,37 @@ struct SettingsView: View {
                         }
                         .padding(MuesliTheme.spacing16)
                     }
+
+                    MuesliSurface {
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                            SettingsToggleRow(
+                                icon: "waveform.badge.mic",
+                                title: "Dictation Live Activities",
+                                detail: "Show keyboard and in-app dictation progress on the Dynamic Island and Lock Screen.",
+                                isOn: $liveActivitiesForDictations
+                            )
+                            Divider().overlay(MuesliTheme.surfaceBorder)
+                            SettingsToggleRow(
+                                icon: "person.2.wave.2",
+                                title: "Meeting Live Activities",
+                                detail: "Show active meeting recordings while Muesli is recording in the background.",
+                                isOn: $liveActivitiesForMeetings
+                            )
+                        }
+                        .padding(MuesliTheme.spacing16)
+                    }
                 }
                 .padding(MuesliTheme.spacing20)
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
             .onAppear(perform: refreshKeyboardStatus)
+            .onChange(of: liveActivitiesForDictations) { _, _ in
+                coordinator.applyLiveActivityPreferences()
+            }
+            .onChange(of: liveActivitiesForMeetings) { _, _ in
+                coordinator.applyLiveActivityPreferences()
+            }
         }
     }
 
@@ -108,6 +135,38 @@ private struct SettingsRow: View {
             Text(value)
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textTertiary)
+        }
+    }
+}
+
+private struct SettingsToggleRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(MuesliTheme.accent)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                Text(title)
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(detail)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: MuesliTheme.spacing12)
+
+            Toggle(title, isOn: $isOn)
+                .labelsHidden()
+                .tint(MuesliTheme.accent)
         }
     }
 }

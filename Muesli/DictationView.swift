@@ -211,7 +211,7 @@ private struct DictationHistoryRow: View {
                         Text(result.createdAt, formatter: Self.dateFormatter)
                             .font(MuesliTheme.captionMedium())
                             .foregroundStyle(MuesliTheme.textSecondary)
-                        Text(result.engineIdentifier)
+                        Text(TranscriptionDisplayName.engineName(for: result.engineIdentifier))
                             .font(MuesliTheme.caption())
                             .foregroundStyle(MuesliTheme.textTertiary)
                             .lineLimit(1)

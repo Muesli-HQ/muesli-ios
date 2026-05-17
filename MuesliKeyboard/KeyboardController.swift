@@ -240,11 +240,14 @@ final class KeyboardController {
 
     private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
         let isRecent = runtimeStatus.map { Date().timeIntervalSince($0.updatedAt) < 8 } ?? false
-        canUseRuntimeStart = runtimeStatus?.isActive == true && isRecent
+        canUseRuntimeStart = runtimeStatus?.isActive == true
+            && isRecent
+            && runtimeStatus?.supportsBackgroundStart == true
 
         guard activeRequestID == nil, canUseRuntimeStart else { return }
-        if runtimeStatus?.phase == .idle, statusText == "Ready" || statusText == "Record in Muesli first" {
-            statusText = "Runtime ready"
+        activeRequestID = runtimeStatus?.activeRequestID
+        if runtimeStatus?.phase == .idle {
+            statusText = runtimeStatus?.message ?? "Session ready"
         }
     }
 

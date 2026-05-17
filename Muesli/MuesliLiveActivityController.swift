@@ -146,7 +146,7 @@ actor MuesliLiveActivityController {
 
     private func isActiveSessionPhase(_ phase: String) -> Bool {
         switch phase.lowercased() {
-        case "listening", "recording", "transcribing":
+        case "ready", "listening", "recording", "transcribing":
             true
         default:
             false

@@ -18,6 +18,7 @@ struct SharedStore: Sendable {
     private static let keyboardStatusFileName = "keyboard-status.json"
     private static let keyboardRuntimeStatusFileName = "keyboard-runtime-status.json"
     private static let pendingCommandFileName = "pending-command.json"
+    private static let customWordsFileName = "custom-words.json"
     private static let maxStoredResults = 200
     private static let maxStoredSessions = 500
 
@@ -146,6 +147,39 @@ struct SharedStore: Sendable {
 
     func transcript(for sessionID: UUID) throws -> Transcript? {
         try transcripts().first { $0.sessionID == sessionID }
+    }
+
+    func customWords() throws -> [CustomWord] {
+        try read([CustomWord].self, from: Self.customWordsFileName) ?? [
+            CustomWord(word: "muesli", replacement: "muesli")
+        ]
+    }
+
+    func saveCustomWords(_ customWords: [CustomWord]) throws {
+        try write(customWords, to: Self.customWordsFileName)
+    }
+
+    func addCustomWord(_ customWord: CustomWord) throws {
+        var customWords = try customWords()
+        customWords.removeAll { $0.id == customWord.id }
+        customWords.insert(customWord, at: 0)
+        try saveCustomWords(customWords)
+    }
+
+    func updateCustomWord(_ customWord: CustomWord) throws {
+        var customWords = try customWords()
+        guard let index = customWords.firstIndex(where: { $0.id == customWord.id }) else {
+            try addCustomWord(customWord)
+            return
+        }
+        customWords[index] = customWord
+        try saveCustomWords(customWords)
+    }
+
+    func removeCustomWord(id: UUID) throws {
+        var customWords = try customWords()
+        customWords.removeAll { $0.id == id }
+        try saveCustomWords(customWords)
     }
 
     func newAudioFileURL(sessionID: UUID) throws -> URL {

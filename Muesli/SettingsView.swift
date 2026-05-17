@@ -4,6 +4,8 @@ struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
+    @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
+    @AppStorage(MuesliPreferences.keyboardSessionTimeoutMinutesKey) private var keyboardSessionTimeoutMinutes = 10
     @State private var keyboardStatusText = "Unknown"
 
     var body: some View {
@@ -31,11 +33,27 @@ struct SettingsView: View {
 
                     MuesliSurface {
                         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                            SettingsRow(icon: "cpu", title: "Runtime", value: "CoreML / ANE")
+                            SettingsToggleRow(
+                                icon: "keyboard.badge.ellipsis",
+                                title: "Keyboard Session Mode",
+                                detail: "Keep Muesli ready for keyboard dictation with a visible microphone session.",
+                                isOn: $keyboardSessionMode
+                            )
                             Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsRow(icon: "waveform", title: "Engine", value: "Parakeet v3")
+                            SettingsRow(
+                                icon: "waveform.badge.mic",
+                                title: "Session",
+                                value: coordinator.keyboardSessionStatusText
+                            )
                             Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsRow(icon: "checkmark.seal", title: "Model", value: modelStatus)
+                            Stepper(value: $keyboardSessionTimeoutMinutes, in: 1...30, step: 1) {
+                                SettingsRow(
+                                    icon: "timer",
+                                    title: "Timeout",
+                                    value: "\(keyboardSessionTimeoutMinutes) min"
+                                )
+                            }
+                            .disabled(!keyboardSessionMode)
                         }
                         .padding(MuesliTheme.spacing16)
                     }
@@ -63,12 +81,20 @@ struct SettingsView: View {
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
-            .onAppear(perform: refreshKeyboardStatus)
+            .onAppear {
+                refreshKeyboardStatus()
+            }
             .onChange(of: liveActivitiesForDictations) { _, _ in
                 coordinator.applyLiveActivityPreferences()
             }
             .onChange(of: liveActivitiesForMeetings) { _, _ in
                 coordinator.applyLiveActivityPreferences()
+            }
+            .onChange(of: keyboardSessionMode) { _, enabled in
+                coordinator.setKeyboardSessionModeEnabled(enabled)
+            }
+            .onChange(of: keyboardSessionTimeoutMinutes) { _, _ in
+                coordinator.refreshKeyboardSessionTimeout()
             }
         }
     }
@@ -81,21 +107,6 @@ struct SettingsView: View {
             Text("Configure the keyboard shell and local model runtime.")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
-        }
-    }
-
-    private var modelStatus: String {
-        switch coordinator.modelPreparation.phase {
-        case .ready:
-            "Ready"
-        case .downloading:
-            "Downloading"
-        case .preparing:
-            "Preparing"
-        case .failed:
-            "Paused"
-        case .idle:
-            "Not prepared"
         }
     }
 
@@ -115,6 +126,7 @@ struct SettingsView: View {
             keyboardStatusText = "Not confirmed"
         }
     }
+
 }
 
 private struct SettingsRow: View {

@@ -170,4 +170,26 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try store.transcripts().map(\.text), ["replacement"])
         XCTAssertEqual(try store.transcript(for: sessionID)?.text, "replacement")
     }
+
+    func testCustomWordsPersistAndRemove() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let entry = CustomWord(
+            word: "Parakeet v3",
+            replacement: "Parakeet v3",
+            createdAt: Date(timeIntervalSince1970: 700)
+        )
+
+        try store.saveCustomWords([])
+        try store.addCustomWord(entry)
+
+        XCTAssertEqual(try store.customWords(), [entry])
+
+        try store.removeCustomWord(id: entry.id)
+
+        XCTAssertEqual(try store.customWords(), [])
+    }
 }

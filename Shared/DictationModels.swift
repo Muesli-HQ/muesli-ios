@@ -168,6 +168,61 @@ struct Transcript: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+struct CustomWord: Codable, Sendable, Equatable, Identifiable {
+    var id: UUID
+    var word: String
+    var replacement: String?
+    var matchingThreshold: Double
+    var createdAt: Date
+    var isEnabled: Bool
+
+    var targetWord: String {
+        let trimmedReplacement = replacement?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmedReplacement.isEmpty ? word : trimmedReplacement
+    }
+
+    init(
+        id: UUID = UUID(),
+        word: String,
+        replacement: String? = nil,
+        matchingThreshold: Double = 0.85,
+        createdAt: Date = .now,
+        isEnabled: Bool = true
+    ) {
+        self.id = id
+        self.word = word
+        self.replacement = replacement
+        self.matchingThreshold = Self.clampedThreshold(matchingThreshold)
+        self.createdAt = createdAt
+        self.isEnabled = isEnabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case word
+        case replacement
+        case matchingThreshold = "matching_threshold"
+        case createdAt = "created_at"
+        case isEnabled = "is_enabled"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+        word = try container.decode(String.self, forKey: .word)
+        replacement = try container.decodeIfPresent(String.self, forKey: .replacement)
+        matchingThreshold = Self.clampedThreshold(
+            (try? container.decode(Double.self, forKey: .matchingThreshold)) ?? 0.85
+        )
+        createdAt = (try? container.decode(Date.self, forKey: .createdAt)) ?? .now
+        isEnabled = (try? container.decode(Bool.self, forKey: .isEnabled)) ?? true
+    }
+
+    private static func clampedThreshold(_ value: Double) -> Double {
+        min(max(value, 0.70), 0.95)
+    }
+}
+
 struct DictationStatus: Codable, Sendable, Equatable {
     let requestID: UUID?
     let phase: DictationPhase
@@ -199,6 +254,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
     let activeRequestID: UUID?
     let phase: DictationPhase
     let message: String?
+    let supportsBackgroundStart: Bool
     let updatedAt: Date
 
     init(
@@ -206,12 +262,33 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         activeRequestID: UUID? = nil,
         phase: DictationPhase = .idle,
         message: String? = nil,
+        supportsBackgroundStart: Bool = false,
         updatedAt: Date = .now
     ) {
         self.isActive = isActive
         self.activeRequestID = activeRequestID
         self.phase = phase
         self.message = message
+        self.supportsBackgroundStart = supportsBackgroundStart
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isActive
+        case activeRequestID
+        case phase
+        case message
+        case supportsBackgroundStart
+        case updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isActive = try container.decode(Bool.self, forKey: .isActive)
+        activeRequestID = try container.decodeIfPresent(UUID.self, forKey: .activeRequestID)
+        phase = try container.decode(DictationPhase.self, forKey: .phase)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+        supportsBackgroundStart = try container.decodeIfPresent(Bool.self, forKey: .supportsBackgroundStart) ?? false
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
 }

@@ -61,9 +61,12 @@ enum MuesliPreferences {
 
     static var chatGPTModel: String {
         let value = UserDefaults.standard.string(forKey: chatGPTModelKey) ?? ""
-        return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? MeetingSummaryBackend.defaultChatGPTModel
-            : value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return MeetingSummaryBackend.defaultChatGPTModel }
+        guard SummaryModelPreset.chatGPTModels.contains(where: { $0.id == trimmedValue }) else {
+            return MeetingSummaryBackend.defaultChatGPTModel
+        }
+        return trimmedValue
     }
 
     static func liveActivitiesEnabled(for kind: RecordingSessionKind) -> Bool {
@@ -87,7 +90,7 @@ enum MeetingSummaryBackend: String, CaseIterable, Identifiable {
     case chatGPT = "chatgpt"
 
     static let defaultOpenRouterModel = "stepfun/step-3.5-flash:free"
-    static let defaultChatGPTModel = "gpt-5.4-mini"
+    static let defaultChatGPTModel = "gpt-5.5"
 
     var id: String { rawValue }
 
@@ -107,5 +110,34 @@ enum MeetingSummaryBackend: String, CaseIterable, Identifiable {
         case .chatGPT:
             Self.defaultChatGPTModel
         }
+    }
+}
+
+struct SummaryModelPreset: Identifiable, Hashable {
+    let id: String
+    let label: String
+
+    static let chatGPTModels: [SummaryModelPreset] = [
+        SummaryModelPreset(id: "gpt-5.5", label: "GPT-5.5 (default)"),
+        SummaryModelPreset(id: "gpt-5.4-mini", label: "GPT-5.4 Mini"),
+    ]
+
+    static let openRouterModels: [SummaryModelPreset] = [
+        SummaryModelPreset(id: "stepfun/step-3.5-flash:free", label: "Step 3.5 Flash (256k ctx)"),
+        SummaryModelPreset(id: "nvidia/nemotron-3-super-120b-a12b:free", label: "Nemotron 3 Super 120B (262k ctx)"),
+        SummaryModelPreset(id: "nvidia/nemotron-3-nano-30b-a3b:free", label: "Nemotron 3 Nano 30B (256k ctx)"),
+        SummaryModelPreset(id: "arcee-ai/trinity-large-preview:free", label: "Trinity Large (131k ctx)"),
+    ]
+
+    static func menuPresets(
+        _ presets: [SummaryModelPreset],
+        currentModel: String,
+        preserveCustomValue: Bool = true
+    ) -> [SummaryModelPreset] {
+        let trimmedModel = currentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedModel.isEmpty else { return presets }
+        guard !presets.contains(where: { $0.id == trimmedModel }) else { return presets }
+        guard preserveCustomValue else { return presets }
+        return presets + [SummaryModelPreset(id: trimmedModel, label: "Custom: \(trimmedModel)")]
     }
 }

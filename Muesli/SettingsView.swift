@@ -144,11 +144,11 @@ struct SettingsView: View {
                                 )
                                 .disabled(!meetingSummariesEnabled)
 
-                                SettingsTextFieldRow(
+                                SettingsModelPickerRow(
                                     icon: "cpu",
                                     title: "OpenRouter Model",
-                                    placeholder: MeetingSummaryBackend.defaultOpenRouterModel,
-                                    text: $openRouterModel
+                                    selection: $openRouterModel,
+                                    presets: SummaryModelPreset.openRouterModels
                                 )
                                 .disabled(!meetingSummariesEnabled)
                             } else {
@@ -175,11 +175,13 @@ struct SettingsView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                                 .disabled(!meetingSummariesEnabled)
 
-                                SettingsTextFieldRow(
+                                SettingsModelPickerRow(
                                     icon: "cpu",
                                     title: "ChatGPT Model",
-                                    placeholder: MeetingSummaryBackend.defaultChatGPTModel,
-                                    text: $chatGPTModel
+                                    selection: $chatGPTModel,
+                                    presets: SummaryModelPreset.chatGPTModels,
+                                    preserveCustomValue: false,
+                                    fallbackSelection: MeetingSummaryBackend.defaultChatGPTModel
                                 )
                                 .disabled(!meetingSummariesEnabled)
                             }
@@ -417,5 +419,71 @@ struct SettingsTextFieldRow: View {
             .background(MuesliTheme.surfacePrimary)
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
+    }
+}
+
+struct SettingsModelPickerRow: View {
+    let icon: String
+    let title: String
+    @Binding var selection: String
+    let presets: [SummaryModelPreset]
+    var preserveCustomValue = true
+    var fallbackSelection: String?
+
+    private var menuPresets: [SummaryModelPreset] {
+        SummaryModelPreset.menuPresets(
+            presets,
+            currentModel: selection,
+            preserveCustomValue: preserveCustomValue
+        )
+    }
+
+    private var normalizedSelection: String {
+        let trimmedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        if presets.contains(where: { $0.id == trimmedSelection }) {
+            return trimmedSelection
+        }
+        if preserveCustomValue, !trimmedSelection.isEmpty {
+            return trimmedSelection
+        }
+        return fallbackSelection ?? presets.first?.id ?? selection
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 22)
+                Text(title)
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+            }
+
+            Picker(title, selection: $selection) {
+                ForEach(menuPresets) { preset in
+                    Text(preset.label).tag(preset.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .font(MuesliTheme.body())
+            .tint(MuesliTheme.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, MuesliTheme.spacing12)
+            .frame(height: 42)
+            .background(MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .onAppear(perform: normalizeSelectionIfNeeded)
+        .onChange(of: selection) { _, _ in
+            normalizeSelectionIfNeeded()
+        }
+    }
+
+    private func normalizeSelectionIfNeeded() {
+        let validSelection = normalizedSelection
+        guard selection != validSelection else { return }
+        selection = validSelection
     }
 }

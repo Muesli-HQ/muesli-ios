@@ -581,14 +581,16 @@ struct OnboardingView: View {
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .disabled(!meetingSummariesEnabled || isSigningInChatGPT)
 
-            SettingsTextFieldRow(
+            SettingsModelPickerRow(
                 icon: "cpu",
                 title: "ChatGPT Model",
-                placeholder: MeetingSummaryBackend.defaultChatGPTModel,
-                text: Binding(
+                selection: Binding(
                     get: { MuesliPreferences.chatGPTModel },
                     set: { UserDefaults.standard.set($0, forKey: MuesliPreferences.chatGPTModelKey) }
-                )
+                ),
+                presets: SummaryModelPreset.chatGPTModels,
+                preserveCustomValue: false,
+                fallbackSelection: MeetingSummaryBackend.defaultChatGPTModel
             )
             .disabled(!meetingSummariesEnabled)
         }
@@ -610,14 +612,14 @@ struct OnboardingView: View {
             )
             .disabled(!meetingSummariesEnabled)
 
-            SettingsTextFieldRow(
+            SettingsModelPickerRow(
                 icon: "cpu",
                 title: "OpenRouter Model",
-                placeholder: MeetingSummaryBackend.defaultOpenRouterModel,
-                text: Binding(
+                selection: Binding(
                     get: { MuesliPreferences.openRouterModel },
                     set: { UserDefaults.standard.set($0, forKey: MuesliPreferences.openRouterModelKey) }
-                )
+                ),
+                presets: SummaryModelPreset.openRouterModels
             )
             .disabled(!meetingSummariesEnabled)
         }

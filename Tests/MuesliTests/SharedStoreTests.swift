@@ -2,6 +2,53 @@ import XCTest
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    func testLegacyJSONFilesMigrateIntoSQLiteStore() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let encoder = JSONEncoder()
+        let requestID = UUID()
+        let result = DictationResult(
+            requestID: requestID,
+            text: "migrated dictation",
+            createdAt: Date(timeIntervalSince1970: 200),
+            engineIdentifier: "parakeet-v3"
+        )
+        let command = DictationCommand(
+            requestID: requestID,
+            action: .stop,
+            createdAt: Date(timeIntervalSince1970: 250)
+        )
+        let customWord = CustomWord(
+            word: "muesli",
+            replacement: "Muesli",
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+
+        try encoder.encode([result]).write(
+            to: directory.appendingPathComponent("dictation-history.json")
+        )
+        try encoder.encode(result).write(
+            to: directory.appendingPathComponent("result-\(requestID.uuidString).json")
+        )
+        try encoder.encode(command).write(
+            to: directory.appendingPathComponent("pending-command.json")
+        )
+        try encoder.encode([customWord]).write(
+            to: directory.appendingPathComponent("custom-words.json")
+        )
+
+        let store = SharedStore(containerURL: directory)
+
+        XCTAssertEqual(try store.resultsHistory(), [result])
+        XCTAssertEqual(try store.result(for: requestID), result)
+        XCTAssertEqual(try store.pendingCommand(), command)
+        XCTAssertEqual(try store.customWords(), [customWord])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("Muesli.sqlite").path))
+    }
+
     func testResultsHistoryPersistsSortedResultsAfterOneOffResultIsCleared() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)

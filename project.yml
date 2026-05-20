@@ -48,6 +48,7 @@ targets:
       - target: MuesliLiveActivityExtension
       - package: FluidAudio
       - package: TelemetryDeck
+      - sdk: libsqlite3.tbd
 
   MuesliLiveActivityExtension:
     type: app-extension
@@ -76,6 +77,8 @@ targets:
         INFOPLIST_FILE: MuesliKeyboard/Info.plist
         CODE_SIGN_ENTITLEMENTS: MuesliKeyboard/MuesliKeyboard.entitlements
         SKIP_INSTALL: true
+    dependencies:
+      - sdk: libsqlite3.tbd
 
   MuesliTests:
     type: bundle.unit-test
@@ -89,6 +92,7 @@ targets:
         GENERATE_INFOPLIST_FILE: true
     dependencies:
       - target: Muesli
+      - sdk: libsqlite3.tbd
 
 schemes:
   Muesli:

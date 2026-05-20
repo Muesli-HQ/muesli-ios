@@ -63,7 +63,9 @@ struct RootView: View {
         case .models:
             ModelsView(coordinator: coordinator)
         case .settings:
-            SettingsView(coordinator: coordinator)
+            SettingsView(coordinator: coordinator) { section in
+                selectedSection = section
+            }
         }
     }
 }
@@ -126,7 +128,7 @@ private struct KeyboardHandoffOverlay: View {
     }
 }
 
-private enum AppSection: String, CaseIterable {
+enum AppSection: String, CaseIterable {
     case dictations
     case meetings
     case dictionary
@@ -208,31 +210,30 @@ private struct MuesliSidebar: View {
 
 private struct MuesliTabSwitcher: View {
     @Binding var selectedSection: AppSection
+    private let phoneSections: [AppSection] = [.dictations, .meetings, .settings]
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: MuesliTheme.spacing4) {
-                ForEach(AppSection.allCases, id: \.self) { section in
-                    Button {
-                        selectedSection = section
-                    } label: {
-                        HStack(spacing: MuesliTheme.spacing8) {
-                            Image(systemName: section.icon)
-                                .font(.system(size: 15, weight: .semibold))
-                            Text(section.title)
-                                .font(MuesliTheme.headline())
-                        }
-                        .foregroundStyle(selectedSection == section ? MuesliTheme.accent : MuesliTheme.textSecondary)
-                        .frame(minWidth: 126)
-                        .frame(height: 48)
-                        .background(selectedSection == section ? MuesliTheme.surfaceSelected : Color.clear)
-                        .clipShape(Capsule())
+        HStack(spacing: MuesliTheme.spacing4) {
+            ForEach(phoneSections, id: \.self) { section in
+                Button {
+                    selectedSection = section
+                } label: {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Image(systemName: section.icon)
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(section.title)
+                            .font(MuesliTheme.headline())
                     }
-                    .buttonStyle(.plain)
+                    .foregroundStyle(selectedSection == section ? MuesliTheme.accent : MuesliTheme.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(selectedSection == section ? MuesliTheme.surfaceSelected : Color.clear)
+                    .clipShape(Capsule())
                 }
+                .buttonStyle(.plain)
             }
-            .padding(MuesliTheme.spacing8)
         }
+        .padding(MuesliTheme.spacing8)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
         .overlay(

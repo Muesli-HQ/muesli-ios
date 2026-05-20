@@ -16,6 +16,18 @@ struct OnboardingView: View {
     @State private var fullAccessConfirmed = UserDefaults.standard.bool(
         forKey: OnboardingPreferenceKeys.fullAccessConfirmed
     )
+    @State private var meetingSummariesEnabled = UserDefaults.standard.object(
+        forKey: MuesliPreferences.meetingSummariesEnabledKey
+    ) == nil ? true : UserDefaults.standard.bool(forKey: MuesliPreferences.meetingSummariesEnabledKey)
+    @State private var summaryBackend = MuesliPreferences.meetingSummaryBackend
+    @State private var openRouterAPIKey = MeetingSummaryClient.storedOpenRouterAPIKey()
+    @State private var chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+    @State private var isSigningInChatGPT = false
+    @State private var summaryStatusText: String?
+
+    private var orderedSteps: [OnboardingStep] {
+        OnboardingStep.orderedSteps(for: useCaseDraft)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +44,8 @@ struct OnboardingView: View {
                         modelStep
                     case .test:
                         testStep
+                    case .summary:
+                        meetingSummaryStep
                     }
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)
@@ -47,6 +61,7 @@ struct OnboardingView: View {
             nameDraft = coordinator.userName
             useCaseDraft = coordinator.selectedUseCase
             refreshMicrophoneStatus()
+            refreshSummaryStatus()
             AppTelemetry.signal("onboarding_viewed")
             AppTelemetry.signal("onboarding_step_viewed", parameters: ["step": currentStep.telemetryName])
             if currentStep == .model {
@@ -59,12 +74,20 @@ struct OnboardingView: View {
             if step == .model {
                 coordinator.prepareModelForOnboarding()
             }
+            if step == .summary {
+                refreshSummaryStatus()
+            }
         }
         .onChange(of: keyboardEnabledConfirmed) { _, confirmed in
             UserDefaults.standard.set(confirmed, forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed)
         }
         .onChange(of: fullAccessConfirmed) { _, confirmed in
             UserDefaults.standard.set(confirmed, forKey: OnboardingPreferenceKeys.fullAccessConfirmed)
+        }
+        .onChange(of: useCaseDraft) { _, useCase in
+            if !OnboardingStep.orderedSteps(for: useCase).contains(currentStep) {
+                currentStep = OnboardingStep.orderedSteps(for: useCase).first ?? .profile
+            }
         }
     }
 
@@ -87,9 +110,13 @@ struct OnboardingView: View {
             }
 
             HStack(spacing: MuesliTheme.spacing8) {
-                ForEach(OnboardingStep.allCases, id: \.self) { step in
+                ForEach(orderedSteps, id: \.self) { step in
                     Capsule()
-                        .fill(step.index <= currentStep.index ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
+                        .fill(
+                            step.position(in: orderedSteps) <= currentStep.position(in: orderedSteps)
+                                ? MuesliTheme.accent
+                                : MuesliTheme.surfacePrimary
+                        )
                         .frame(height: 4)
                 }
             }
@@ -461,6 +488,144 @@ struct OnboardingView: View {
         }
     }
 
+    private var meetingSummaryStep: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                Text("Meeting Summaries")
+                    .font(MuesliTheme.title1())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text("Connect ChatGPT or OpenRouter now so meeting recordings can become structured notes after local transcription and diarization.")
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                    Toggle(isOn: $meetingSummariesEnabled) {
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                            Text("Generate Meeting Notes")
+                                .font(MuesliTheme.headline())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                            Text("You can skip this and configure summaries later in Settings.")
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textTertiary)
+                        }
+                    }
+                    .tint(MuesliTheme.accent)
+
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+
+                    Picker("Summary Provider", selection: $summaryBackend) {
+                        ForEach(MeetingSummaryBackend.allCases) { backend in
+                            Text(backend.label).tag(backend)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!meetingSummariesEnabled)
+
+                    if summaryBackend == .chatGPT {
+                        chatGPTSummarySetup
+                    } else {
+                        openRouterSummarySetup
+                    }
+
+                    if let summaryStatusText {
+                        Text(summaryStatusText)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+        }
+    }
+
+    private var chatGPTSummarySetup: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: chatGPTSignedIn ? "checkmark.circle.fill" : "person.crop.circle")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
+
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text("ChatGPT")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(chatGPTSignedIn ? "Signed in for meeting summaries" : "Use your ChatGPT subscription for summary generation")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+
+                Spacer()
+            }
+
+            Button(action: toggleChatGPTSignIn) {
+                HStack(spacing: MuesliTheme.spacing8) {
+                    if isSigningInChatGPT {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Image(systemName: chatGPTSignedIn ? "checkmark.circle.fill" : "person.crop.circle.badge.plus")
+                    }
+                    Text(chatGPTSignedIn ? "Signed in · Sign Out" : "Sign In with ChatGPT")
+                }
+                .font(MuesliTheme.headline())
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .disabled(!meetingSummariesEnabled || isSigningInChatGPT)
+
+            SettingsTextFieldRow(
+                icon: "cpu",
+                title: "ChatGPT Model",
+                placeholder: MeetingSummaryBackend.defaultChatGPTModel,
+                text: Binding(
+                    get: { MuesliPreferences.chatGPTModel },
+                    set: { UserDefaults.standard.set($0, forKey: MuesliPreferences.chatGPTModelKey) }
+                )
+            )
+            .disabled(!meetingSummariesEnabled)
+        }
+    }
+
+    private var openRouterSummarySetup: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            Text("OpenRouter supports several hosted model providers through one API key.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            SettingsTextFieldRow(
+                icon: "key",
+                title: "OpenRouter API Key",
+                placeholder: "sk-or-...",
+                text: $openRouterAPIKey,
+                isSecure: true
+            )
+            .disabled(!meetingSummariesEnabled)
+
+            SettingsTextFieldRow(
+                icon: "cpu",
+                title: "OpenRouter Model",
+                placeholder: MeetingSummaryBackend.defaultOpenRouterModel,
+                text: Binding(
+                    get: { MuesliPreferences.openRouterModel },
+                    set: { UserDefaults.standard.set($0, forKey: MuesliPreferences.openRouterModelKey) }
+                )
+            )
+            .disabled(!meetingSummariesEnabled)
+        }
+        .onChange(of: openRouterAPIKey) { _, apiKey in
+            saveOpenRouterAPIKey(apiKey)
+        }
+    }
+
     private var footer: some View {
         HStack(spacing: MuesliTheme.spacing12) {
             if currentStep != .profile {
@@ -509,7 +674,9 @@ struct OnboardingView: View {
         case .model:
             coordinator.modelPreparation.isReady ? "Continue" : "Skip for Now"
         case .test:
-            "Finish"
+            isLastStep ? "Finish" : "Continue"
+        case .summary:
+            isLastStep ? "Finish" : "Continue"
         }
     }
 
@@ -523,7 +690,13 @@ struct OnboardingView: View {
             !coordinator.modelPreparation.isPreparing
         case .test:
             !isOnboardingTestActive && !coordinator.onboardingTestTranscript.isEmpty
+        case .summary:
+            !isSigningInChatGPT
         }
+    }
+
+    private var isLastStep: Bool {
+        currentStep.position(in: orderedSteps) == orderedSteps.count - 1
     }
 
     private var isOnboardingTestActive: Bool {
@@ -561,22 +734,24 @@ struct OnboardingView: View {
     }
 
     private func primaryAction() {
-        switch currentStep {
-        case .profile:
+        if currentStep == .profile {
             coordinator.saveOnboardingProfile(name: nameDraft, useCase: useCaseDraft)
-            currentStep = .permissions
-        case .permissions:
-            currentStep = .model
-        case .model:
-            currentStep = .test
-        case .test:
+        }
+
+        if currentStep == .summary {
+            saveSummaryConfiguration()
+        }
+
+        if isLastStep {
             OnboardingPreferenceKeys.clear()
             coordinator.completeOnboarding()
+        } else if let nextStep = currentStep.next(in: orderedSteps) {
+            currentStep = nextStep
         }
     }
 
     private func goBack() {
-        guard let previous = OnboardingStep(rawValue: currentStep.index - 1) else { return }
+        guard let previous = currentStep.previous(in: orderedSteps) else { return }
         currentStep = previous
     }
 
@@ -599,6 +774,59 @@ struct OnboardingView: View {
     private func openAppSettings() {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         UIApplication.shared.open(url)
+    }
+
+    private func refreshSummaryStatus() {
+        openRouterAPIKey = MeetingSummaryClient.storedOpenRouterAPIKey()
+        chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+    }
+
+    private func saveSummaryConfiguration() {
+        UserDefaults.standard.set(meetingSummariesEnabled, forKey: MuesliPreferences.meetingSummariesEnabledKey)
+        UserDefaults.standard.set(summaryBackend.rawValue, forKey: MuesliPreferences.meetingSummaryBackendKey)
+        if summaryBackend == .openRouter {
+            saveOpenRouterAPIKey(openRouterAPIKey)
+        }
+        AppTelemetry.signal("onboarding_summary_configured", parameters: [
+            "enabled": meetingSummariesEnabled ? "true" : "false",
+            "backend": summaryBackend.rawValue,
+            "chatgpt_signed_in": chatGPTSignedIn ? "true" : "false",
+            "openrouter_key_present": MeetingSummaryClient.storedOpenRouterAPIKey().isEmpty ? "false" : "true"
+        ])
+    }
+
+    private func saveOpenRouterAPIKey(_ apiKey: String) {
+        do {
+            try MeetingSummaryClient.saveOpenRouterAPIKey(apiKey)
+            summaryStatusText = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "OpenRouter key cleared."
+                : "OpenRouter key saved in Keychain."
+        } catch {
+            summaryStatusText = error.localizedDescription
+        }
+    }
+
+    private func toggleChatGPTSignIn() {
+        if chatGPTSignedIn {
+            ChatGPTAuthManager.shared.signOut()
+            chatGPTSignedIn = false
+            summaryStatusText = "Signed out of ChatGPT."
+            return
+        }
+
+        isSigningInChatGPT = true
+        summaryStatusText = nil
+        Task {
+            do {
+                try await ChatGPTAuthManager.shared.signIn()
+                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+                summaryStatusText = "Signed in to ChatGPT."
+            } catch {
+                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+                summaryStatusText = error.localizedDescription
+            }
+            isSigningInChatGPT = false
+        }
     }
 
     private var modelActionTitle: String {
@@ -648,8 +876,36 @@ private enum OnboardingStep: Int, CaseIterable {
     case permissions
     case model
     case test
+    case summary
 
     var index: Int { rawValue }
+
+    static func orderedSteps(for useCase: OnboardingUseCase) -> [OnboardingStep] {
+        var steps: [OnboardingStep] = [.profile, .permissions, .model]
+        if useCase.includesDictationTest {
+            steps.append(.test)
+        }
+        if useCase.includesMeetingWorkflow {
+            steps.append(.summary)
+        }
+        return steps
+    }
+
+    func position(in steps: [OnboardingStep]) -> Int {
+        steps.firstIndex(of: self) ?? 0
+    }
+
+    func next(in steps: [OnboardingStep]) -> OnboardingStep? {
+        let index = position(in: steps)
+        guard index < steps.count - 1 else { return nil }
+        return steps[index + 1]
+    }
+
+    func previous(in steps: [OnboardingStep]) -> OnboardingStep? {
+        let index = position(in: steps)
+        guard index > 0 else { return nil }
+        return steps[index - 1]
+    }
 
     var telemetryName: String {
         switch self {
@@ -661,6 +917,8 @@ private enum OnboardingStep: Int, CaseIterable {
             "model"
         case .test:
             "test"
+        case .summary:
+            "summary"
         }
     }
 
@@ -674,6 +932,8 @@ private enum OnboardingStep: Int, CaseIterable {
             "Download and compile local transcription."
         case .test:
             "Confirm dictation works on this device."
+        case .summary:
+            "Connect meeting summary providers."
         }
     }
 }

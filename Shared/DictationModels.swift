@@ -41,6 +41,14 @@ enum RecordingSessionPhase: String, Codable, Sendable, Equatable {
     case cancelled
 }
 
+enum MeetingProcessingState: String, Codable, Sendable, Equatable {
+    case notStarted
+    case processing
+    case completed
+    case failed
+    case unavailable
+}
+
 struct DictationRequest: Codable, Sendable, Equatable, Identifiable {
     let id: UUID
     let createdAt: Date
@@ -108,6 +116,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var endedAt: Date?
     var phase: RecordingSessionPhase
     var audioFileName: String?
+    var keepsAudioRecording: Bool
     var transcriptID: UUID?
     var engineIdentifier: String?
     var errorMessage: String?
@@ -122,6 +131,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         endedAt: Date? = nil,
         phase: RecordingSessionPhase = .recording,
         audioFileName: String? = nil,
+        keepsAudioRecording: Bool = false,
         transcriptID: UUID? = nil,
         engineIdentifier: String? = nil,
         errorMessage: String? = nil
@@ -135,6 +145,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.endedAt = endedAt
         self.phase = phase
         self.audioFileName = audioFileName
+        self.keepsAudioRecording = keepsAudioRecording
         self.transcriptID = transcriptID
         self.engineIdentifier = engineIdentifier
         self.errorMessage = errorMessage
@@ -144,6 +155,39 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         guard let startedAt else { return nil }
         return (endedAt ?? .now).timeIntervalSince(startedAt)
     }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case requestID
+        case kind
+        case title
+        case createdAt
+        case startedAt
+        case endedAt
+        case phase
+        case audioFileName
+        case keepsAudioRecording
+        case transcriptID
+        case engineIdentifier
+        case errorMessage
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        requestID = try container.decodeIfPresent(UUID.self, forKey: .requestID)
+        kind = try container.decode(RecordingSessionKind.self, forKey: .kind)
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? kind.title
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
+        startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
+        endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
+        phase = try container.decodeIfPresent(RecordingSessionPhase.self, forKey: .phase) ?? .recording
+        audioFileName = try container.decodeIfPresent(String.self, forKey: .audioFileName)
+        keepsAudioRecording = try container.decodeIfPresent(Bool.self, forKey: .keepsAudioRecording) ?? false
+        transcriptID = try container.decodeIfPresent(UUID.self, forKey: .transcriptID)
+        engineIdentifier = try container.decodeIfPresent(String.self, forKey: .engineIdentifier)
+        errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+    }
 }
 
 struct Transcript: Codable, Sendable, Equatable, Identifiable {
@@ -152,19 +196,76 @@ struct Transcript: Codable, Sendable, Equatable, Identifiable {
     let text: String
     let createdAt: Date
     let engineIdentifier: String
+    let speakerTranscript: String?
+    let summaryText: String?
+    let diarizationState: MeetingProcessingState
+    let diarizationErrorMessage: String?
+    let summaryState: MeetingProcessingState
+    let summaryBackend: String?
+    let summaryModel: String?
+    let summaryErrorMessage: String?
 
     init(
         id: UUID = UUID(),
         sessionID: UUID,
         text: String,
         createdAt: Date = .now,
-        engineIdentifier: String
+        engineIdentifier: String,
+        speakerTranscript: String? = nil,
+        summaryText: String? = nil,
+        diarizationState: MeetingProcessingState = .notStarted,
+        diarizationErrorMessage: String? = nil,
+        summaryState: MeetingProcessingState = .notStarted,
+        summaryBackend: String? = nil,
+        summaryModel: String? = nil,
+        summaryErrorMessage: String? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
         self.text = text
         self.createdAt = createdAt
         self.engineIdentifier = engineIdentifier
+        self.speakerTranscript = speakerTranscript
+        self.summaryText = summaryText
+        self.diarizationState = diarizationState
+        self.diarizationErrorMessage = diarizationErrorMessage
+        self.summaryState = summaryState
+        self.summaryBackend = summaryBackend
+        self.summaryModel = summaryModel
+        self.summaryErrorMessage = summaryErrorMessage
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionID
+        case text
+        case createdAt
+        case engineIdentifier
+        case speakerTranscript
+        case summaryText
+        case diarizationState
+        case diarizationErrorMessage
+        case summaryState
+        case summaryBackend
+        case summaryModel
+        case summaryErrorMessage
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        sessionID = try container.decode(UUID.self, forKey: .sessionID)
+        text = try container.decode(String.self, forKey: .text)
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
+        engineIdentifier = try container.decode(String.self, forKey: .engineIdentifier)
+        speakerTranscript = try container.decodeIfPresent(String.self, forKey: .speakerTranscript)
+        summaryText = try container.decodeIfPresent(String.self, forKey: .summaryText)
+        diarizationState = try container.decodeIfPresent(MeetingProcessingState.self, forKey: .diarizationState) ?? .notStarted
+        diarizationErrorMessage = try container.decodeIfPresent(String.self, forKey: .diarizationErrorMessage)
+        summaryState = try container.decodeIfPresent(MeetingProcessingState.self, forKey: .summaryState) ?? .notStarted
+        summaryBackend = try container.decodeIfPresent(String.self, forKey: .summaryBackend)
+        summaryModel = try container.decodeIfPresent(String.self, forKey: .summaryModel)
+        summaryErrorMessage = try container.decodeIfPresent(String.self, forKey: .summaryErrorMessage)
     }
 }
 

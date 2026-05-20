@@ -154,6 +154,12 @@ struct SharedStore: Sendable {
         return directory.appendingPathComponent(fileName)
     }
 
+    func deleteAudioFile(fileName: String) throws {
+        let url = try audioFileURL(fileName: fileName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
+    }
+
     func audioFileName(sessionID: UUID) -> String {
         "session-\(sessionID.uuidString).wav"
     }

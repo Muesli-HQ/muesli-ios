@@ -4,6 +4,8 @@ enum OnboardingUseCase: String, CaseIterable, Codable {
     case voiceNotes = "voice_notes"
     case dictation = "dictation"
     case keyboardDictation = "keyboard_dictation"
+    case meetings = "meetings"
+    case everything = "everything"
 
     var title: String {
         switch self {
@@ -13,6 +15,10 @@ enum OnboardingUseCase: String, CaseIterable, Codable {
             "Dictation"
         case .keyboardDictation:
             "Keyboard"
+        case .meetings:
+            "Meetings"
+        case .everything:
+            "Everything"
         }
     }
 
@@ -24,6 +30,10 @@ enum OnboardingUseCase: String, CaseIterable, Codable {
             "Transcribe and copy"
         case .keyboardDictation:
             "Use from text fields"
+        case .meetings:
+            "Notes and summaries"
+        case .everything:
+            "Dictation + meetings"
         }
     }
 
@@ -35,10 +45,22 @@ enum OnboardingUseCase: String, CaseIterable, Codable {
             "mic.fill"
         case .keyboardDictation:
             "keyboard.fill"
+        case .meetings:
+            "person.2.wave.2"
+        case .everything:
+            "rectangle.3.group.fill"
         }
     }
 
     var needsKeyboardSetup: Bool {
-        self == .keyboardDictation
+        self == .keyboardDictation || self == .everything
+    }
+
+    var includesMeetingWorkflow: Bool {
+        self == .meetings || self == .everything
+    }
+
+    var includesDictationTest: Bool {
+        self != .meetings
     }
 }

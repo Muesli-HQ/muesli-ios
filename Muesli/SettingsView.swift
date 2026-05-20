@@ -8,7 +8,15 @@ struct SettingsView: View {
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
     @AppStorage(MuesliPreferences.keyboardSessionTimeoutMinutesKey) private var keyboardSessionTimeoutMinutes = 10
+    @AppStorage(MuesliPreferences.keepMeetingAudioRecordingsKey) private var keepMeetingAudioRecordings = false
+    @AppStorage(MuesliPreferences.meetingSummariesEnabledKey) private var meetingSummariesEnabled = false
+    @AppStorage(MuesliPreferences.meetingSummaryBackendKey) private var meetingSummaryBackend = MeetingSummaryBackend.openRouter.rawValue
+    @AppStorage(MuesliPreferences.openRouterModelKey) private var openRouterModel = MeetingSummaryBackend.defaultOpenRouterModel
+    @AppStorage(MuesliPreferences.chatGPTModelKey) private var chatGPTModel = MeetingSummaryBackend.defaultChatGPTModel
     @State private var keyboardStatusText = "Unknown"
+    @State private var openRouterAPIKey = ""
+    @State private var summaryStatusText: String?
+    @State private var chatGPTSignedIn = false
 
     var body: some View {
         NavigationStack {
@@ -84,6 +92,13 @@ struct SettingsView: View {
                     MuesliSurface {
                         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                             SettingsToggleRow(
+                                icon: "waveform.path.ecg.rectangle",
+                                title: "Save Meeting Audio",
+                                detail: "Keep the original meeting recording after delayed transcription finishes. Queued recordings are always kept until transcription completes.",
+                                isOn: $keepMeetingAudioRecordings
+                            )
+                            Divider().overlay(MuesliTheme.surfaceBorder)
+                            SettingsToggleRow(
                                 icon: "waveform.badge.mic",
                                 title: "Dictation Live Activities",
                                 detail: "Show keyboard and in-app dictation progress on the Dynamic Island and Lock Screen.",
@@ -99,6 +114,85 @@ struct SettingsView: View {
                         }
                         .padding(MuesliTheme.spacing16)
                     }
+
+                    MuesliSurface {
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                            SettingsToggleRow(
+                                icon: "sparkles",
+                                title: "Meeting Summaries",
+                                detail: "Generate structured notes after local transcription and speaker diarization.",
+                                isOn: $meetingSummariesEnabled
+                            )
+
+                            Divider().overlay(MuesliTheme.surfaceBorder)
+
+                            Picker("Summary Backend", selection: $meetingSummaryBackend) {
+                                ForEach(MeetingSummaryBackend.allCases) { backend in
+                                    Text(backend.label).tag(backend.rawValue)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .disabled(!meetingSummariesEnabled)
+
+                            if selectedSummaryBackend == .openRouter {
+                                SettingsTextFieldRow(
+                                    icon: "key",
+                                    title: "OpenRouter API Key",
+                                    placeholder: "sk-or-...",
+                                    text: $openRouterAPIKey,
+                                    isSecure: true
+                                )
+                                .disabled(!meetingSummariesEnabled)
+
+                                SettingsTextFieldRow(
+                                    icon: "cpu",
+                                    title: "OpenRouter Model",
+                                    placeholder: MeetingSummaryBackend.defaultOpenRouterModel,
+                                    text: $openRouterModel
+                                )
+                                .disabled(!meetingSummariesEnabled)
+                            } else {
+                                SettingsRow(
+                                    icon: "person.crop.circle.badge.checkmark",
+                                    title: "ChatGPT",
+                                    value: chatGPTSignedIn ? "Signed in" : "Not signed in",
+                                    iconColor: chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent,
+                                    valueColor: chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.textTertiary
+                                )
+
+                                Button(action: toggleChatGPTSignIn) {
+                                    Label(
+                                        chatGPTSignedIn ? "Signed in · Sign Out" : "Sign In with ChatGPT",
+                                        systemImage: chatGPTSignedIn ? "checkmark.circle.fill" : "person.crop.circle"
+                                    )
+                                        .font(MuesliTheme.headline())
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 44)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.white)
+                                .background(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .disabled(!meetingSummariesEnabled)
+
+                                SettingsTextFieldRow(
+                                    icon: "cpu",
+                                    title: "ChatGPT Model",
+                                    placeholder: MeetingSummaryBackend.defaultChatGPTModel,
+                                    text: $chatGPTModel
+                                )
+                                .disabled(!meetingSummariesEnabled)
+                            }
+
+                            if let summaryStatusText {
+                                Text(summaryStatusText)
+                                    .font(MuesliTheme.caption())
+                                    .foregroundStyle(MuesliTheme.textTertiary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(MuesliTheme.spacing16)
+                    }
                 }
                 .padding(MuesliTheme.spacing20)
             }
@@ -106,6 +200,7 @@ struct SettingsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 refreshKeyboardStatus()
+                refreshSummarySettings()
             }
             .onChange(of: liveActivitiesForDictations) { _, _ in
                 coordinator.applyLiveActivityPreferences()
@@ -118,6 +213,9 @@ struct SettingsView: View {
             }
             .onChange(of: keyboardSessionTimeoutMinutes) { _, _ in
                 coordinator.refreshKeyboardSessionTimeout()
+            }
+            .onChange(of: openRouterAPIKey) { _, newValue in
+                saveOpenRouterAPIKey(newValue)
             }
         }
     }
@@ -147,6 +245,46 @@ struct SettingsView: View {
             keyboardStatusText = "Full Access needed"
         } else {
             keyboardStatusText = "Not confirmed"
+        }
+    }
+
+    private var selectedSummaryBackend: MeetingSummaryBackend {
+        MeetingSummaryBackend(rawValue: meetingSummaryBackend) ?? .openRouter
+    }
+
+    private func refreshSummarySettings() {
+        openRouterAPIKey = MeetingSummaryClient.storedOpenRouterAPIKey()
+        chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+    }
+
+    private func saveOpenRouterAPIKey(_ apiKey: String) {
+        do {
+            try MeetingSummaryClient.saveOpenRouterAPIKey(apiKey)
+            summaryStatusText = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "OpenRouter key cleared."
+                : "OpenRouter key saved in Keychain."
+        } catch {
+            summaryStatusText = error.localizedDescription
+        }
+    }
+
+    private func toggleChatGPTSignIn() {
+        if chatGPTSignedIn {
+            ChatGPTAuthManager.shared.signOut()
+            chatGPTSignedIn = false
+            summaryStatusText = "Signed out of ChatGPT."
+            return
+        }
+
+        Task {
+            do {
+                try await ChatGPTAuthManager.shared.signIn()
+                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+                summaryStatusText = "Signed in to ChatGPT."
+            } catch {
+                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+                summaryStatusText = error.localizedDescription
+            }
         }
     }
 
@@ -192,12 +330,14 @@ private struct SettingsRow: View {
     let icon: String
     let title: String
     let value: String
+    var iconColor = MuesliTheme.accent
+    var valueColor = MuesliTheme.textTertiary
 
     var body: some View {
         HStack(spacing: MuesliTheme.spacing12) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(MuesliTheme.accent)
+                .foregroundStyle(iconColor)
                 .frame(width: 22)
             Text(title)
                 .font(MuesliTheme.headline())
@@ -205,7 +345,7 @@ private struct SettingsRow: View {
             Spacer()
             Text(value)
                 .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textTertiary)
+                .foregroundStyle(valueColor)
         }
     }
 }
@@ -238,6 +378,44 @@ private struct SettingsToggleRow: View {
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .tint(MuesliTheme.accent)
+        }
+    }
+}
+
+struct SettingsTextFieldRow: View {
+    let icon: String
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+    var isSecure = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 22)
+                Text(title)
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+            }
+
+            Group {
+                if isSecure {
+                    SecureField(placeholder, text: $text)
+                } else {
+                    TextField(placeholder, text: $text)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(MuesliTheme.body())
+            .foregroundStyle(MuesliTheme.textPrimary)
+            .padding(.horizontal, MuesliTheme.spacing12)
+            .frame(height: 42)
+            .background(MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
     }
 }

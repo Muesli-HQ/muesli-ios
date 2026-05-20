@@ -52,6 +52,12 @@ final class DictationCoordinator {
     var clipboardStatusText: String?
 
     init() {
+        #if DEBUG
+        if Self.shouldResetOnboardingFromLaunchArguments() {
+            resetOnboardingForTesting()
+        }
+        #endif
+
         refreshHistory()
         Task {
             await liveActivityController.endInactiveActivities()
@@ -64,6 +70,12 @@ final class DictationCoordinator {
     }
 
     func handleOpenURL(_ url: URL) {
+        #if DEBUG
+        if handleDebugURL(url) {
+            return
+        }
+        #endif
+
         guard url.scheme == MuesliAppConstants.urlScheme,
               url.host == MuesliAppConstants.dictateHost,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -87,6 +99,33 @@ final class DictationCoordinator {
         startKeyboardRuntimePolling()
         startRecording(for: request, source: "keyboard")
     }
+
+    #if DEBUG
+    private func handleDebugURL(_ url: URL) -> Bool {
+        guard url.scheme == MuesliAppConstants.urlScheme,
+              url.host == MuesliAppConstants.debugHost,
+              url.path == MuesliAppConstants.resetOnboardingPath
+        else { return false }
+
+        resetOnboardingForTesting()
+        return true
+    }
+
+    func resetOnboardingForTesting() {
+        OnboardingPreferenceKeys.clear()
+        hasCompletedOnboarding = false
+        onboardingTestTranscript = ""
+        onboardingTestError = nil
+        isOnboardingTestRecording = false
+        isOnboardingTestTranscribing = false
+        UserDefaults.standard.set(false, forKey: Self.onboardingCompletedKey)
+        AppTelemetry.signal("debug_onboarding_reset")
+    }
+
+    private static func shouldResetOnboardingFromLaunchArguments() -> Bool {
+        ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.resetOnboardingLaunchArgument)
+    }
+    #endif
 
     func toggleRecording() {
         if isRecording {
@@ -130,6 +169,18 @@ final class DictationCoordinator {
         clipboardStatusText = "Copied"
         AppTelemetry.signal("transcript_copied")
 
+        clearClipboardStatusSoon()
+    }
+
+    func copyText(_ text: String, telemetryName: String) {
+        UIPasteboard.general.string = text
+        clipboardStatusText = "Copied"
+        AppTelemetry.signal(telemetryName)
+
+        clearClipboardStatusSoon()
+    }
+
+    private func clearClipboardStatusSoon() {
         Task {
             try? await Task.sleep(for: .seconds(1.2))
             if clipboardStatusText == "Copied" {
@@ -630,6 +681,7 @@ final class DictationCoordinator {
             ? "Untitled Meeting"
             : title.trimmingCharacters(in: .whitespacesAndNewlines)
         var session = RecordingSession(kind: .meeting, title: activeMeetingTitle)
+        session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
 
         Task {
             do {
@@ -678,6 +730,7 @@ final class DictationCoordinator {
         do {
             let audioURL = try recorder.stop()
             session.audioFileName = session.audioFileName ?? audioURL.lastPathComponent
+            session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
             session.endedAt = .now
             session.phase = queueForTranscription ? .transcriptionQueued : .transcribing
             try store.saveSession(session)
@@ -714,6 +767,7 @@ final class DictationCoordinator {
         var session = session
         session.phase = .transcribing
         session.errorMessage = nil
+        session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
         try? store.saveSession(session)
         refreshHistory()
         isMeetingTranscribing = true
@@ -736,28 +790,111 @@ final class DictationCoordinator {
 
             do {
                 let audioURL = try store.audioFileURL(fileName: audioFileName)
-                let text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                let detailedTranscription = try await engine.transcribeDetailed(audioURL: audioURL)
+                let text = postProcessTranscript(detailedTranscription.text)
+                var speakerTranscript: String?
+                var diarizationState: MeetingProcessingState = .processing
+                var diarizationErrorMessage: String?
+                meetingStatusText = "Diarizing"
+
+                do {
+                    let diarizationSegments = try await engine.diarize(audioURL: audioURL)
+                    speakerTranscript = MeetingTranscriptFormatter.speakerTranscript(
+                        transcription: DetailedTranscriptionResult(
+                            text: text,
+                            duration: detailedTranscription.duration,
+                            tokens: detailedTranscription.tokens
+                        ),
+                        diarizationSegments: diarizationSegments,
+                        meetingStart: session.startedAt ?? session.createdAt
+                    )
+                    diarizationState = .completed
+                } catch {
+                    speakerTranscript = nil
+                    diarizationState = .failed
+                    diarizationErrorMessage = error.localizedDescription
+                    AppTelemetry.signal("meeting_diarization_failed", parameters: [
+                        "error": String(describing: type(of: error))
+                    ])
+                }
+
+                var summaryText: String?
+                var summaryState: MeetingProcessingState = MuesliPreferences.meetingSummariesEnabled ? .processing : .notStarted
+                var summaryBackend: String?
+                var summaryModel: String?
+                var summaryErrorMessage: String?
+                var resolvedTitle = session.title
+
+                if MuesliPreferences.meetingSummariesEnabled {
+                    meetingStatusText = "Summarizing"
+                    let summarySource = speakerTranscript?.isEmpty == false ? speakerTranscript! : text
+                    do {
+                        let summary = try await MeetingSummaryClient.summarize(
+                            transcript: summarySource,
+                            meetingTitle: session.title ?? session.kind.title
+                        )
+                        summaryText = summary.notes
+                        summaryState = .completed
+                        summaryBackend = summary.backend.rawValue
+                        summaryModel = summary.model
+                        if !summary.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            resolvedTitle = summary.title
+                        }
+                    } catch {
+                        summaryText = MeetingSummaryClient.failureNotes(
+                            transcript: summarySource,
+                            meetingTitle: session.title ?? session.kind.title,
+                            error: error
+                        )
+                        summaryState = .failed
+                        summaryBackend = MuesliPreferences.meetingSummaryBackend.rawValue
+                        summaryModel = MuesliPreferences.meetingSummaryBackend == .chatGPT
+                            ? MuesliPreferences.chatGPTModel
+                            : MuesliPreferences.openRouterModel
+                        summaryErrorMessage = error.localizedDescription
+                        AppTelemetry.signal("meeting_summary_failed", parameters: [
+                            "backend": summaryBackend ?? "unknown",
+                            "error": String(describing: type(of: error))
+                        ])
+                    }
+                }
+
                 let transcript = Transcript(
                     sessionID: session.id,
                     text: text,
-                    engineIdentifier: engine.identifier
+                    engineIdentifier: engine.identifier,
+                    speakerTranscript: speakerTranscript,
+                    summaryText: summaryText,
+                    diarizationState: diarizationState,
+                    diarizationErrorMessage: diarizationErrorMessage,
+                    summaryState: summaryState,
+                    summaryBackend: summaryBackend,
+                    summaryModel: summaryModel,
+                    summaryErrorMessage: summaryErrorMessage
                 )
                 try store.saveTranscript(transcript)
                 session.phase = .completed
+                session.title = resolvedTitle
                 session.transcriptID = transcript.id
                 session.engineIdentifier = engine.identifier
                 session.errorMessage = nil
+                if !session.keepsAudioRecording {
+                    try? store.deleteAudioFile(fileName: audioFileName)
+                    session.audioFileName = nil
+                }
                 try store.saveSession(session)
                 meetingStatusText = "Ready"
                 refreshHistory()
                 await liveActivityController.end(
                     phase: "Completed",
-                    detail: "Meeting transcript saved",
+                    detail: summaryText == nil ? "Meeting transcript saved" : "Meeting notes saved",
                     session: session
                 )
                 AppTelemetry.signal("meeting_transcription_completed", parameters: [
                     "engine": engine.identifier,
-                    "empty": text.isEmpty ? "true" : "false"
+                    "empty": text.isEmpty ? "true" : "false",
+                    "diarized": diarizationState == .completed ? "true" : "false",
+                    "summarized": summaryState == .completed ? "true" : "false"
                 ])
             } catch {
                 session.phase = .failed

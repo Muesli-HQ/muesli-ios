@@ -193,6 +193,40 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try store.recordingSession(id: sessionID)?.phase, .transcriptionQueued)
     }
 
+    func testRecordingSessionDecodesLegacyPayloadWithoutAudioRetentionFlag() throws {
+        let session = RecordingSession(
+            kind: .meeting,
+            createdAt: Date(timeIntervalSince1970: 100),
+            phase: .completed,
+            audioFileName: "session.wav"
+        )
+        let data = try JSONEncoder().encode(session)
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        payload.removeValue(forKey: "keepsAudioRecording")
+        let legacyData = try JSONSerialization.data(withJSONObject: payload)
+
+        let decoded = try JSONDecoder().decode(RecordingSession.self, from: legacyData)
+
+        XCTAssertFalse(decoded.keepsAudioRecording)
+        XCTAssertEqual(decoded.audioFileName, "session.wav")
+    }
+
+    func testDeleteAudioFileRemovesRecordingFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let url = try store.audioFileURL(fileName: "session.wav")
+        try Data("audio".utf8).write(to: url)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+
+        try store.deleteAudioFile(fileName: "session.wav")
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
     func testTranscriptReplacesExistingTranscriptForSession() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
@@ -216,6 +250,29 @@ final class SharedStoreTests: XCTestCase {
 
         XCTAssertEqual(try store.transcripts().map(\.text), ["replacement"])
         XCTAssertEqual(try store.transcript(for: sessionID)?.text, "replacement")
+    }
+
+    func testTranscriptDecodesLegacyPayloadWithoutMeetingProcessingFields() throws {
+        let transcript = Transcript(
+            sessionID: UUID(),
+            text: "legacy transcript",
+            createdAt: Date(timeIntervalSince1970: 100),
+            engineIdentifier: "test"
+        )
+        let data = try JSONEncoder().encode(transcript)
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        payload.removeValue(forKey: "speakerTranscript")
+        payload.removeValue(forKey: "summaryText")
+        payload.removeValue(forKey: "diarizationState")
+        payload.removeValue(forKey: "summaryState")
+        let legacyData = try JSONSerialization.data(withJSONObject: payload)
+
+        let decoded = try JSONDecoder().decode(Transcript.self, from: legacyData)
+
+        XCTAssertEqual(decoded.text, "legacy transcript")
+        XCTAssertEqual(decoded.diarizationState, .notStarted)
+        XCTAssertEqual(decoded.summaryState, .notStarted)
+        XCTAssertNil(decoded.summaryText)
     }
 
     func testCustomWordsPersistAndRemove() throws {

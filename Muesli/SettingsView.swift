@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
+    var onSelectSection: ((AppSection) -> Void)?
+
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
@@ -26,6 +28,27 @@ struct SettingsView: View {
                                 .font(MuesliTheme.headline())
                                 .foregroundStyle(MuesliTheme.accent)
                                 .padding(.top, MuesliTheme.spacing4)
+                            }
+                        }
+                        .padding(MuesliTheme.spacing16)
+                    }
+
+                    MuesliSurface {
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                            SettingsNavigationRow(
+                                icon: "character.book.closed",
+                                title: "Dictionary",
+                                detail: "Manage filler words, custom phrases, names, and acronyms."
+                            ) {
+                                onSelectSection?(.dictionary)
+                            }
+                            Divider().overlay(MuesliTheme.surfaceBorder)
+                            SettingsNavigationRow(
+                                icon: "square.and.arrow.down",
+                                title: "Models",
+                                detail: "Prepare and inspect the local Parakeet v3 runtime."
+                            ) {
+                                onSelectSection?(.models)
                             }
                         }
                         .padding(MuesliTheme.spacing16)
@@ -127,6 +150,42 @@ struct SettingsView: View {
         }
     }
 
+}
+
+private struct SettingsNavigationRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 22)
+
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text(title)
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(detail)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: MuesliTheme.spacing12)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .padding(.top, 2)
+            }
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 private struct SettingsRow: View {

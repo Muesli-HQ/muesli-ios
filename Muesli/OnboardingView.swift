@@ -1,4 +1,5 @@
 import AVFoundation
+import AuthenticationServices
 import SwiftUI
 import UIKit
 
@@ -24,6 +25,9 @@ struct OnboardingView: View {
     @State private var chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
     @State private var isSigningInChatGPT = false
     @State private var summaryStatusText: String?
+    @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
+    @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
+    @State private var appleSyncStatusText: String?
 
     private var orderedSteps: [OnboardingStep] {
         OnboardingStep.orderedSteps(for: useCaseDraft)
@@ -40,6 +44,8 @@ struct OnboardingView: View {
                         profileStep
                     case .permissions:
                         permissionsStep
+                    case .sync:
+                        privateSyncStep
                     case .model:
                         modelStep
                     case .test:
@@ -67,10 +73,16 @@ struct OnboardingView: View {
             if currentStep == .model {
                 coordinator.prepareModelForOnboarding()
             }
+            if currentStep == .sync {
+                refreshAppleSyncStatus()
+            }
         }
         .onChange(of: currentStep) { _, step in
             UserDefaults.standard.set(step.rawValue, forKey: OnboardingPreferenceKeys.currentStep)
             AppTelemetry.signal("onboarding_step_viewed", parameters: ["step": step.telemetryName])
+            if step == .sync {
+                refreshAppleSyncStatus()
+            }
             if step == .model {
                 coordinator.prepareModelForOnboarding()
             }
@@ -88,6 +100,16 @@ struct OnboardingView: View {
             if !OnboardingStep.orderedSteps(for: useCase).contains(currentStep) {
                 currentStep = OnboardingStep.orderedSteps(for: useCase).first ?? .profile
             }
+        }
+        .onChange(of: iCloudSyncEnabled) { _, enabled in
+            AppTelemetry.signal(
+                "onboarding_icloud_sync_toggled",
+                parameters: ["enabled": enabled ? "true" : "false"]
+            )
+            appleSyncStatusText = enabled
+                ? "Muesli will prepare private iCloud sync once your Apple account is connected."
+                : "iCloud sync is off. Dictations and meetings stay local on this iPhone."
+            refreshAppleSyncStatus()
         }
     }
 
@@ -293,6 +315,114 @@ struct OnboardingView: View {
                     .disabled(isComplete)
             }
             .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    private var privateSyncStep: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                Text("Private iCloud Sync")
+                    .font(MuesliTheme.title1())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text("Optional sync keeps your Muesli data in your private iCloud account. Transcription still happens on-device.")
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                    Toggle(isOn: $iCloudSyncEnabled) {
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                            Text("Sync with iCloud")
+                                .font(MuesliTheme.headline())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                            Text("Dictations, meetings, summaries, dictionary terms, and settings can sync across Muesli apps.")
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .tint(MuesliTheme.accent)
+
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+
+                    syncStatusRow(
+                        icon: "icloud",
+                        title: "iCloud",
+                        value: appleSyncSnapshot.iCloudStatusLabel,
+                        isComplete: appleSyncSnapshot.isICloudAvailable
+                    )
+
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+
+                    syncStatusRow(
+                        icon: "person.crop.circle.badge.checkmark",
+                        title: "Apple Account",
+                        value: appleSyncSnapshot.appleAccountLabel,
+                        isComplete: appleSyncSnapshot.isSignedInWithApple
+                    )
+
+                    appleSyncAction
+
+                    Text(appleSyncStatusText ?? appleSyncSnapshot.detail)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+
+            Text("You can skip this now and enable iCloud Sync later in Settings.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+        }
+    }
+
+    private func syncStatusRow(icon: String, title: String, value: String, isComplete: Bool) -> some View {
+        HStack(spacing: MuesliTheme.spacing12) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(isComplete ? MuesliTheme.success : MuesliTheme.accent)
+                .frame(width: 24)
+
+            Text(title)
+                .font(MuesliTheme.headline())
+                .foregroundStyle(MuesliTheme.textPrimary)
+
+            Spacer(minLength: MuesliTheme.spacing12)
+
+            Text(value)
+                .font(MuesliTheme.callout())
+                .foregroundStyle(isComplete ? MuesliTheme.success : MuesliTheme.textTertiary)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    @ViewBuilder
+    private var appleSyncAction: some View {
+        if appleSyncSnapshot.isSignedInWithApple {
+            Button(action: signOutOfAppleSync) {
+                Label("Signed in · Sign Out", systemImage: "checkmark.circle.fill")
+                    .font(MuesliTheme.headline())
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(MuesliTheme.success)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        } else {
+            SignInWithAppleButton(.signIn) { request in
+                AppTelemetry.signal("onboarding_apple_sync_sign_in_started")
+                AppTelemetry.signal("apple_sync_sign_in_started")
+                request.requestedScopes = [.fullName, .email]
+            } onCompletion: { result in
+                handleAppleSyncSignIn(result)
+            }
+            .signInWithAppleButtonStyle(.white)
+            .frame(height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
     }
 
@@ -673,6 +803,8 @@ struct OnboardingView: View {
             "Continue"
         case .permissions:
             "Continue"
+        case .sync:
+            appleSyncSnapshot.isSignedInWithApple ? "Continue" : "Skip for Now"
         case .model:
             coordinator.modelPreparation.isReady ? "Continue" : "Skip for Now"
         case .test:
@@ -688,6 +820,8 @@ struct OnboardingView: View {
             !nameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .permissions:
             microphoneGranted && (!useCaseDraft.needsKeyboardSetup || (keyboardEnabledConfirmed && fullAccessConfirmed))
+        case .sync:
+            true
         case .model:
             !coordinator.modelPreparation.isPreparing
         case .test:
@@ -744,6 +878,14 @@ struct OnboardingView: View {
             saveSummaryConfiguration()
         }
 
+        if currentStep == .sync {
+            AppTelemetry.signal("onboarding_icloud_sync_configured", parameters: [
+                "enabled": iCloudSyncEnabled ? "true" : "false",
+                "icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false",
+                "apple_signed_in": appleSyncSnapshot.isSignedInWithApple ? "true" : "false"
+            ])
+        }
+
         if isLastStep {
             OnboardingPreferenceKeys.clear()
             coordinator.completeOnboarding()
@@ -781,6 +923,67 @@ struct OnboardingView: View {
     private func refreshSummaryStatus() {
         openRouterAPIKey = MeetingSummaryClient.storedOpenRouterAPIKey()
         chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+    }
+
+    private func refreshAppleSyncStatus() {
+        Task {
+            appleSyncSnapshot = await AppleSyncAccountManager.shared.snapshot()
+            AppTelemetry.signal(
+                "onboarding_icloud_sync_status_checked",
+                parameters: [
+                    "icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false",
+                    "apple_signed_in": appleSyncSnapshot.isSignedInWithApple ? "true" : "false"
+                ]
+            )
+            if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
+                appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
+            } else if iCloudSyncEnabled && !appleSyncSnapshot.isSignedInWithApple {
+                appleSyncStatusText = "Sign in with Apple to prepare this account for private iCloud sync."
+            } else if iCloudSyncEnabled {
+                appleSyncStatusText = "Ready for private iCloud sync. Transcription still happens on-device."
+            } else {
+                appleSyncStatusText = nil
+            }
+        }
+    }
+
+    private func handleAppleSyncSignIn(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                appleSyncStatusText = "Apple sign-in did not return an Apple ID credential."
+                AppTelemetry.signal("onboarding_apple_sync_sign_in_failed", parameters: ["reason": "missing_credential"])
+                AppTelemetry.signal("apple_sync_sign_in_failed", parameters: ["reason": "missing_credential"])
+                return
+            }
+            do {
+                try AppleSyncAccountManager.shared.save(credential: credential)
+                iCloudSyncEnabled = true
+                appleSyncStatusText = "Signed in with Apple for Muesli sync."
+                AppTelemetry.signal("onboarding_apple_sync_sign_in_completed")
+                AppTelemetry.signal("apple_sync_sign_in_completed")
+            } catch {
+                appleSyncStatusText = error.localizedDescription
+                let reason = String(describing: type(of: error))
+                AppTelemetry.signal("onboarding_apple_sync_sign_in_failed", parameters: ["reason": reason])
+                AppTelemetry.signal("apple_sync_sign_in_failed", parameters: ["reason": reason])
+            }
+        case .failure(let error):
+            appleSyncStatusText = error.localizedDescription
+            let reason = String(describing: type(of: error))
+            AppTelemetry.signal("onboarding_apple_sync_sign_in_failed", parameters: ["reason": reason])
+            AppTelemetry.signal("apple_sync_sign_in_failed", parameters: ["reason": reason])
+        }
+        refreshAppleSyncStatus()
+    }
+
+    private func signOutOfAppleSync() {
+        AppleSyncAccountManager.shared.signOut()
+        iCloudSyncEnabled = false
+        appleSyncStatusText = "Signed out of Apple sync. iCloud sync is off."
+        AppTelemetry.signal("onboarding_apple_sync_signed_out")
+        AppTelemetry.signal("apple_sync_signed_out")
+        refreshAppleSyncStatus()
     }
 
     private func saveSummaryConfiguration() {
@@ -876,6 +1079,7 @@ struct OnboardingView: View {
 private enum OnboardingStep: Int, CaseIterable {
     case profile
     case permissions
+    case sync
     case model
     case test
     case summary
@@ -883,7 +1087,7 @@ private enum OnboardingStep: Int, CaseIterable {
     var index: Int { rawValue }
 
     static func orderedSteps(for useCase: OnboardingUseCase) -> [OnboardingStep] {
-        var steps: [OnboardingStep] = [.profile, .permissions, .model]
+        var steps: [OnboardingStep] = [.profile, .permissions, .sync, .model]
         if useCase.includesDictationTest {
             steps.append(.test)
         }
@@ -915,6 +1119,8 @@ private enum OnboardingStep: Int, CaseIterable {
             "profile"
         case .permissions:
             "permissions"
+        case .sync:
+            "sync"
         case .model:
             "model"
         case .test:
@@ -930,6 +1136,8 @@ private enum OnboardingStep: Int, CaseIterable {
             "Tell Muesli how you plan to use it."
         case .permissions:
             "Grant only what the selected workflow needs."
+        case .sync:
+            "Optional private iCloud sync."
         case .model:
             "Download and compile local transcription."
         case .test:

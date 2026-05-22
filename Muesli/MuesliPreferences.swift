@@ -12,6 +12,7 @@ enum MuesliPreferences {
     static let meetingSummaryBackendKey = "muesli.meetings.summary.backend"
     static let openRouterModelKey = "muesli.meetings.summary.openRouter.model"
     static let chatGPTModelKey = "muesli.meetings.summary.chatGPT.model"
+    static let iCloudSyncEnabledKey = "muesli.sync.icloud.enabled"
 
     static var liveActivitiesForDictationsEnabled: Bool {
         bool(for: liveActivitiesForDictationsKey, defaultValue: true)
@@ -44,6 +45,10 @@ enum MuesliPreferences {
 
     static var meetingSummariesEnabled: Bool {
         bool(for: meetingSummariesEnabledKey, defaultValue: false)
+    }
+
+    static var iCloudSyncEnabled: Bool {
+        bool(for: iCloudSyncEnabledKey, defaultValue: false)
     }
 
     static var meetingSummaryBackend: MeetingSummaryBackend {

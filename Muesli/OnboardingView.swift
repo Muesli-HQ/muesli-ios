@@ -1,9 +1,11 @@
 import AVFoundation
 import AuthenticationServices
+import Combine
 import SwiftUI
 import UIKit
 
 struct OnboardingView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable var coordinator: DictationCoordinator
     @State private var currentStep: OnboardingStep = OnboardingStep(
         rawValue: UserDefaults.standard.integer(forKey: OnboardingPreferenceKeys.currentStep)
@@ -25,9 +27,12 @@ struct OnboardingView: View {
     @State private var chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
     @State private var isSigningInChatGPT = false
     @State private var summaryStatusText: String?
+    @State private var keyboardExtensionLastSeenAt: Date?
+    @State private var permissionPollingError: String?
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
+    private let permissionPoller = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
     private var orderedSteps: [OnboardingStep] {
         OnboardingStep.orderedSteps(for: useCaseDraft)
@@ -66,7 +71,7 @@ struct OnboardingView: View {
         .onAppear {
             nameDraft = coordinator.userName
             useCaseDraft = coordinator.selectedUseCase
-            refreshMicrophoneStatus()
+            refreshPermissionStatus()
             refreshSummaryStatus()
             AppTelemetry.signal("onboarding_viewed")
             AppTelemetry.signal("onboarding_step_viewed", parameters: ["step": currentStep.telemetryName])
@@ -89,6 +94,9 @@ struct OnboardingView: View {
             if step == .summary {
                 refreshSummaryStatus()
             }
+            if step == .permissions {
+                refreshPermissionStatus()
+            }
         }
         .onChange(of: keyboardEnabledConfirmed) { _, confirmed in
             UserDefaults.standard.set(confirmed, forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed)
@@ -110,6 +118,14 @@ struct OnboardingView: View {
                 ? "Muesli will prepare private iCloud sync once your Apple account is connected."
                 : "iCloud sync is off. Dictations and meetings stay local on this iPhone."
             refreshAppleSyncStatus()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            refreshPermissionStatus()
+        }
+        .onReceive(permissionPoller) { _ in
+            guard currentStep == .permissions else { return }
+            refreshPermissionStatus()
         }
     }
 
@@ -262,7 +278,7 @@ struct OnboardingView: View {
                 permissionRow(
                     icon: "keyboard.fill",
                     title: "Keyboard",
-                    detail: "Return here after adding Muesli Keyboard",
+                    detail: keyboardPermissionDetail,
                     isComplete: keyboardEnabledConfirmed,
                     buttonTitle: keyboardEnabledConfirmed ? "Done" : "I Added It"
                 ) {
@@ -272,14 +288,46 @@ struct OnboardingView: View {
                 permissionRow(
                     icon: "network",
                     title: "Full Access",
-                    detail: "Return here after enabling Full Access for Muesli Keyboard",
+                    detail: fullAccessPermissionDetail,
                     isComplete: fullAccessConfirmed,
                     buttonTitle: fullAccessConfirmed ? "Done" : "I Enabled It"
                 ) {
                     fullAccessConfirmed = true
                 }
+
+                if let permissionPollingError {
+                    Text(permissionPollingError)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Muesli checks these permissions automatically while this screen is open. After enabling Full Access, open the Muesli Keyboard once so iOS lets it report back.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
+    }
+
+    private var keyboardPermissionDetail: String {
+        if fullAccessConfirmed {
+            return "Muesli Keyboard was detected."
+        }
+        if let keyboardExtensionLastSeenAt {
+            return "Detected \(keyboardExtensionLastSeenAt.formatted(date: .omitted, time: .shortened))."
+        }
+        return "Muesli checks automatically after you add and open the keyboard."
+    }
+
+    private var fullAccessPermissionDetail: String {
+        if fullAccessConfirmed {
+            return "Full Access verified from the keyboard extension."
+        }
+        if keyboardEnabledConfirmed {
+            return "Enable Full Access, then open Muesli Keyboard once."
+        }
+        return "Waiting for the keyboard extension to report Full Access."
     }
 
     private func permissionRow(
@@ -899,8 +947,29 @@ struct OnboardingView: View {
         currentStep = previous
     }
 
+    private func refreshPermissionStatus() {
+        refreshMicrophoneStatus()
+        refreshKeyboardPermissionStatus()
+    }
+
     private func refreshMicrophoneStatus() {
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    private func refreshKeyboardPermissionStatus() {
+        guard useCaseDraft.needsKeyboardSetup else { return }
+
+        do {
+            permissionPollingError = nil
+            guard let status = try SharedStore().keyboardExtensionStatus() else { return }
+            keyboardExtensionLastSeenAt = status.lastSeenAt
+            if status.hasOpenAccess {
+                keyboardEnabledConfirmed = true
+                fullAccessConfirmed = true
+            }
+        } catch {
+            permissionPollingError = "Keyboard status will update after the Muesli Keyboard is opened with Full Access."
+        }
     }
 
     private func requestMicrophonePermission() {

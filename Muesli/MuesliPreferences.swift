@@ -1,6 +1,8 @@
 import Foundation
 
 enum MuesliPreferences {
+    static let appearanceModeKey = "muesli.appearance.mode"
+    static let accentThemeKey = "muesli.appearance.accent"
     static let liveActivitiesForDictationsKey = "muesli.liveActivities.dictations"
     static let liveActivitiesForMeetingsKey = "muesli.liveActivities.meetings"
     static let keyboardSessionModeKey = "muesli.keyboardSession.enabled"
@@ -15,6 +17,18 @@ enum MuesliPreferences {
     static let meetingTemplateKey = "muesli.meetings.template"
     static let iCloudSyncEnabledKey = "muesli.sync.icloud.enabled"
     static let pinnedSectionsKey = "muesli.navigation.pinnedSections"
+
+    static var appearanceMode: MuesliAppearanceMode {
+        MuesliAppearanceMode(
+            rawValue: UserDefaults.standard.string(forKey: appearanceModeKey) ?? ""
+        ) ?? .system
+    }
+
+    static var accentTheme: MuesliAccentTheme {
+        MuesliAccentTheme(
+            rawValue: UserDefaults.standard.string(forKey: accentThemeKey) ?? ""
+        ) ?? .blue
+    }
 
     static var liveActivitiesForDictationsEnabled: Bool {
         bool(for: liveActivitiesForDictationsKey, defaultValue: true)

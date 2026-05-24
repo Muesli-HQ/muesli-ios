@@ -35,9 +35,9 @@ enum MuesliTheme {
         lightAlpha: 0.33
     )
 
-    static let defaultAccent = Color.adaptive(dark: 0x6BA3F7, light: 0x2563EB)
-    static let accent = defaultAccent
-    static let accentSubtle = defaultAccent.opacity(0.15)
+    static var defaultAccent: Color { color(for: .blue) }
+    static var accent: Color { color(for: selectedAccentTheme) }
+    static var accentSubtle: Color { accent.opacity(0.15) }
 
     static let recording = Color(hex: 0xEF4444)
     static let transcribing = Color(hex: 0xF59E0B)
@@ -64,6 +64,16 @@ enum MuesliTheme {
     static let cornerMedium: CGFloat = 10
     static let cornerLarge: CGFloat = 14
     static let cornerXL: CGFloat = 20
+
+    static func color(for accent: MuesliAccentTheme) -> Color {
+        Color.adaptive(dark: accent.darkHex, light: accent.lightHex)
+    }
+
+    private static var selectedAccentTheme: MuesliAccentTheme {
+        MuesliAccentTheme(
+            rawValue: UserDefaults.standard.string(forKey: "muesli.appearance.accent") ?? ""
+        ) ?? .blue
+    }
 }
 
 extension Color {
@@ -121,3 +131,76 @@ struct MuesliSurface<Content: View>: View {
     }
 }
 
+enum MuesliAppearanceMode: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system:
+            "System"
+        case .light:
+            "Light"
+        case .dark:
+            "Dark"
+        }
+    }
+}
+
+enum MuesliAccentTheme: String, CaseIterable, Identifiable {
+    case blue
+    case green
+    case purple
+    case orange
+    case pink
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .blue:
+            "Blue"
+        case .green:
+            "Green"
+        case .purple:
+            "Purple"
+        case .orange:
+            "Orange"
+        case .pink:
+            "Pink"
+        }
+    }
+
+    var lightHex: Int {
+        switch self {
+        case .blue:
+            0x2563EB
+        case .green:
+            0x059669
+        case .purple:
+            0x7C3AED
+        case .orange:
+            0xEA580C
+        case .pink:
+            0xDB2777
+        }
+    }
+
+    var darkHex: Int {
+        switch self {
+        case .blue:
+            0x6BA3F7
+        case .green:
+            0x34D399
+        case .purple:
+            0xA78BFA
+        case .orange:
+            0xFB923C
+        case .pink:
+            0xF472B6
+        }
+    }
+}

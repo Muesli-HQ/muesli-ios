@@ -6,6 +6,8 @@ struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
     var onSelectSection: ((AppSection) -> Void)?
 
+    @AppStorage(MuesliPreferences.appearanceModeKey) private var appearanceMode = MuesliAppearanceMode.system.rawValue
+    @AppStorage(MuesliPreferences.accentThemeKey) private var accentTheme = MuesliAccentTheme.blue.rawValue
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
@@ -141,8 +143,12 @@ struct SettingsView: View {
         switch section {
         case .general:
             generalSettings
+        case .appearance:
+            appearanceSettings
         case .input:
             inputSettings
+        case .dictionary:
+            DictionarySettingsContent()
         case .meetings:
             meetingSettings
         case .models:
@@ -157,13 +163,54 @@ struct SettingsView: View {
     private var generalSettings: some View {
         MuesliSurface {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                SettingsRow(icon: "moon.circle", title: "Appearance", value: "System")
-                Divider().overlay(MuesliTheme.surfaceBorder)
                 SettingsRow(icon: "lock.shield", title: "Processing", value: "On device")
                 Divider().overlay(MuesliTheme.surfaceBorder)
                 SettingsRow(icon: "iphone", title: "App Data", value: "Local SQLite")
             }
             .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    private var appearanceSettings: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+            MuesliSurface {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    SettingsAppearanceModePicker(selection: $appearanceMode)
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsAccentThemePicker(selection: $accentTheme)
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+
+            MuesliSurface {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    Text("Preview")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+
+                    HStack(spacing: MuesliTheme.spacing12) {
+                        MuesliTheme.accent
+                            .frame(width: 44, height: 44)
+                            .clipShape(Circle())
+                            .overlay(Circle().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
+
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                            Text(selectedAccentTheme.label)
+                                .font(MuesliTheme.headline())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                            Text("\(selectedAppearanceMode.label) appearance")
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                        }
+
+                        Spacer()
+                    }
+                    .padding(MuesliTheme.spacing12)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+                .padding(MuesliTheme.spacing16)
+            }
         }
     }
 
@@ -181,14 +228,6 @@ struct SettingsView: View {
                         .font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.accent)
                         .padding(.top, MuesliTheme.spacing4)
-                    }
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsNavigationRow(
-                        icon: "character.book.closed",
-                        title: "Dictionary",
-                        detail: "Manage filler words, custom phrases, names, and acronyms."
-                    ) {
-                        onSelectSection?(.dictionary)
                     }
                 }
                 .padding(MuesliTheme.spacing16)
@@ -463,6 +502,14 @@ struct SettingsView: View {
         MeetingSummaryBackend(rawValue: meetingSummaryBackend) ?? .openRouter
     }
 
+    private var selectedAppearanceMode: MuesliAppearanceMode {
+        MuesliAppearanceMode(rawValue: appearanceMode) ?? .system
+    }
+
+    private var selectedAccentTheme: MuesliAccentTheme {
+        MuesliAccentTheme(rawValue: accentTheme) ?? .blue
+    }
+
     private var modelButtonTitle: String {
         switch coordinator.modelPreparation.phase {
         case .ready:
@@ -592,7 +639,9 @@ struct SettingsView: View {
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case general
+    case appearance
     case input
+    case dictionary
     case meetings
     case models
     case syncPrivacy
@@ -604,8 +653,12 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             "General"
+        case .appearance:
+            "Appearance"
         case .input:
-            "Input"
+            "Keyboard"
+        case .dictionary:
+            "Dictionary"
         case .meetings:
             "Meetings"
         case .models:
@@ -620,9 +673,13 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .general:
-            "App-wide behavior, appearance, and local data defaults."
+            "App-wide behavior and local data defaults."
+        case .appearance:
+            "Color theme, light and dark mode, and app accent."
         case .input:
-            "Keyboard setup, dictation sessions, and dictionary shortcuts."
+            "Keyboard setup, dictation sessions, and text-field input."
+        case .dictionary:
+            "Filler word removal, custom phrases, names, and acronyms."
         case .meetings:
             "Recording, audio retention, live activities, and note templates."
         case .models:
@@ -638,8 +695,12 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             "switch.2"
+        case .appearance:
+            "paintpalette"
         case .input:
             "keyboard"
+        case .dictionary:
+            "character.book.closed"
         case .meetings:
             "person.2.wave.2"
         case .models:
@@ -883,6 +944,113 @@ struct SettingsModelPickerRow: View {
         let validSelection = normalizedSelection
         guard selection != validSelection else { return }
         selection = validSelection
+    }
+}
+
+private struct SettingsAppearanceModePicker: View {
+    @Binding var selection: String
+
+    private var selectedMode: MuesliAppearanceMode {
+        MuesliAppearanceMode(rawValue: selection) ?? .system
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: "circle.lefthalf.filled")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text("Color Scheme")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text("Currently \(selectedMode.label.lowercased()).")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+            }
+
+            Picker("Color Scheme", selection: $selection) {
+                ForEach(MuesliAppearanceMode.allCases) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+        .onAppear(perform: normalizeSelectionIfNeeded)
+        .onChange(of: selection) { _, _ in
+            normalizeSelectionIfNeeded()
+        }
+    }
+
+    private func normalizeSelectionIfNeeded() {
+        guard MuesliAppearanceMode(rawValue: selection) == nil else { return }
+        selection = MuesliAppearanceMode.system.rawValue
+    }
+}
+
+private struct SettingsAccentThemePicker: View {
+    @Binding var selection: String
+
+    private var selectedTheme: MuesliAccentTheme {
+        MuesliAccentTheme(rawValue: selection) ?? .blue
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: "paintpalette")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text("Accent")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(selectedTheme.label)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+            }
+
+            HStack(spacing: MuesliTheme.spacing8) {
+                ForEach(MuesliAccentTheme.allCases) { theme in
+                    Button {
+                        selection = theme.rawValue
+                    } label: {
+                        MuesliTheme.color(for: theme)
+                            .frame(width: 42, height: 42)
+                            .clipShape(Circle())
+                            .overlay {
+                                Circle()
+                                    .strokeBorder(
+                                        selectedTheme == theme ? MuesliTheme.textPrimary : MuesliTheme.surfaceBorder,
+                                        lineWidth: selectedTheme == theme ? 2 : 1
+                                    )
+                            }
+                            .overlay {
+                                if selectedTheme == theme {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 14, weight: .bold))
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(theme.label) accent")
+                }
+            }
+        }
+        .onAppear(perform: normalizeSelectionIfNeeded)
+        .onChange(of: selection) { _, _ in
+            normalizeSelectionIfNeeded()
+        }
+    }
+
+    private func normalizeSelectionIfNeeded() {
+        guard MuesliAccentTheme(rawValue: selection) == nil else { return }
+        selection = MuesliAccentTheme.blue.rawValue
     }
 }
 

@@ -4,6 +4,8 @@ struct RootView: View {
     @Bindable var coordinator: DictationCoordinator
     @State private var selectedSection: AppSection = .dictations
     @State private var isDrawerOpen = false
+    @AppStorage(MuesliPreferences.appearanceModeKey) private var appearanceMode = MuesliAppearanceMode.system.rawValue
+    @AppStorage(MuesliPreferences.accentThemeKey) private var accentTheme = MuesliAccentTheme.blue.rawValue
     @AppStorage(MuesliPreferences.pinnedSectionsKey) private var pinnedSectionsStorage = AppSection.defaultPinnedStorage
 
     var body: some View {
@@ -21,6 +23,19 @@ struct RootView: View {
         }
         .background(MuesliTheme.backgroundBase)
         .tint(MuesliTheme.accent)
+        .preferredColorScheme(preferredColorScheme)
+        .id("theme-\(appearanceMode)-\(accentTheme)")
+    }
+
+    private var preferredColorScheme: ColorScheme? {
+        switch MuesliAppearanceMode(rawValue: appearanceMode) ?? .system {
+        case .system:
+            nil
+        case .light:
+            .light
+        case .dark:
+            .dark
+        }
     }
 
     @ViewBuilder
@@ -97,8 +112,6 @@ struct RootView: View {
             DictationView(coordinator: coordinator)
         case .meetings:
             MeetingsView(coordinator: coordinator)
-        case .dictionary:
-            DictionaryView()
         case .settings:
             SettingsView(coordinator: coordinator) { section in
                 selectedSection = section
@@ -209,7 +222,6 @@ private struct KeyboardHandoffOverlay: View {
 enum AppSection: String, CaseIterable {
     case dictations
     case meetings
-    case dictionary
     case settings
 
     static let maxPinnedSections = 3
@@ -222,8 +234,6 @@ enum AppSection: String, CaseIterable {
             "Dictations"
         case .meetings:
             "Meetings"
-        case .dictionary:
-            "Dictionary"
         case .settings:
             "Settings"
         }
@@ -235,8 +245,6 @@ enum AppSection: String, CaseIterable {
             "waveform"
         case .meetings:
             "person.2.wave.2"
-        case .dictionary:
-            "character.book.closed"
         case .settings:
             "gearshape.fill"
         }
@@ -248,8 +256,6 @@ enum AppSection: String, CaseIterable {
             "Quick voice notes"
         case .meetings:
             "Record and summarize"
-        case .dictionary:
-            "Words and cleanup"
         case .settings:
             "Preferences"
         }

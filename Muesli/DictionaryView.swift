@@ -1,6 +1,21 @@
 import SwiftUI
 
 struct DictionaryView: View {
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                DictionarySettingsContent()
+                    .padding(.horizontal, MuesliTheme.spacing20)
+                    .padding(.top, MuesliTheme.spacing24)
+                    .padding(.bottom, MuesliTheme.spacing24)
+            }
+            .background(MuesliTheme.backgroundBase)
+            .toolbar(.hidden, for: .navigationBar)
+        }
+    }
+}
+
+struct DictionarySettingsContent: View {
     @AppStorage(MuesliPreferences.fillerWordRemovalKey) private var fillerWordRemoval = true
     @AppStorage(MuesliPreferences.customDictionaryKey) private var customDictionary = true
     @State private var customWords: [CustomWord] = []
@@ -9,21 +24,12 @@ struct DictionaryView: View {
     @State private var dictionaryError: String?
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
-                    header
-                    cleanupPanel
-                    dictionaryPanel
-                }
-                .padding(.horizontal, MuesliTheme.spacing20)
-                .padding(.top, MuesliTheme.spacing24)
-                .padding(.bottom, MuesliTheme.spacing24)
-            }
-            .background(MuesliTheme.backgroundBase)
-            .toolbar(.hidden, for: .navigationBar)
-            .onAppear(perform: loadCustomWords)
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
+            header
+            cleanupPanel
+            dictionaryPanel
         }
+        .onAppear(perform: loadCustomWords)
     }
 
     private var header: some View {

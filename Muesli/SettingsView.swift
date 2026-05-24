@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(MuesliPreferences.meetingSummaryBackendKey) private var meetingSummaryBackend = MeetingSummaryBackend.openRouter.rawValue
     @AppStorage(MuesliPreferences.openRouterModelKey) private var openRouterModel = MeetingSummaryBackend.defaultOpenRouterModel
     @AppStorage(MuesliPreferences.chatGPTModelKey) private var chatGPTModel = MeetingSummaryBackend.defaultChatGPTModel
+    @AppStorage(MuesliPreferences.meetingTemplateKey) private var meetingTemplate = MeetingTemplatePreset.general.rawValue
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var keyboardStatusText = "Unknown"
     @State private var openRouterAPIKey = ""
@@ -22,243 +23,11 @@ struct SettingsView: View {
     @State private var chatGPTSignedIn = false
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
+    @State private var selectedSettingsSection: SettingsSection?
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                    settingsHeader
-
-                    MuesliSurface {
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                            SettingsRow(icon: "keyboard", title: "Keyboard", value: keyboardStatusText)
-                            Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
-                                HStack {
-                                    Text("Open Keyboard Settings")
-                                    Spacer()
-                                    Image(systemName: "arrow.up.right")
-                                }
-                                .font(MuesliTheme.headline())
-                                .foregroundStyle(MuesliTheme.accent)
-                                .padding(.top, MuesliTheme.spacing4)
-                            }
-                        }
-                        .padding(MuesliTheme.spacing16)
-                    }
-
-                    MuesliSurface {
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                            SettingsNavigationRow(
-                                icon: "character.book.closed",
-                                title: "Dictionary",
-                                detail: "Manage filler words, custom phrases, names, and acronyms."
-                            ) {
-                                onSelectSection?(.dictionary)
-                            }
-                            Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsNavigationRow(
-                                icon: "square.and.arrow.down",
-                                title: "Models",
-                                detail: "Prepare and inspect the local Parakeet v3 runtime."
-                            ) {
-                                onSelectSection?(.models)
-                            }
-                        }
-                        .padding(MuesliTheme.spacing16)
-                    }
-
-                    MuesliSurface {
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                            SettingsToggleRow(
-                                icon: "icloud",
-                                title: "iCloud Sync",
-                                detail: "Sync dictations, meetings, summaries, dictionary terms, and settings through your private iCloud account.",
-                                isOn: $iCloudSyncEnabled
-                            )
-                            Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsRow(
-                                icon: "icloud",
-                                title: "iCloud",
-                                value: appleSyncSnapshot.iCloudStatusLabel,
-                                iconColor: appleSyncSnapshot.isICloudAvailable ? MuesliTheme.success : MuesliTheme.accent,
-                                valueColor: appleSyncSnapshot.isICloudAvailable ? MuesliTheme.success : MuesliTheme.textTertiary
-                            )
-                            Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsRow(
-                                icon: "person.crop.circle.badge.checkmark",
-                                title: "Apple Account",
-                                value: appleSyncSnapshot.appleAccountLabel,
-                                iconColor: appleSyncSnapshot.isSignedInWithApple ? MuesliTheme.success : MuesliTheme.accent,
-                                valueColor: appleSyncSnapshot.isSignedInWithApple ? MuesliTheme.success : MuesliTheme.textTertiary
-                            )
-
-                            if appleSyncSnapshot.isSignedInWithApple {
-                                Button(action: signOutOfAppleSync) {
-                                    Label("Signed in · Sign Out", systemImage: "checkmark.circle.fill")
-                                        .font(MuesliTheme.headline())
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 44)
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(.white)
-                                .background(MuesliTheme.success)
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                            } else {
-                                SignInWithAppleButton(.signIn) { request in
-                                    AppTelemetry.signal("apple_sync_sign_in_started")
-                                    request.requestedScopes = [.fullName, .email]
-                                } onCompletion: { result in
-                                    handleAppleSyncSignIn(result)
-                                }
-                                .signInWithAppleButtonStyle(.white)
-                                .frame(height: 44)
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                            }
-
-                            Text(appleSyncStatusText ?? appleSyncSnapshot.detail)
-                                .font(MuesliTheme.caption())
-                                .foregroundStyle(MuesliTheme.textTertiary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(MuesliTheme.spacing16)
-                    }
-
-                    MuesliSurface {
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                            SettingsToggleRow(
-                                icon: "keyboard.badge.ellipsis",
-                                title: "Keyboard Session Mode",
-                                detail: "Keep Muesli ready for keyboard dictation with a visible microphone session.",
-                                isOn: $keyboardSessionMode
-                            )
-                            Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsRow(
-                                icon: "waveform.badge.mic",
-                                title: "Session",
-                                value: coordinator.keyboardSessionStatusText
-                            )
-                            Divider().overlay(MuesliTheme.surfaceBorder)
-                            Stepper(value: $keyboardSessionTimeoutMinutes, in: 1...30, step: 1) {
-                                SettingsRow(
-                                    icon: "timer",
-                                    title: "Timeout",
-                                    value: "\(keyboardSessionTimeoutMinutes) min"
-                                )
-                            }
-                            .disabled(!keyboardSessionMode)
-                        }
-                        .padding(MuesliTheme.spacing16)
-                    }
-
-                    MuesliSurface {
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                            SettingsToggleRow(
-                                icon: "waveform.path.ecg.rectangle",
-                                title: "Save Meeting Audio",
-                                detail: "Keep the original meeting recording after delayed transcription finishes. Queued recordings are always kept until transcription completes.",
-                                isOn: $keepMeetingAudioRecordings
-                            )
-                            Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsToggleRow(
-                                icon: "waveform.badge.mic",
-                                title: "Dictation Live Activities",
-                                detail: "Show keyboard and in-app dictation progress on the Dynamic Island and Lock Screen.",
-                                isOn: $liveActivitiesForDictations
-                            )
-                            Divider().overlay(MuesliTheme.surfaceBorder)
-                            SettingsToggleRow(
-                                icon: "person.2.wave.2",
-                                title: "Meeting Live Activities",
-                                detail: "Show active meeting recordings while Muesli is recording in the background.",
-                                isOn: $liveActivitiesForMeetings
-                            )
-                        }
-                        .padding(MuesliTheme.spacing16)
-                    }
-
-                    MuesliSurface {
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                            SettingsToggleRow(
-                                icon: "sparkles",
-                                title: "Meeting Summaries",
-                                detail: "Generate structured notes after local transcription and speaker diarization.",
-                                isOn: $meetingSummariesEnabled
-                            )
-
-                            Divider().overlay(MuesliTheme.surfaceBorder)
-
-                            Picker("Summary Backend", selection: $meetingSummaryBackend) {
-                                ForEach(MeetingSummaryBackend.allCases) { backend in
-                                    Text(backend.label).tag(backend.rawValue)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .disabled(!meetingSummariesEnabled)
-
-                            if selectedSummaryBackend == .openRouter {
-                                SettingsTextFieldRow(
-                                    icon: "key",
-                                    title: "OpenRouter API Key",
-                                    placeholder: "sk-or-...",
-                                    text: $openRouterAPIKey,
-                                    isSecure: true
-                                )
-                                .disabled(!meetingSummariesEnabled)
-
-                                SettingsModelPickerRow(
-                                    icon: "cpu",
-                                    title: "OpenRouter Model",
-                                    selection: $openRouterModel,
-                                    presets: SummaryModelPreset.openRouterModels
-                                )
-                                .disabled(!meetingSummariesEnabled)
-                            } else {
-                                SettingsRow(
-                                    icon: "person.crop.circle.badge.checkmark",
-                                    title: "ChatGPT",
-                                    value: chatGPTSignedIn ? "Signed in" : "Not signed in",
-                                    iconColor: chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent,
-                                    valueColor: chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.textTertiary
-                                )
-
-                                Button(action: toggleChatGPTSignIn) {
-                                    Label(
-                                        chatGPTSignedIn ? "Signed in · Sign Out" : "Sign In with ChatGPT",
-                                        systemImage: chatGPTSignedIn ? "checkmark.circle.fill" : "person.crop.circle"
-                                    )
-                                        .font(MuesliTheme.headline())
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 44)
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(.white)
-                                .background(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                                .disabled(!meetingSummariesEnabled)
-
-                                SettingsModelPickerRow(
-                                    icon: "cpu",
-                                    title: "ChatGPT Model",
-                                    selection: $chatGPTModel,
-                                    presets: SummaryModelPreset.chatGPTModels,
-                                    preserveCustomValue: false,
-                                    fallbackSelection: MeetingSummaryBackend.defaultChatGPTModel
-                                )
-                                .disabled(!meetingSummariesEnabled)
-                            }
-
-                            if let summaryStatusText {
-                                Text(summaryStatusText)
-                                    .font(MuesliTheme.caption())
-                                    .foregroundStyle(MuesliTheme.textTertiary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .padding(MuesliTheme.spacing16)
-                    }
-                }
-                .padding(MuesliTheme.spacing20)
-            }
+            settingsContent
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
@@ -295,14 +64,381 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var settingsContent: some View {
+        if let selectedSettingsSection {
+            ScrollView {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                    detailHeader(for: selectedSettingsSection)
+                    settingsSectionContent(selectedSettingsSection)
+                }
+                .padding(MuesliTheme.spacing20)
+            }
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                    settingsHeader
+
+                    MuesliSurface {
+                        VStack(spacing: MuesliTheme.spacing4) {
+                            ForEach(SettingsSection.allCases) { section in
+                                SettingsSectionRow(section: section) {
+                                    withAnimation(.snappy(duration: 0.22)) {
+                                        selectedSettingsSection = section
+                                    }
+                                }
+                                if section != SettingsSection.allCases.last {
+                                    Divider().overlay(MuesliTheme.surfaceBorder)
+                                }
+                            }
+                        }
+                        .padding(MuesliTheme.spacing12)
+                    }
+                }
+                .padding(MuesliTheme.spacing20)
+            }
+        }
+    }
+
     private var settingsHeader: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
             Text("Settings")
                 .font(MuesliTheme.title1())
                 .foregroundStyle(MuesliTheme.textPrimary)
-            Text("Configure the keyboard shell and local model runtime.")
+            Text("Configure Muesli without mixing setup into the main workspace.")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
+        }
+    }
+
+    private func detailHeader(for section: SettingsSection) -> some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+            Button {
+                withAnimation(.snappy(duration: 0.22)) {
+                    selectedSettingsSection = nil
+                }
+            } label: {
+                Label("Settings", systemImage: "chevron.left")
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.accent)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                Text(section.title)
+                    .font(MuesliTheme.title1())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(section.detail)
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsSectionContent(_ section: SettingsSection) -> some View {
+        switch section {
+        case .general:
+            generalSettings
+        case .input:
+            inputSettings
+        case .meetings:
+            meetingSettings
+        case .models:
+            modelSettings
+        case .syncPrivacy:
+            syncPrivacySettings
+        case .aiSummaries:
+            aiSummarySettings
+        }
+    }
+
+    private var generalSettings: some View {
+        MuesliSurface {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                SettingsRow(icon: "moon.circle", title: "Appearance", value: "System")
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                SettingsRow(icon: "lock.shield", title: "Processing", value: "On device")
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                SettingsRow(icon: "iphone", title: "App Data", value: "Local SQLite")
+            }
+            .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    private var inputSettings: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+            MuesliSurface {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    SettingsRow(icon: "keyboard", title: "Keyboard", value: keyboardStatusText)
+                    Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
+                        HStack {
+                            Text("Open Keyboard Settings")
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                        }
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.accent)
+                        .padding(.top, MuesliTheme.spacing4)
+                    }
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsNavigationRow(
+                        icon: "character.book.closed",
+                        title: "Dictionary",
+                        detail: "Manage filler words, custom phrases, names, and acronyms."
+                    ) {
+                        onSelectSection?(.dictionary)
+                    }
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+
+            MuesliSurface {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    SettingsToggleRow(
+                        icon: "keyboard.badge.ellipsis",
+                        title: "Keyboard Session Mode",
+                        detail: "Keep Muesli ready for keyboard dictation with a visible microphone session.",
+                        isOn: $keyboardSessionMode
+                    )
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsRow(
+                        icon: "waveform.badge.mic",
+                        title: "Session",
+                        value: coordinator.keyboardSessionStatusText
+                    )
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    Stepper(value: $keyboardSessionTimeoutMinutes, in: 1...30, step: 1) {
+                        SettingsRow(
+                            icon: "timer",
+                            title: "Timeout",
+                            value: "\(keyboardSessionTimeoutMinutes) min"
+                        )
+                    }
+                    .disabled(!keyboardSessionMode)
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsToggleRow(
+                        icon: "waveform.badge.mic",
+                        title: "Dictation Live Activities",
+                        detail: "Show keyboard and in-app dictation progress on the Dynamic Island and Lock Screen.",
+                        isOn: $liveActivitiesForDictations
+                    )
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+        }
+    }
+
+    private var meetingSettings: some View {
+        MuesliSurface {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                SettingsToggleRow(
+                    icon: "waveform.path.ecg.rectangle",
+                    title: "Save Meeting Audio",
+                    detail: "Keep the original meeting recording after delayed transcription finishes. Queued recordings are always kept until transcription completes.",
+                    isOn: $keepMeetingAudioRecordings
+                )
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                SettingsToggleRow(
+                    icon: "person.2.wave.2",
+                    title: "Meeting Live Activities",
+                    detail: "Show active meeting recordings while Muesli is recording in the background.",
+                    isOn: $liveActivitiesForMeetings
+                )
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                SettingsMeetingTemplatePicker(selection: $meetingTemplate)
+            }
+            .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    private var modelSettings: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+            MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                    SettingsRow(
+                        icon: "checkmark.seal",
+                        title: "Active Model",
+                        value: "Parakeet v3",
+                        valueColor: MuesliTheme.textSecondary
+                    )
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsRow(icon: "cpu", title: "Runtime", value: "CoreML / ANE")
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsRow(icon: "iphone", title: "Execution", value: "On device")
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                        Text(coordinator.modelPreparation.status)
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                        Text(coordinator.modelPreparation.detail)
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let progress = coordinator.modelPreparation.progress,
+                       coordinator.modelPreparation.isPreparing {
+                        ProgressView(value: progress)
+                            .tint(MuesliTheme.accent)
+                    }
+                    Button {
+                        coordinator.prepareModel()
+                    } label: {
+                        Label(modelButtonTitle, systemImage: modelButtonIcon)
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(modelButtonDisabled ? MuesliTheme.textTertiary : .white)
+                    .background(modelButtonDisabled ? MuesliTheme.surfacePrimary : MuesliTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .disabled(modelButtonDisabled)
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+        }
+    }
+
+    private var syncPrivacySettings: some View {
+        MuesliSurface {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                SettingsToggleRow(
+                    icon: "icloud",
+                    title: "iCloud Sync",
+                    detail: "Sync dictations, meetings, summaries, dictionary terms, and settings through your private iCloud account.",
+                    isOn: $iCloudSyncEnabled
+                )
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                SettingsRow(
+                    icon: "icloud",
+                    title: "iCloud",
+                    value: appleSyncSnapshot.iCloudStatusLabel,
+                    iconColor: appleSyncSnapshot.isICloudAvailable ? MuesliTheme.success : MuesliTheme.accent,
+                    valueColor: appleSyncSnapshot.isICloudAvailable ? MuesliTheme.success : MuesliTheme.textTertiary
+                )
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                SettingsRow(
+                    icon: "person.crop.circle.badge.checkmark",
+                    title: "Apple Account",
+                    value: appleSyncSnapshot.appleAccountLabel,
+                    iconColor: appleSyncSnapshot.isSignedInWithApple ? MuesliTheme.success : MuesliTheme.accent,
+                    valueColor: appleSyncSnapshot.isSignedInWithApple ? MuesliTheme.success : MuesliTheme.textTertiary
+                )
+
+                if appleSyncSnapshot.isSignedInWithApple {
+                    Button(action: signOutOfAppleSync) {
+                        Label("Signed in · Sign Out", systemImage: "checkmark.circle.fill")
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .background(MuesliTheme.success)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                } else {
+                    SignInWithAppleButton(.signIn) { request in
+                        AppTelemetry.signal("apple_sync_sign_in_started")
+                        request.requestedScopes = [.fullName, .email]
+                    } onCompletion: { result in
+                        handleAppleSyncSignIn(result)
+                    }
+                    .signInWithAppleButtonStyle(.white)
+                    .frame(height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+
+                Text(appleSyncStatusText ?? appleSyncSnapshot.detail)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    private var aiSummarySettings: some View {
+        MuesliSurface {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                SettingsToggleRow(
+                    icon: "sparkles",
+                    title: "Meeting Summaries",
+                    detail: "Generate structured notes after local transcription and speaker diarization.",
+                    isOn: $meetingSummariesEnabled
+                )
+
+                Divider().overlay(MuesliTheme.surfaceBorder)
+
+                Picker("Summary Backend", selection: $meetingSummaryBackend) {
+                    ForEach(MeetingSummaryBackend.allCases) { backend in
+                        Text(backend.label).tag(backend.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(!meetingSummariesEnabled)
+
+                if selectedSummaryBackend == .openRouter {
+                    SettingsTextFieldRow(
+                        icon: "key",
+                        title: "OpenRouter API Key",
+                        placeholder: "sk-or-...",
+                        text: $openRouterAPIKey,
+                        isSecure: true
+                    )
+                    .disabled(!meetingSummariesEnabled)
+
+                    SettingsModelPickerRow(
+                        icon: "cpu",
+                        title: "OpenRouter Model",
+                        selection: $openRouterModel,
+                        presets: SummaryModelPreset.openRouterModels
+                    )
+                    .disabled(!meetingSummariesEnabled)
+                } else {
+                    SettingsRow(
+                        icon: "person.crop.circle.badge.checkmark",
+                        title: "ChatGPT",
+                        value: chatGPTSignedIn ? "Signed in" : "Not signed in",
+                        iconColor: chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent,
+                        valueColor: chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.textTertiary
+                    )
+
+                    Button(action: toggleChatGPTSignIn) {
+                        Label(
+                            chatGPTSignedIn ? "Signed in · Sign Out" : "Sign In with ChatGPT",
+                            systemImage: chatGPTSignedIn ? "checkmark.circle.fill" : "person.crop.circle"
+                        )
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .background(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .disabled(!meetingSummariesEnabled)
+
+                    SettingsModelPickerRow(
+                        icon: "cpu",
+                        title: "ChatGPT Model",
+                        selection: $chatGPTModel,
+                        presets: SummaryModelPreset.chatGPTModels,
+                        preserveCustomValue: false,
+                        fallbackSelection: MeetingSummaryBackend.defaultChatGPTModel
+                    )
+                    .disabled(!meetingSummariesEnabled)
+                }
+
+                if let summaryStatusText {
+                    Text(summaryStatusText)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(MuesliTheme.spacing16)
         }
     }
 
@@ -325,6 +461,36 @@ struct SettingsView: View {
 
     private var selectedSummaryBackend: MeetingSummaryBackend {
         MeetingSummaryBackend(rawValue: meetingSummaryBackend) ?? .openRouter
+    }
+
+    private var modelButtonTitle: String {
+        switch coordinator.modelPreparation.phase {
+        case .ready:
+            "Model Ready"
+        case .downloading, .preparing:
+            "Preparing"
+        case .failed:
+            "Try Again"
+        case .idle:
+            "Prepare Model"
+        }
+    }
+
+    private var modelButtonIcon: String {
+        switch coordinator.modelPreparation.phase {
+        case .ready:
+            "checkmark"
+        case .downloading, .preparing:
+            "arrow.down"
+        case .failed:
+            "arrow.clockwise"
+        case .idle:
+            "square.and.arrow.down"
+        }
+    }
+
+    private var modelButtonDisabled: Bool {
+        coordinator.modelPreparation.isReady || coordinator.modelPreparation.isPreparing
     }
 
     private func refreshSummarySettings() {
@@ -422,6 +588,106 @@ struct SettingsView: View {
         refreshAppleSyncSettings()
     }
 
+}
+
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case general
+    case input
+    case meetings
+    case models
+    case syncPrivacy
+    case aiSummaries
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general:
+            "General"
+        case .input:
+            "Input"
+        case .meetings:
+            "Meetings"
+        case .models:
+            "Models"
+        case .syncPrivacy:
+            "Sync & Privacy"
+        case .aiSummaries:
+            "AI Summaries"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .general:
+            "App-wide behavior, appearance, and local data defaults."
+        case .input:
+            "Keyboard setup, dictation sessions, and dictionary shortcuts."
+        case .meetings:
+            "Recording, audio retention, live activities, and note templates."
+        case .models:
+            "Local transcription runtime and model preparation."
+        case .syncPrivacy:
+            "Private iCloud sync and Apple account setup."
+        case .aiSummaries:
+            "Meeting summary providers, auth, and model selection."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .general:
+            "switch.2"
+        case .input:
+            "keyboard"
+        case .meetings:
+            "person.2.wave.2"
+        case .models:
+            "cpu"
+        case .syncPrivacy:
+            "icloud"
+        case .aiSummaries:
+            "sparkles"
+        }
+    }
+}
+
+private struct SettingsSectionRow: View {
+    let section: SettingsSection
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 28, height: 28)
+                    .background(MuesliTheme.accentSubtle)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text(section.title)
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(section.detail)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: MuesliTheme.spacing12)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .padding(.top, MuesliTheme.spacing4)
+            }
+            .padding(.horizontal, MuesliTheme.spacing4)
+            .padding(.vertical, MuesliTheme.spacing8)
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 private struct SettingsNavigationRow: View {
@@ -617,6 +883,57 @@ struct SettingsModelPickerRow: View {
         let validSelection = normalizedSelection
         guard selection != validSelection else { return }
         selection = validSelection
+    }
+}
+
+private struct SettingsMeetingTemplatePicker: View {
+    @Binding var selection: String
+
+    private var selectedTemplate: MeetingTemplatePreset {
+        MeetingTemplatePreset(rawValue: selection) ?? .general
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text("Meeting Template")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(selectedTemplate.detail)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Picker("Meeting Template", selection: $selection) {
+                ForEach(MeetingTemplatePreset.allCases) { template in
+                    Text(template.label).tag(template.rawValue)
+                }
+            }
+            .pickerStyle(.menu)
+            .font(MuesliTheme.body())
+            .tint(MuesliTheme.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, MuesliTheme.spacing12)
+            .frame(height: 42)
+            .background(MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .onAppear(perform: normalizeSelectionIfNeeded)
+        .onChange(of: selection) { _, _ in
+            normalizeSelectionIfNeeded()
+        }
+    }
+
+    private func normalizeSelectionIfNeeded() {
+        guard MeetingTemplatePreset(rawValue: selection) == nil else { return }
+        selection = MeetingTemplatePreset.general.rawValue
     }
 }
 

@@ -32,23 +32,6 @@ enum MeetingSummaryClient {
     You are a meeting notes assistant. Given a raw meeting transcript, produce concise, professional markdown notes.
     Do not invent facts. Prefer concrete takeaways over filler. Capture owners only when they are actually mentioned.
     If a requested section has no content, write "None noted."
-
-    Follow this note template exactly:
-
-    ## Meeting Summary
-    A 2-3 sentence overview of what was discussed.
-
-    ## Key Discussion Points
-    - Bullet points of the main topics discussed
-
-    ## Decisions Made
-    - Bullet points of any decisions reached
-
-    ## Action Items
-    - [ ] Bullet points of tasks assigned or agreed upon, with owners if mentioned
-
-    ## Notable Quotes
-    - Any important or notable statements, if applicable
     """
 
     private static let titleInstructions = """
@@ -154,8 +137,14 @@ enum MeetingSummaryClient {
     }
 
     private static func summaryPrompt(transcript: String, meetingTitle: String) -> String {
-        """
+        let template = MuesliPreferences.meetingTemplate
+        return """
         Meeting title: \(meetingTitle)
+
+        Meeting note template: \(template.label)
+
+        Template guidance:
+        \(template.instructions)
 
         Raw transcript:
         \(transcript)

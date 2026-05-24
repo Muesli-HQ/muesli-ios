@@ -1,11 +1,17 @@
 import SwiftUI
+import UIKit
 
 struct MeetingsView: View {
     @Bindable var coordinator: DictationCoordinator
     @State private var meetingTitle = ""
+    @AppStorage(MuesliPreferences.meetingTemplateKey) private var selectedMeetingTemplate = MeetingTemplatePreset.general.rawValue
 
     private var meetingSessions: [RecordingSession] {
         coordinator.recordingSessions.filter { $0.kind == .meeting }
+    }
+
+    private var meetingTemplate: MeetingTemplatePreset {
+        MeetingTemplatePreset(rawValue: selectedMeetingTemplate) ?? .general
     }
 
     var body: some View {
@@ -86,6 +92,8 @@ struct MeetingsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     .disabled(coordinator.isMeetingRecording || coordinator.isMeetingTranscribing)
 
+                meetingTemplatePicker
+
                 if coordinator.isMeetingRecording || coordinator.isMeetingTranscribing {
                     VStack(spacing: MuesliTheme.spacing8) {
                         MuesliWaveformView(
@@ -130,6 +138,50 @@ struct MeetingsView: View {
             }
             .padding(MuesliTheme.spacing16)
         }
+    }
+
+    private var meetingTemplatePicker: some View {
+        Menu {
+            ForEach(MeetingTemplatePreset.allCases) { template in
+                Button {
+                    selectedMeetingTemplate = template.rawValue
+                    AppTelemetry.signal("meeting_template_selected", parameters: [
+                        "template": template.rawValue
+                    ])
+                } label: {
+                    Label(template.label, systemImage: selectedMeetingTemplate == template.rawValue ? "checkmark" : "doc.text")
+                }
+            }
+        } label: {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text(meetingTemplate.label)
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(meetingTemplate.detail)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+            .padding(MuesliTheme.spacing12)
+            .background(MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
+        .disabled(coordinator.isMeetingRecording || coordinator.isMeetingTranscribing)
     }
 
     @ViewBuilder
@@ -286,6 +338,7 @@ private struct MeetingSessionDetailView: View {
     let onTranscribe: () -> Void
     let onCopy: (String, MeetingContentTab) -> Void
     @State private var selectedContent: MeetingContentTab = .notes
+    @State private var sharePayload: MeetingSharePayload?
 
     var body: some View {
         ScrollView {
@@ -301,6 +354,9 @@ private struct MeetingSessionDetailView: View {
         .background(MuesliTheme.backgroundBase)
         .navigationTitle("Meeting")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $sharePayload) { payload in
+            MeetingShareSheet(items: [payload.text])
+        }
     }
 
     private var detailHeader: some View {
@@ -363,18 +419,39 @@ private struct MeetingSessionDetailView: View {
             .background(MuesliTheme.accent)
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         } else if let transcript {
-            Button {
-                onCopy(copyText(for: transcript), resolvedContent(for: transcript))
-            } label: {
-                Label("Copy \(resolvedContent(for: transcript).copyLabel)", systemImage: "doc.on.doc")
-                    .font(MuesliTheme.headline())
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+            VStack(spacing: MuesliTheme.spacing8) {
+                Button {
+                    onCopy(copyText(for: transcript), resolvedContent(for: transcript))
+                } label: {
+                    Label("Copy \(resolvedContent(for: transcript).copyLabel)", systemImage: "doc.on.doc")
+                        .font(MuesliTheme.headline())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(MuesliTheme.accent)
+                .background(MuesliTheme.accentSubtle)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
+                Menu {
+                    ForEach(MeetingShareKind.available(for: transcript)) { kind in
+                        Button {
+                            share(kind, transcript: transcript)
+                        } label: {
+                            Label(kind.label, systemImage: kind.systemImage)
+                        }
+                    }
+                } label: {
+                    Label("Share Meeting", systemImage: "square.and.arrow.up")
+                        .font(MuesliTheme.headline())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(MuesliTheme.accent)
+                .background(MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(MuesliTheme.accent)
-            .background(MuesliTheme.accentSubtle)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
     }
 
@@ -426,6 +503,14 @@ private struct MeetingSessionDetailView: View {
     private func copyText(for transcript: Transcript) -> String {
         transcript.text(for: resolvedContent(for: transcript))
     }
+
+    private func share(_ kind: MeetingShareKind, transcript: Transcript) {
+        sharePayload = MeetingSharePayload(
+            kind: kind,
+            text: MeetingExportFormatter.text(for: kind, session: session, transcript: transcript)
+        )
+        AppTelemetry.signal("meeting_\(kind.telemetryName)_shared")
+    }
 }
 
 private struct MeetingMissingDetailView: View {
@@ -468,6 +553,141 @@ private enum MeetingContentTab: String, CaseIterable {
         case .raw:
             "raw_transcript"
         }
+    }
+}
+
+private enum MeetingShareKind: String, CaseIterable, Identifiable {
+    case notes
+    case transcript
+    case full
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .notes:
+            "Share Notes"
+        case .transcript:
+            "Share Transcript"
+        case .full:
+            "Share Full Meeting"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .notes:
+            "sparkles"
+        case .transcript:
+            "text.bubble"
+        case .full:
+            "doc.richtext"
+        }
+    }
+
+    var telemetryName: String {
+        switch self {
+        case .notes:
+            "notes"
+        case .transcript:
+            "transcript"
+        case .full:
+            "full_meeting"
+        }
+    }
+
+    static func available(for transcript: Transcript) -> [MeetingShareKind] {
+        allCases.filter { kind in
+            switch kind {
+            case .notes:
+                !(transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            case .transcript, .full:
+                !transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }
+    }
+}
+
+private struct MeetingSharePayload: Identifiable {
+    let id = UUID()
+    let kind: MeetingShareKind
+    let text: String
+}
+
+private struct MeetingShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+private enum MeetingExportFormatter {
+    static func text(for kind: MeetingShareKind, session: RecordingSession, transcript: Transcript) -> String {
+        switch kind {
+        case .notes:
+            notes(session: session, transcript: transcript)
+        case .transcript:
+            transcriptText(session: session, transcript: transcript)
+        case .full:
+            fullMeeting(session: session, transcript: transcript)
+        }
+    }
+
+    private static func notes(session: RecordingSession, transcript: Transcript) -> String {
+        """
+        # \(title(for: session))
+
+        \(dateString(for: session))
+
+        \(transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "No meeting notes available.")
+        """
+    }
+
+    private static func transcriptText(session: RecordingSession, transcript: Transcript) -> String {
+        let body = transcript.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? transcript.speakerTranscript!
+            : transcript.text
+        return """
+        # \(title(for: session)) Transcript
+
+        \(dateString(for: session))
+
+        \(body.trimmingCharacters(in: .whitespacesAndNewlines))
+        """
+    }
+
+    private static func fullMeeting(session: RecordingSession, transcript: Transcript) -> String {
+        let notes = transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let speakers = transcript.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return """
+        # \(title(for: session))
+
+        \(dateString(for: session))
+
+        ## Notes
+        \(notes?.isEmpty == false ? notes! : "None available.")
+
+        ## Speaker Transcript
+        \(speakers?.isEmpty == false ? speakers! : "None available.")
+
+        ## Raw Transcript
+        \(transcript.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        """
+    }
+
+    private static func title(for session: RecordingSession) -> String {
+        let title = session.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return title.isEmpty ? session.kind.title : title
+    }
+
+    private static func dateString(for session: RecordingSession) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return "Recorded \(formatter.string(from: session.createdAt))"
     }
 }
 

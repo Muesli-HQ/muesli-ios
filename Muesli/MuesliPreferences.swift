@@ -12,7 +12,9 @@ enum MuesliPreferences {
     static let meetingSummaryBackendKey = "muesli.meetings.summary.backend"
     static let openRouterModelKey = "muesli.meetings.summary.openRouter.model"
     static let chatGPTModelKey = "muesli.meetings.summary.chatGPT.model"
+    static let meetingTemplateKey = "muesli.meetings.template"
     static let iCloudSyncEnabledKey = "muesli.sync.icloud.enabled"
+    static let pinnedSectionsKey = "muesli.navigation.pinnedSections"
 
     static var liveActivitiesForDictationsEnabled: Bool {
         bool(for: liveActivitiesForDictationsKey, defaultValue: true)
@@ -55,6 +57,12 @@ enum MuesliPreferences {
         MeetingSummaryBackend(
             rawValue: UserDefaults.standard.string(forKey: meetingSummaryBackendKey) ?? ""
         ) ?? .openRouter
+    }
+
+    static var meetingTemplate: MeetingTemplatePreset {
+        MeetingTemplatePreset(
+            rawValue: UserDefaults.standard.string(forKey: meetingTemplateKey) ?? ""
+        ) ?? .general
     }
 
     static var openRouterModel: String {
@@ -144,5 +152,199 @@ struct SummaryModelPreset: Identifiable, Hashable {
         guard !presets.contains(where: { $0.id == trimmedModel }) else { return presets }
         guard preserveCustomValue else { return presets }
         return presets + [SummaryModelPreset(id: trimmedModel, label: "Custom: \(trimmedModel)")]
+    }
+}
+
+enum MeetingTemplatePreset: String, CaseIterable, Identifiable {
+    case general
+    case oneOnOne
+    case standup
+    case interview
+    case lecture
+    case customerCall
+    case planning
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .general:
+            "General Meeting"
+        case .oneOnOne:
+            "1:1"
+        case .standup:
+            "Standup"
+        case .interview:
+            "Interview"
+        case .lecture:
+            "Lecture"
+        case .customerCall:
+            "Customer Call"
+        case .planning:
+            "Planning"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .general:
+            "Balanced notes, decisions, and action items."
+        case .oneOnOne:
+            "Feedback, blockers, follow-ups, and commitments."
+        case .standup:
+            "Progress, next work, blockers, and owners."
+        case .interview:
+            "Signals, strengths, concerns, and follow-up questions."
+        case .lecture:
+            "Concepts, examples, questions, and study follow-ups."
+        case .customerCall:
+            "Pain points, requirements, objections, and next steps."
+        case .planning:
+            "Goals, scope, risks, milestones, and open questions."
+        }
+    }
+
+    var instructions: String {
+        switch self {
+        case .general:
+            """
+            Follow this note template exactly:
+
+            ## Meeting Summary
+            A 2-3 sentence overview of what was discussed.
+
+            ## Key Discussion Points
+            - Bullet points of the main topics discussed
+
+            ## Decisions Made
+            - Bullet points of any decisions reached
+
+            ## Action Items
+            - [ ] Bullet points of tasks assigned or agreed upon, with owners if mentioned
+
+            ## Notable Quotes
+            - Any important or notable statements, if applicable
+            """
+        case .oneOnOne:
+            """
+            Follow this note template exactly:
+
+            ## 1:1 Summary
+            A concise overview of the conversation and current context.
+
+            ## Wins and Progress
+            - Bullet points of progress, positive signals, and completed work
+
+            ## Blockers and Concerns
+            - Bullet points of blockers, risks, or concerns discussed
+
+            ## Feedback
+            - Bullet points of feedback given or requested
+
+            ## Action Items
+            - [ ] Follow-up tasks, owners, and timing if mentioned
+            """
+        case .standup:
+            """
+            Follow this note template exactly:
+
+            ## Standup Summary
+            A concise overview of team status.
+
+            ## Progress
+            - What was completed or moved forward
+
+            ## Next Up
+            - What people plan to work on next
+
+            ## Blockers
+            - Blockers, dependencies, or risks
+
+            ## Action Items
+            - [ ] Follow-up tasks with owners if mentioned
+            """
+        case .interview:
+            """
+            Follow this note template exactly:
+
+            ## Interview Summary
+            A concise overview of the interview discussion.
+
+            ## Key Signals
+            - Evidence, examples, and signals observed
+
+            ## Strengths
+            - Strengths or positive indicators
+
+            ## Concerns
+            - Concerns, gaps, or unclear areas
+
+            ## Follow-up Questions
+            - Questions or topics to revisit
+            """
+        case .lecture:
+            """
+            Follow this note template exactly:
+
+            ## Lecture Summary
+            A concise overview of the session.
+
+            ## Core Concepts
+            - Main concepts and definitions
+
+            ## Examples and Evidence
+            - Examples, cases, formulas, or references mentioned
+
+            ## Questions
+            - Questions raised or unclear points
+
+            ## Follow-ups
+            - [ ] Study tasks, readings, or practice items
+            """
+        case .customerCall:
+            """
+            Follow this note template exactly:
+
+            ## Customer Call Summary
+            A concise overview of the customer conversation.
+
+            ## Customer Goals
+            - Desired outcomes, priorities, and success criteria
+
+            ## Pain Points
+            - Problems, blockers, or frustrations mentioned
+
+            ## Requirements
+            - Feature, workflow, technical, or commercial requirements
+
+            ## Objections and Risks
+            - Concerns, objections, or adoption risks
+
+            ## Next Steps
+            - [ ] Follow-up tasks, owners, and timing if mentioned
+            """
+        case .planning:
+            """
+            Follow this note template exactly:
+
+            ## Planning Summary
+            A concise overview of the plan discussed.
+
+            ## Goals
+            - Outcomes and priorities
+
+            ## Scope
+            - In-scope work, out-of-scope work, and dependencies
+
+            ## Risks and Open Questions
+            - Risks, unknowns, and decisions still needed
+
+            ## Milestones
+            - Dates, phases, or checkpoints if mentioned
+
+            ## Action Items
+            - [ ] Follow-up tasks with owners if mentioned
+            """
+        }
     }
 }

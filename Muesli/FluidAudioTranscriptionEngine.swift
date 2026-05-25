@@ -1,6 +1,10 @@
 import Foundation
 @preconcurrency import FluidAudio
 
+// FluidAudio's offline diarizer internally guards its mutable CoreML state but
+// does not currently declare Sendable conformance.
+extension OfflineDiarizerManager: @retroactive @unchecked Sendable {}
+
 actor FluidAudioTranscriptionEngine: TranscriptionEngine {
     nonisolated let identifier = "parakeet-v3"
 

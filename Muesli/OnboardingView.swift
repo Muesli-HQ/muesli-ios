@@ -455,11 +455,12 @@ struct OnboardingView: View {
                     .font(MuesliTheme.headline())
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
+                    .foregroundStyle(.white)
+                    .background(MuesliTheme.success)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .background(MuesliTheme.success)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         } else {
             SignInWithAppleButton(.signIn) { request in
                 AppTelemetry.signal("onboarding_apple_sync_sign_in_started")
@@ -599,14 +600,15 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     if isOnboardingTestActive {
                         VStack(spacing: MuesliTheme.spacing8) {
-                            MuesliWaveformView(
-                                isActive: coordinator.isOnboardingTestRecording,
+                            MuesliInlineWaveformView(
+                                mode: coordinator.isOnboardingTestRecording ? .level : .waiting,
                                 color: onboardingTestColor,
                                 level: coordinator.isOnboardingTestRecording ? coordinator.onboardingTestInputLevel : nil,
-                                barCount: 13,
-                                spacing: 4
+                                barCount: 24
                             )
-                            .frame(width: 132, height: 42)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
+                            .padding(.horizontal, MuesliTheme.spacing16)
 
                             Text(coordinator.isOnboardingTestRecording ? "Listening" : "Transcribing")
                                 .font(MuesliTheme.captionMedium())
@@ -752,11 +754,12 @@ struct OnboardingView: View {
                 .font(MuesliTheme.headline())
                 .frame(maxWidth: .infinity)
                 .frame(height: 48)
+                .foregroundStyle(.white)
+                .background(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .background(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .disabled(!meetingSummariesEnabled || isSigningInChatGPT)
 
             SettingsModelPickerRow(
@@ -815,11 +818,12 @@ struct OnboardingView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 15, weight: .semibold))
                         .frame(width: 44, height: 48)
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .background(MuesliTheme.backgroundRaised)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .background(MuesliTheme.backgroundRaised)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
 
             Button {
@@ -832,11 +836,12 @@ struct OnboardingView: View {
                 .font(MuesliTheme.headline())
                 .frame(maxWidth: .infinity)
                 .frame(height: 48)
+                .foregroundStyle(.white)
+                .background(canContinue ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .background(canContinue ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .disabled(!canContinue)
         }
         .padding(.horizontal, MuesliTheme.spacing20)

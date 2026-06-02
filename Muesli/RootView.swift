@@ -80,6 +80,7 @@ struct RootView: View {
                             .background(.regularMaterial)
                             .clipShape(Circle())
                             .overlay(Circle().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
+                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, MuesliTheme.spacing20)
@@ -173,14 +174,13 @@ private struct KeyboardHandoffOverlay: View {
                 Spacer(minLength: MuesliTheme.spacing32)
 
                 VStack(spacing: MuesliTheme.spacing16) {
-                    MuesliWaveformView(
-                        isActive: coordinator.isRecording,
+                    MuesliInlineWaveformView(
+                        mode: coordinator.isRecording ? .level : .waiting,
                         color: coordinator.isRecording ? MuesliTheme.recording : MuesliTheme.transcribing,
                         level: coordinator.isRecording ? coordinator.inputLevel : nil,
-                        barCount: 13,
-                        spacing: 4
+                        barCount: 24
                     )
-                    .frame(width: 148, height: 46)
+                    .frame(width: 220, height: 56)
 
                     Text(coordinator.isRecording ? "Listening" : "Transcribing")
                         .font(MuesliTheme.title2())
@@ -338,6 +338,7 @@ private struct MuesliTabSwitcher: View {
                     .frame(height: 48)
                     .background(selectedSection == section ? MuesliTheme.surfaceSelected : Color.clear)
                     .clipShape(Capsule())
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -419,6 +420,7 @@ private struct MuesliDrawer: View {
                         .frame(width: 34, height: 34)
                         .background(MuesliTheme.surfacePrimary)
                         .clipShape(Circle())
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
@@ -484,6 +486,7 @@ private struct SidebarSectionRow: View {
                 .padding(.leading, MuesliTheme.spacing12)
                 .background(isSelected ? MuesliTheme.surfaceSelected : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
 
@@ -494,6 +497,7 @@ private struct SidebarSectionRow: View {
                     .frame(width: 36, height: 36)
                     .background(isPinned ? MuesliTheme.accentSubtle : Color.clear)
                     .clipShape(Circle())
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .disabled(isPinned && !canUnpin)

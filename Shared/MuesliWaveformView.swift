@@ -57,3 +57,80 @@ struct MuesliWaveformView: View {
         return max(maxHeight * base * dynamicLevel, 3)
     }
 }
+
+enum MuesliFloatingWaveformMode: Equatable {
+    case level
+    case waiting
+}
+
+struct MuesliInlineWaveformView: View {
+    var mode: MuesliFloatingWaveformMode
+    var color: Color
+    var level: Double? = nil
+    var barCount: Int = 24
+    var spacing: CGFloat = 5
+
+    private let basePattern: [CGFloat] = [
+        0.18, 0.26, 0.42, 0.58, 0.76, 0.92,
+        0.72, 0.46, 0.28, 0.36, 0.62, 0.86,
+        0.94, 0.68, 0.44, 0.30, 0.52, 0.80,
+        0.66, 0.48, 0.34, 0.24, 0.18, 0.14
+    ]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let elapsed = timeline.date.timeIntervalSinceReferenceDate
+            waveformBars(elapsed: elapsed)
+        }
+    }
+
+    private func waveformBars(elapsed: TimeInterval) -> some View {
+        GeometryReader { geometry in
+            let count = max(12, barCount)
+            let totalSpacing = spacing * CGFloat(count - 1)
+            let barWidth = max(3, min(8, (geometry.size.width - totalSpacing) / CGFloat(count)))
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(0..<count, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: barWidth / 2, style: .continuous)
+                        .fill(color.opacity(mode == .waiting ? waitingOpacity(index: index, elapsed: elapsed) : 0.92))
+                        .frame(
+                            width: barWidth,
+                            height: barHeight(
+                                index: index,
+                                elapsed: elapsed,
+                                maxHeight: geometry.size.height
+                            )
+                        )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func barHeight(
+        index: Int,
+        elapsed: TimeInterval,
+        maxHeight: CGFloat
+    ) -> CGFloat {
+        let minHeight: CGFloat = 4
+        let maxBarHeight = max(minHeight, maxHeight)
+        let base = basePattern[index % basePattern.count]
+        let amplitude: CGFloat
+
+        switch mode {
+        case .level:
+            let normalized = CGFloat(min(max(level ?? 0.28, 0), 1))
+            amplitude = max(0.12, base * (0.24 + normalized * 0.88))
+        case .waiting:
+            let phase = CGFloat(elapsed) * 5.8 + CGFloat(index) * 0.72
+            amplitude = 0.18 + (sin(phase) + 1) * 0.18 + base * 0.48
+        }
+
+        return min(maxBarHeight, max(minHeight, minHeight + (maxBarHeight - minHeight) * amplitude))
+    }
+
+    private func waitingOpacity(index: Int, elapsed: TimeInterval) -> Double {
+        let phase = CGFloat(elapsed) * 5.8 + CGFloat(index) * 0.72
+        return Double(0.48 + (sin(phase) + 1) * 0.16)
+    }
+}

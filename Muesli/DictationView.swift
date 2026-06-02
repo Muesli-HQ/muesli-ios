@@ -59,14 +59,15 @@ struct DictationView: View {
 
                 if isWaveformActive {
                     VStack(spacing: MuesliTheme.spacing8) {
-                        MuesliWaveformView(
-                            isActive: coordinator.isRecording,
+                        MuesliInlineWaveformView(
+                            mode: coordinator.isRecording ? .level : .waiting,
                             color: statusColor,
                             level: coordinator.isRecording ? coordinator.inputLevel : nil,
-                            barCount: 13,
-                            spacing: 4
+                            barCount: 24
                         )
-                        .frame(width: 132, height: 42)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
+                        .padding(.horizontal, MuesliTheme.spacing16)
 
                         Text(coordinator.isRecording ? "Listening" : "Transcribing")
                             .font(MuesliTheme.captionMedium())
@@ -88,11 +89,12 @@ struct DictationView: View {
                     .font(MuesliTheme.headline())
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
+                    .foregroundStyle(isDictationButtonDisabled ? MuesliTheme.textTertiary : .white)
+                    .background(isDictationButtonDisabled ? MuesliTheme.surfacePrimary : statusColor)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(isDictationButtonDisabled ? MuesliTheme.textTertiary : .white)
-                .background(isDictationButtonDisabled ? MuesliTheme.surfacePrimary : statusColor)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 .disabled(isDictationButtonDisabled)
             }
             .padding()
@@ -126,9 +128,11 @@ struct DictationView: View {
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
                     ForEach(coordinator.dictationHistory) { result in
-                        DictationHistoryRow(result: result) {
-                            coordinator.copyToClipboard(result)
-                        }
+                        DictationHistoryRow(
+                            result: result,
+                            onCopy: { coordinator.copyToClipboard(result) },
+                            onDelete: { coordinator.deleteDictation(result) }
+                        )
                     }
                 }
             }
@@ -202,6 +206,8 @@ struct DictationView: View {
 private struct DictationHistoryRow: View {
     let result: DictationResult
     let onCopy: () -> Void
+    let onDelete: () -> Void
+    @State private var isConfirmingDelete = false
 
     var body: some View {
         MuesliSurface {
@@ -219,16 +225,33 @@ private struct DictationHistoryRow: View {
 
                     Spacer()
 
-                    Button(action: onCopy) {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 36, height: 36)
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Button(action: onCopy) {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 8, weight: .semibold))
+                                .frame(width: 36, height: 36)
+                                .foregroundStyle(MuesliTheme.accent)
+                                .background(MuesliTheme.accentSubtle)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Copy dictation")
+
+                        Button {
+                            isConfirmingDelete = true
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 8, weight: .semibold))
+                                .frame(width: 36, height: 36)
+                                .foregroundStyle(MuesliTheme.recording)
+                                .background(MuesliTheme.recording.opacity(0.12))
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Delete dictation")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(MuesliTheme.accent)
-                    .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    .accessibilityLabel("Copy dictation")
                 }
 
                 Text(result.text)
@@ -239,6 +262,16 @@ private struct DictationHistoryRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(MuesliTheme.spacing16)
+        }
+        .confirmationDialog(
+            "Delete this dictation?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Dictation", role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the dictation from local history.")
         }
     }
 

@@ -164,6 +164,39 @@ final class DictationCoordinator {
         }
     }
 
+    func deleteDictation(_ result: DictationResult) {
+        do {
+            try store.deleteResult(result)
+            dictationHistory.removeAll { $0.id == result.id || $0.requestID == result.requestID }
+            if lastTranscript == result.text {
+                lastTranscript = dictationHistory.first?.text ?? ""
+            }
+            clipboardStatusText = "Deleted"
+            AppTelemetry.signal("dictation_deleted")
+            clearClipboardStatusSoon()
+        } catch {
+            clipboardStatusText = "Delete failed"
+            clearClipboardStatusSoon()
+        }
+    }
+
+    func deleteMeeting(_ session: RecordingSession) {
+        do {
+            if let audioFileName = session.audioFileName {
+                try? store.deleteAudioFile(fileName: audioFileName)
+            }
+            try store.deleteTranscript(for: session.id)
+            try store.deleteRecordingSession(id: session.id)
+            recordingSessions.removeAll { $0.id == session.id }
+            clipboardStatusText = "Deleted"
+            AppTelemetry.signal("meeting_deleted")
+            clearClipboardStatusSoon()
+        } catch {
+            clipboardStatusText = "Delete failed"
+            clearClipboardStatusSoon()
+        }
+    }
+
     func copyTranscript(_ transcript: Transcript) {
         UIPasteboard.general.string = transcript.text
         clipboardStatusText = "Copied"
@@ -178,6 +211,11 @@ final class DictationCoordinator {
         AppTelemetry.signal(telemetryName)
 
         clearClipboardStatusSoon()
+    }
+
+    func audioFileURL(for session: RecordingSession) -> URL? {
+        guard let audioFileName = session.audioFileName else { return nil }
+        return try? store.audioFileURL(fileName: audioFileName)
     }
 
     private func clearClipboardStatusSoon() {

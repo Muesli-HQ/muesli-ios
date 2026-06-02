@@ -372,11 +372,12 @@ struct SettingsView: View {
                             .font(MuesliTheme.headline())
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
+                            .foregroundStyle(.white)
+                            .background(MuesliTheme.success)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .background(MuesliTheme.success)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 } else {
                     SignInWithAppleButton(.signIn) { request in
                         AppTelemetry.signal("apple_sync_sign_in_started")
@@ -452,11 +453,12 @@ struct SettingsView: View {
                             .font(MuesliTheme.headline())
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
+                            .foregroundStyle(.white)
+                            .background(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .background(chatGPTSignedIn ? MuesliTheme.success : MuesliTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     .disabled(!meetingSummariesEnabled)
 
                     SettingsModelPickerRow(
@@ -746,6 +748,8 @@ private struct SettingsSectionRow: View {
             }
             .padding(.horizontal, MuesliTheme.spacing4)
             .padding(.vertical, MuesliTheme.spacing8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -782,6 +786,8 @@ private struct SettingsNavigationRow: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .padding(.top, 2)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

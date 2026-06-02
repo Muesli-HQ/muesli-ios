@@ -72,6 +72,10 @@ struct SharedStore: Sendable {
         try database().resultsHistory()
     }
 
+    func deleteResult(_ result: DictationResult) throws {
+        try database().deleteResult(id: result.id, requestID: result.requestID)
+    }
+
     func clearResult(for requestID: UUID) throws {
         try database().clearResult(for: requestID)
     }
@@ -112,6 +116,10 @@ struct SharedStore: Sendable {
         try database().recordingSession(requestID: requestID)
     }
 
+    func deleteRecordingSession(id: UUID) throws {
+        try database().deleteRecordingSession(id: id)
+    }
+
     func saveTranscript(_ transcript: Transcript) throws {
         try database().saveTranscript(transcript)
     }
@@ -122,6 +130,10 @@ struct SharedStore: Sendable {
 
     func transcript(for sessionID: UUID) throws -> Transcript? {
         try database().transcript(for: sessionID)
+    }
+
+    func deleteTranscript(for sessionID: UUID) throws {
+        try database().deleteTranscript(for: sessionID)
     }
 
     func customWords() throws -> [CustomWord] {
@@ -289,6 +301,34 @@ private struct SharedStoreDatabase {
         }
     }
 
+    func deleteResult(id: UUID, requestID: UUID) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                let now = Date().timeIntervalSince1970
+                try execute(
+                    """
+                    UPDATE result_history
+                    SET deleted_at = ?, updated_at = ?, sync_dirty = 1
+                    WHERE id = ? OR request_id = ?
+                    """,
+                    db: db
+                ) { statement in
+                    try bind(now, to: statement, at: 1)
+                    try bind(now, to: statement, at: 2)
+                    try bind(id.uuidString, to: statement, at: 3)
+                    try bind(requestID.uuidString, to: statement, at: 4)
+                }
+
+                try execute(
+                    "DELETE FROM result_pickups WHERE request_id = ?",
+                    db: db
+                ) { statement in
+                    try bind(requestID.uuidString, to: statement, at: 1)
+                }
+            }
+        }
+    }
+
     func clearResult(for requestID: UUID) throws {
         try withDatabase { db in
             try execute("DELETE FROM result_pickups WHERE request_id = ?", db: db) { statement in
@@ -336,6 +376,26 @@ private struct SharedStoreDatabase {
         }
     }
 
+    func deleteRecordingSession(id: UUID) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                let now = Date().timeIntervalSince1970
+                try execute(
+                    """
+                    UPDATE recording_sessions
+                    SET deleted_at = ?, updated_at = ?, sync_dirty = 1
+                    WHERE id = ?
+                    """,
+                    db: db
+                ) { statement in
+                    try bind(now, to: statement, at: 1)
+                    try bind(now, to: statement, at: 2)
+                    try bind(id.uuidString, to: statement, at: 3)
+                }
+            }
+        }
+    }
+
     func saveTranscript(_ transcript: Transcript) throws {
         try withDatabase { db in
             try transaction(db: db) {
@@ -350,7 +410,10 @@ private struct SharedStoreDatabase {
 
     func transcripts() throws -> [Transcript] {
         try withDatabase { db in
-            try queryBlobs("SELECT payload FROM transcripts ORDER BY created_at DESC", db: db) { _ in }
+            try queryBlobs(
+                "SELECT payload FROM transcripts WHERE deleted_at IS NULL ORDER BY created_at DESC",
+                db: db
+            ) { _ in }
                 .map { try decoder.decode(Transcript.self, from: $0) }
         }
     }
@@ -358,11 +421,31 @@ private struct SharedStoreDatabase {
     func transcript(for sessionID: UUID) throws -> Transcript? {
         try withDatabase { db in
             try querySingleBlob(
-                "SELECT payload FROM transcripts WHERE session_id = ? LIMIT 1",
+                "SELECT payload FROM transcripts WHERE session_id = ? AND deleted_at IS NULL LIMIT 1",
                 db: db
             ) { statement in
                 try bind(sessionID.uuidString, to: statement, at: 1)
             }.map { try decoder.decode(Transcript.self, from: $0) }
+        }
+    }
+
+    func deleteTranscript(for sessionID: UUID) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                let now = Date().timeIntervalSince1970
+                try execute(
+                    """
+                    UPDATE transcripts
+                    SET deleted_at = ?, updated_at = ?, sync_dirty = 1
+                    WHERE session_id = ?
+                    """,
+                    db: db
+                ) { statement in
+                    try bind(now, to: statement, at: 1)
+                    try bind(now, to: statement, at: 2)
+                    try bind(sessionID.uuidString, to: statement, at: 3)
+                }
+            }
         }
     }
 

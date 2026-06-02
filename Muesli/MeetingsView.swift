@@ -1,9 +1,11 @@
+import AVFoundation
 import SwiftUI
 import UIKit
 
 struct MeetingsView: View {
     @Bindable var coordinator: DictationCoordinator
     @State private var meetingTitle = ""
+    @State private var sessionPendingDelete: RecordingSession?
     @AppStorage(MuesliPreferences.meetingTemplateKey) private var selectedMeetingTemplate = MeetingTemplatePreset.general.rawValue
 
     private var meetingSessions: [RecordingSession] {
@@ -36,17 +38,40 @@ struct MeetingsView: View {
                     MeetingSessionDetailView(
                         session: session,
                         transcript: coordinator.transcript(for: session),
+                        audioURL: coordinator.audioFileURL(for: session),
                         onTranscribe: { coordinator.transcribeSession(session) },
                         onCopy: { text, tab in
                             coordinator.copyText(
                                 text,
                                 telemetryName: "meeting_\(tab.telemetryName)_copied"
                             )
+                        },
+                        onDelete: {
+                            coordinator.deleteMeeting(session)
                         }
                     )
                 } else {
                     MeetingMissingDetailView()
                 }
+            }
+            .confirmationDialog(
+                "Delete this meeting?",
+                isPresented: Binding(
+                    get: { sessionPendingDelete != nil },
+                    set: { if !$0 { sessionPendingDelete = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: sessionPendingDelete
+            ) { session in
+                Button("Delete Meeting", role: .destructive) {
+                    coordinator.deleteMeeting(session)
+                    sessionPendingDelete = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    sessionPendingDelete = nil
+                }
+            } message: { _ in
+                Text("This removes the meeting, transcript, notes, and any retained audio from local history.")
             }
         }
     }
@@ -96,14 +121,15 @@ struct MeetingsView: View {
 
                 if coordinator.isMeetingRecording || coordinator.isMeetingTranscribing {
                     VStack(spacing: MuesliTheme.spacing8) {
-                        MuesliWaveformView(
-                            isActive: coordinator.isMeetingRecording,
+                        MuesliInlineWaveformView(
+                            mode: coordinator.isMeetingRecording ? .level : .waiting,
                             color: statusColor,
                             level: coordinator.isMeetingRecording ? coordinator.inputLevel : nil,
-                            barCount: 13,
-                            spacing: 4
+                            barCount: 24
                         )
-                        .frame(width: 132, height: 42)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
+                        .padding(.horizontal, MuesliTheme.spacing16)
 
                         Text(coordinator.isMeetingRecording ? "Recording" : "Transcribing")
                             .font(MuesliTheme.captionMedium())
@@ -129,11 +155,12 @@ struct MeetingsView: View {
                     .font(MuesliTheme.headline())
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
+                    .foregroundStyle(.white)
+                    .background(statusColor)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(statusColor)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 .disabled(coordinator.isMeetingTranscribing)
             }
             .padding(MuesliTheme.spacing16)
@@ -179,6 +206,7 @@ struct MeetingsView: View {
             .padding(MuesliTheme.spacing12)
             .background(MuesliTheme.surfacePrimary)
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
         .buttonStyle(.plain)
         .disabled(coordinator.isMeetingRecording || coordinator.isMeetingTranscribing)
@@ -211,13 +239,33 @@ struct MeetingsView: View {
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
                     ForEach(meetingSessions) { session in
-                        NavigationLink(value: session.id) {
-                            MeetingSessionRow(
-                                session: session,
-                                transcript: coordinator.transcript(for: session)
-                            )
+                        ZStack(alignment: .topTrailing) {
+                            NavigationLink(value: session.id) {
+                                MeetingSessionRow(
+                                    session: session,
+                                    transcript: coordinator.transcript(for: session)
+                                )
+                                .padding(.trailing, 44)
+                            }
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+
+                            Button {
+                                sessionPendingDelete = session
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .frame(width: 36, height: 36)
+                                    .foregroundStyle(MuesliTheme.recording)
+                                    .background(MuesliTheme.recording.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, MuesliTheme.spacing16)
+                            .padding(.trailing, MuesliTheme.spacing16)
+                            .accessibilityLabel("Delete meeting")
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -335,15 +383,20 @@ private struct MeetingSessionRow: View {
 private struct MeetingSessionDetailView: View {
     let session: RecordingSession
     let transcript: Transcript?
+    let audioURL: URL?
     let onTranscribe: () -> Void
     let onCopy: (String, MeetingContentTab) -> Void
+    let onDelete: () -> Void
+    @Environment(\.dismiss) private var dismiss
     @State private var selectedContent: MeetingContentTab = .notes
     @State private var sharePayload: MeetingSharePayload?
+    @State private var isConfirmingDelete = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                 detailHeader
+                retainedAudioSection
                 detailActions
                 contentSection
             }
@@ -355,7 +408,20 @@ private struct MeetingSessionDetailView: View {
         .navigationTitle("Meeting")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sharePayload) { payload in
-            MeetingShareSheet(items: [payload.text])
+            MeetingShareSheet(items: payload.items)
+        }
+        .confirmationDialog(
+            "Delete this meeting?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Meeting", role: .destructive) {
+                onDelete()
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the meeting, transcript, notes, and any retained audio from local history.")
         }
     }
 
@@ -406,6 +472,58 @@ private struct MeetingSessionDetailView: View {
     }
 
     @ViewBuilder
+    private var retainedAudioSection: some View {
+        if session.hasRetainedAudio, let audioURL {
+            MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                        Image(systemName: "waveform.path.ecg.rectangle")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(MuesliTheme.accent)
+                            .frame(width: 28)
+
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                            Text("Saved Audio")
+                                .font(MuesliTheme.headline())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                            Text(audioURL.lastPathComponent)
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textTertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+
+                        Spacer()
+                    }
+
+                    SavedAudioWaveformView(audioURL: audioURL)
+                        .frame(height: 52)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .padding(.vertical, MuesliTheme.spacing12)
+                        .background(MuesliTheme.accent.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
+                    Button {
+                        sharePayload = MeetingSharePayload(items: [audioURL])
+                        AppTelemetry.signal("meeting_audio_shared")
+                    } label: {
+                        Label("Save Audio to Files", systemImage: "folder.badge.plus")
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .foregroundStyle(MuesliTheme.accent)
+                            .background(MuesliTheme.accentSubtle)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var detailActions: some View {
         if session.phase == .transcriptionQueued {
             Button(action: onTranscribe) {
@@ -413,11 +531,12 @@ private struct MeetingSessionDetailView: View {
                     .font(MuesliTheme.headline())
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
+                    .foregroundStyle(.white)
+                    .background(MuesliTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .background(MuesliTheme.accent)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         } else if let transcript {
             VStack(spacing: MuesliTheme.spacing8) {
                 Button {
@@ -427,11 +546,12 @@ private struct MeetingSessionDetailView: View {
                         .font(MuesliTheme.headline())
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
+                        .foregroundStyle(MuesliTheme.accent)
+                        .background(MuesliTheme.accentSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(MuesliTheme.accent)
-                .background(MuesliTheme.accentSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
 
                 Menu {
                     ForEach(MeetingShareKind.available(for: transcript)) { kind in
@@ -446,13 +566,28 @@ private struct MeetingSessionDetailView: View {
                         .font(MuesliTheme.headline())
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
+                        .foregroundStyle(MuesliTheme.accent)
+                        .background(MuesliTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(MuesliTheme.accent)
-                .background(MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
         }
+
+        Button {
+            isConfirmingDelete = true
+        } label: {
+            Label("Delete Meeting", systemImage: "trash")
+            .font(MuesliTheme.headline())
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .foregroundStyle(MuesliTheme.recording)
+            .background(MuesliTheme.recording.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -506,8 +641,7 @@ private struct MeetingSessionDetailView: View {
 
     private func share(_ kind: MeetingShareKind, transcript: Transcript) {
         sharePayload = MeetingSharePayload(
-            kind: kind,
-            text: MeetingExportFormatter.text(for: kind, session: session, transcript: transcript)
+            items: [MeetingExportFormatter.text(for: kind, session: session, transcript: transcript)]
         )
         AppTelemetry.signal("meeting_\(kind.telemetryName)_shared")
     }
@@ -610,8 +744,7 @@ private enum MeetingShareKind: String, CaseIterable, Identifiable {
 
 private struct MeetingSharePayload: Identifiable {
     let id = UUID()
-    let kind: MeetingShareKind
-    let text: String
+    let items: [Any]
 }
 
 private struct MeetingShareSheet: UIViewControllerRepresentable {
@@ -761,6 +894,96 @@ private struct MeetingTranscriptContent: View {
             return "Diarization failed: \(message)"
         }
         return nil
+    }
+}
+
+private struct SavedAudioWaveformView: View {
+    let audioURL: URL
+    @State private var samples: [CGFloat] = AudioWaveformSampler.placeholderSamples(count: 36)
+
+    var body: some View {
+        GeometryReader { geometry in
+            let spacing: CGFloat = 3
+            let barWidth = max(2, (geometry.size.width - spacing * CGFloat(samples.count - 1)) / CGFloat(samples.count))
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(Array(samples.enumerated()), id: \.offset) { _, sample in
+                    RoundedRectangle(cornerRadius: barWidth / 2, style: .continuous)
+                        .fill(MuesliTheme.accent)
+                        .frame(
+                            width: barWidth,
+                            height: max(4, geometry.size.height * sample)
+                        )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .task(id: audioURL) {
+            samples = await AudioWaveformSampler.samples(from: audioURL, count: 36)
+        }
+    }
+}
+
+private enum AudioWaveformSampler {
+    static func placeholderSamples(count: Int) -> [CGFloat] {
+        let preset: [CGFloat] = [0.24, 0.38, 0.56, 0.78, 0.62, 0.34, 0.46, 0.84, 0.70, 0.42, 0.28, 0.52]
+        return (0..<count).map { preset[$0 % preset.count] }
+    }
+
+    static func samples(from url: URL, count: Int) async -> [CGFloat] {
+        await Task.detached(priority: .utility) {
+            guard let samples = try? makeSamples(from: url, count: count), !samples.isEmpty else {
+                return placeholderSamples(count: count)
+            }
+            return samples
+        }.value
+    }
+
+    private static func makeSamples(from url: URL, count: Int) throws -> [CGFloat] {
+        let file = try AVAudioFile(forReading: url)
+        let totalFrames = file.length
+        guard totalFrames > 0, count > 0 else { return placeholderSamples(count: count) }
+
+        let format = file.processingFormat
+        let windowSize = AVAudioFrameCount(min(4096, max(512, totalFrames / Int64(max(count, 1)))))
+        var values: [CGFloat] = []
+        values.reserveCapacity(count)
+
+        for index in 0..<count {
+            let fraction = count == 1 ? 0 : Double(index) / Double(count - 1)
+            let position = AVAudioFramePosition(Double(max(totalFrames - 1, 0)) * fraction)
+            let framesAvailable = max(0, totalFrames - position)
+            let framesToRead = AVAudioFrameCount(min(Int64(windowSize), framesAvailable))
+            guard framesToRead > 0,
+                  let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: framesToRead) else {
+                values.append(0.1)
+                continue
+            }
+
+            file.framePosition = position
+            try file.read(into: buffer, frameCount: framesToRead)
+            values.append(averageMagnitude(in: buffer))
+        }
+
+        let peak = values.max() ?? 1
+        guard peak > 0 else { return placeholderSamples(count: count) }
+        return values.map { max(0.12, min(1, $0 / peak)) }
+    }
+
+    private static func averageMagnitude(in buffer: AVAudioPCMBuffer) -> CGFloat {
+        guard let channelData = buffer.floatChannelData else { return 0.1 }
+        let channelCount = Int(buffer.format.channelCount)
+        let frameLength = Int(buffer.frameLength)
+        guard channelCount > 0, frameLength > 0 else { return 0.1 }
+
+        var total: Float = 0
+        for channel in 0..<channelCount {
+            let samples = channelData[channel]
+            for frame in 0..<frameLength {
+                total += abs(samples[frame])
+            }
+        }
+
+        return CGFloat(total / Float(channelCount * frameLength))
     }
 }
 

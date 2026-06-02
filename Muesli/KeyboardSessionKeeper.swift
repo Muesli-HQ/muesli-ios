@@ -28,9 +28,7 @@ final class KeyboardSessionKeeper {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let format = inputNode.inputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { _, _ in
-            // Keep the microphone session alive for keyboard commands; audio is intentionally discarded.
-        }
+        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format, block: Self.discardAudioTap)
         engine.prepare()
 
         do {
@@ -60,4 +58,6 @@ final class KeyboardSessionKeeper {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
+
+    nonisolated static func discardAudioTap(_: AVAudioPCMBuffer, when _: AVAudioTime) {}
 }

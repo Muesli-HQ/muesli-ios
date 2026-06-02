@@ -1,4 +1,10 @@
 .DS_Store
+.env
+.env.*
+!.env.example
+*.p8
+diagnostics/
+secrets/
 *.xcuserstate
 *.xcworkspace
 *.xcodeproj

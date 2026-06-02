@@ -22,4 +22,11 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             build
-
+      - name: Build test bundle
+        run: |
+          xcodebuild \
+            -project MuesliiOS.xcodeproj \
+            -scheme Muesli \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing

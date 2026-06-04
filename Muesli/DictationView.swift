@@ -210,58 +210,24 @@ private struct DictationHistoryRow: View {
     @State private var isConfirmingDelete = false
 
     var body: some View {
-        MuesliSurface {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                HStack(spacing: MuesliTheme.spacing12) {
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text(result.createdAt, formatter: Self.dateFormatter)
-                            .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                        Text(TranscriptionDisplayName.engineName(for: result.engineIdentifier))
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textTertiary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer()
-
-                    HStack(spacing: MuesliTheme.spacing8) {
-                        Button(action: onCopy) {
-                            Image(systemName: "doc.on.doc")
-                                .font(.system(size: 8, weight: .semibold))
-                                .frame(width: 36, height: 36)
-                                .foregroundStyle(MuesliTheme.accent)
-                                .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Copy dictation")
-
-                        Button {
-                            isConfirmingDelete = true
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 8, weight: .semibold))
-                                .frame(width: 36, height: 36)
-                                .foregroundStyle(MuesliTheme.recording)
-                                .background(MuesliTheme.recording.opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Delete dictation")
-                    }
-                }
-
-                Text(result.text)
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+        MuesliSwipeActionRow(
+            leadingAction: .init(
+                title: "Delete",
+                systemImage: "trash",
+                tint: MuesliTheme.recording,
+                perform: { isConfirmingDelete = true }
+            ),
+            trailingAction: .init(
+                title: "Copy",
+                systemImage: "doc.on.doc",
+                tint: MuesliTheme.success,
+                perform: onCopy
+            )
+        ) {
+            MuesliSurface {
+                rowContent
+                    .padding(MuesliTheme.spacing16)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(MuesliTheme.spacing16)
         }
         .confirmationDialog(
             "Delete this dictation?",
@@ -273,6 +239,27 @@ private struct DictationHistoryRow: View {
         } message: {
             Text("This removes the dictation from local history.")
         }
+    }
+
+    private var rowContent: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                Text(result.createdAt, formatter: Self.dateFormatter)
+                    .font(MuesliTheme.captionMedium())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                Text(TranscriptionDisplayName.engineName(for: result.engineIdentifier))
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .lineLimit(1)
+            }
+
+            Text(result.text)
+                .font(MuesliTheme.body())
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private static let dateFormatter: DateFormatter = {

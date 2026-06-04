@@ -239,32 +239,33 @@ struct MeetingsView: View {
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
                     ForEach(meetingSessions) { session in
-                        ZStack(alignment: .topTrailing) {
+                        MuesliSwipeActionRow(
+                            leadingAction: .init(
+                                title: "Delete",
+                                systemImage: "trash",
+                                tint: MuesliTheme.recording,
+                                perform: { sessionPendingDelete = session }
+                            ),
+                            trailingAction: .init(
+                                title: "Copy",
+                                systemImage: "doc.on.doc",
+                                tint: MuesliTheme.success,
+                                perform: {
+                                    coordinator.copyText(
+                                        copyText(for: session),
+                                        telemetryName: "meeting_row_copied"
+                                    )
+                                }
+                            )
+                        ) {
                             NavigationLink(value: session.id) {
                                 MeetingSessionRow(
                                     session: session,
                                     transcript: coordinator.transcript(for: session)
                                 )
-                                .padding(.trailing, 44)
                             }
                             .buttonStyle(.plain)
                             .contentShape(Rectangle())
-
-                            Button {
-                                sessionPendingDelete = session
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 8, weight: .semibold))
-                                    .frame(width: 36, height: 36)
-                                    .foregroundStyle(MuesliTheme.recording)
-                                    .background(MuesliTheme.recording.opacity(0.12))
-                                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.top, MuesliTheme.spacing16)
-                            .padding(.trailing, MuesliTheme.spacing16)
-                            .accessibilityLabel("Delete meeting")
                         }
                     }
                 }
@@ -301,6 +302,23 @@ struct MeetingsView: View {
         } else {
             MuesliTheme.accent
         }
+    }
+
+    private func copyText(for session: RecordingSession) -> String {
+        guard let transcript = coordinator.transcript(for: session) else {
+            return session.errorMessage ?? session.phase.description
+        }
+
+        if let summary = transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            return summary
+        }
+        if let speakerTranscript = transcript.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines), !speakerTranscript.isEmpty {
+            return speakerTranscript
+        }
+        if !transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return transcript.text
+        }
+        return session.errorMessage ?? session.phase.description
     }
 }
 
@@ -483,9 +501,12 @@ private struct MeetingSessionDetailView: View {
                             .frame(width: 28)
 
                         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                            Text("Saved Audio")
+                            Text("Audio Recording")
                                 .font(MuesliTheme.headline())
                                 .foregroundStyle(MuesliTheme.textPrimary)
+                            Text("Stored in Muesli's app data until you export it.")
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(MuesliTheme.textSecondary)
                             Text(audioURL.lastPathComponent)
                                 .font(MuesliTheme.caption())
                                 .foregroundStyle(MuesliTheme.textTertiary)
@@ -496,18 +517,13 @@ private struct MeetingSessionDetailView: View {
                         Spacer()
                     }
 
-                    SavedAudioWaveformView(audioURL: audioURL)
-                        .frame(height: 52)
-                        .padding(.horizontal, MuesliTheme.spacing12)
-                        .padding(.vertical, MuesliTheme.spacing12)
-                        .background(MuesliTheme.accent.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    SavedAudioPlayerView(audioURL: audioURL)
 
                     Button {
                         sharePayload = MeetingSharePayload(items: [audioURL])
                         AppTelemetry.signal("meeting_audio_shared")
                     } label: {
-                        Label("Save Audio to Files", systemImage: "folder.badge.plus")
+                        Label("Export Audio to Files", systemImage: "square.and.arrow.up")
                             .font(MuesliTheme.headline())
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
@@ -894,6 +910,189 @@ private struct MeetingTranscriptContent: View {
             return "Diarization failed: \(message)"
         }
         return nil
+    }
+}
+
+private struct SavedAudioPlayerView: View {
+    let audioURL: URL
+
+    @State private var player: AVAudioPlayer?
+    @State private var isPlaying = false
+    @State private var currentTime: TimeInterval = 0
+    @State private var duration: TimeInterval = 0
+    @State private var samples: [CGFloat] = AudioWaveformSampler.placeholderSamples(count: 36)
+    @State private var playbackError: String?
+
+    private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(spacing: MuesliTheme.spacing12) {
+            waveform
+                .frame(height: 54)
+                .padding(.horizontal, MuesliTheme.spacing12)
+                .padding(.vertical, MuesliTheme.spacing12)
+                .background(MuesliTheme.accent.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
+            HStack(spacing: MuesliTheme.spacing12) {
+                Button(action: togglePlayback) {
+                    Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
+                        .font(MuesliTheme.headline())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                        .foregroundStyle(.white)
+                        .background(MuesliTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+                .buttonStyle(.plain)
+
+                Button(action: stopPlayback) {
+                    Label("Stop", systemImage: "stop.fill")
+                        .font(MuesliTheme.headline())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .background(MuesliTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+                .buttonStyle(.plain)
+                .disabled(currentTime == 0 && !isPlaying)
+                .opacity(currentTime == 0 && !isPlaying ? 0.55 : 1)
+            }
+
+            HStack {
+                Text(formatTime(currentTime))
+                Spacer()
+                Text(formatTime(duration))
+            }
+            .font(MuesliTheme.captionMedium())
+            .foregroundStyle(MuesliTheme.textTertiary)
+
+            if let playbackError {
+                Text(playbackError)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.recording)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .task(id: audioURL) {
+            samples = await AudioWaveformSampler.samples(from: audioURL, count: 36)
+            preparePlayer()
+        }
+        .onReceive(timer) { _ in
+            guard let player else { return }
+            currentTime = player.currentTime
+            if !player.isPlaying, isPlaying {
+                isPlaying = false
+                if currentTime >= max(duration - 0.2, 0) {
+                    currentTime = duration
+                }
+            }
+        }
+        .onDisappear {
+            player?.stop()
+            isPlaying = false
+        }
+    }
+
+    private var waveform: some View {
+        GeometryReader { geometry in
+            let spacing: CGFloat = 3
+            let barWidth = max(2, (geometry.size.width - spacing * CGFloat(samples.count - 1)) / CGFloat(samples.count))
+            let progress = duration > 0 ? min(max(currentTime / duration, 0), 1) : 0
+
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(Array(samples.enumerated()), id: \.offset) { index, sample in
+                    let isPlayed = Double(index) / Double(max(samples.count - 1, 1)) <= progress
+                    RoundedRectangle(cornerRadius: barWidth / 2, style: .continuous)
+                        .fill(isPlayed ? MuesliTheme.accent : MuesliTheme.accent.opacity(0.32))
+                        .frame(
+                            width: barWidth,
+                            height: max(4, geometry.size.height * sample)
+                        )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        seek(toProgress: value.location.x, width: geometry.size.width)
+                    }
+            )
+            .accessibilityLabel("Audio waveform")
+            .accessibilityValue("\(formatTime(currentTime)) of \(formatTime(duration))")
+        }
+    }
+
+    private func preparePlayer() {
+        do {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
+            let player = try AVAudioPlayer(contentsOf: audioURL)
+            player.prepareToPlay()
+            self.player = player
+            duration = player.duration
+            currentTime = 0
+            isPlaying = false
+            playbackError = nil
+        } catch {
+            self.player = nil
+            duration = 0
+            currentTime = 0
+            isPlaying = false
+            playbackError = "Audio playback is unavailable for this recording."
+        }
+    }
+
+    private func togglePlayback() {
+        if player == nil {
+            preparePlayer()
+        }
+        guard let player else { return }
+
+        if player.isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            if currentTime >= duration {
+                player.currentTime = 0
+                currentTime = 0
+            }
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    private func stopPlayback() {
+        guard let player else { return }
+        player.stop()
+        player.currentTime = 0
+        currentTime = 0
+        isPlaying = false
+    }
+
+    private func seek(to time: TimeInterval) {
+        guard let player, duration > 0 else { return }
+        let clamped = min(max(time, 0), duration)
+        player.currentTime = clamped
+        currentTime = clamped
+    }
+
+    private func seek(toProgress xPosition: CGFloat, width: CGFloat) {
+        guard duration > 0 else { return }
+        let progress = min(max(xPosition / max(width, 1), 0), 1)
+        seek(to: TimeInterval(progress) * duration)
+    }
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        guard time.isFinite, time > 0 else { return "0:00" }
+        let totalSeconds = Int(time.rounded())
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 

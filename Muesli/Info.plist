@@ -33,6 +33,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>MuesliTelemetryDeckAppID</key>
 	<string>$(MUESLI_TELEMETRYDECK_APP_ID)</string>
 	<key>NSMicrophoneUsageDescription</key>

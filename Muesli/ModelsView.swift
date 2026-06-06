@@ -43,7 +43,7 @@ struct ModelsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
 
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Parakeet v3")
+                        Text(coordinator.selectedTranscriptionModel.shortName)
                             .font(MuesliTheme.title3())
                             .foregroundStyle(MuesliTheme.textPrimary)
                         Text("CoreML / ANE")
@@ -61,6 +61,18 @@ struct ModelsView: View {
                         .background(modelTint.opacity(0.12))
                         .clipShape(Capsule())
                 }
+
+                Picker("Transcription Model", selection: $coordinator.selectedTranscriptionModel) {
+                    ForEach(LocalTranscriptionModel.allCases) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text(coordinator.selectedTranscriptionModel.detail)
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                     Text(coordinator.modelPreparation.status)
@@ -101,7 +113,9 @@ struct ModelsView: View {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                 ModelInfoRow(icon: "cpu", title: "Runtime", value: "CoreML / ANE")
                 Divider().overlay(MuesliTheme.surfaceBorder)
-                ModelInfoRow(icon: "waveform", title: "Engine", value: "Parakeet v3")
+                ModelInfoRow(icon: "waveform", title: "Engine", value: coordinator.selectedTranscriptionModel.shortName)
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                ModelInfoRow(icon: "textformat", title: "Language", value: coordinator.selectedTranscriptionModel.capabilityLabel)
                 Divider().overlay(MuesliTheme.surfaceBorder)
                 ModelInfoRow(icon: "iphone", title: "Execution", value: "On device")
             }

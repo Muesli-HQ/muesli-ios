@@ -481,13 +481,61 @@ struct OnboardingView: View {
                 Text("Prepare Model")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("Parakeet v3 runs on CoreML / ANE. First setup downloads and compiles the model for this iPhone.")
+                Text("\(coordinator.selectedTranscriptionModel.shortName) runs on CoreML / ANE. First setup downloads and compiles the model for this iPhone.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
 
+            modelPicker
             modelPanel
         }
+    }
+
+    private var modelPicker: some View {
+        MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                HStack(spacing: MuesliTheme.spacing12) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .frame(width: 30)
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        Text("Transcription Model")
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                        Text(coordinator.selectedTranscriptionModel.detail)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                }
+
+                Picker("Transcription Model", selection: $coordinator.selectedTranscriptionModel) {
+                    ForEach(LocalTranscriptionModel.allCases) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: MuesliTheme.spacing8) {
+                    modelBadge(coordinator.selectedTranscriptionModel.capabilityLabel, icon: "textformat")
+                    modelBadge(coordinator.selectedTranscriptionModel.estimatedSizeLabel, icon: "internaldrive")
+                }
+            }
+            .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    private func modelBadge(_ text: String, icon: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(MuesliTheme.captionMedium())
+            .foregroundStyle(MuesliTheme.accent)
+            .padding(.horizontal, MuesliTheme.spacing8)
+            .padding(.vertical, MuesliTheme.spacing4)
+            .background(MuesliTheme.accent.opacity(0.12))
+            .clipShape(Capsule())
     }
 
     private var modelPanel: some View {
@@ -497,7 +545,7 @@ struct OnboardingView: View {
                     modelStatusIcon
 
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Parakeet v3")
+                        Text(coordinator.selectedTranscriptionModel.shortName)
                             .font(MuesliTheme.title3())
                             .foregroundStyle(MuesliTheme.textPrimary)
                         Text(coordinator.modelPreparation.status)

@@ -299,11 +299,24 @@ struct SettingsView: View {
                     SettingsRow(
                         icon: "checkmark.seal",
                         title: "Active Model",
-                        value: "Parakeet v3",
+                        value: coordinator.selectedTranscriptionModel.shortName,
                         valueColor: MuesliTheme.textSecondary
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
+                    Picker("Transcription Model", selection: $coordinator.selectedTranscriptionModel) {
+                        ForEach(LocalTranscriptionModel.allCases) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Text(coordinator.selectedTranscriptionModel.detail)
+                        .font(MuesliTheme.callout())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsRow(icon: "cpu", title: "Runtime", value: "CoreML / ANE")
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsRow(icon: "textformat", title: "Language", value: coordinator.selectedTranscriptionModel.capabilityLabel)
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsRow(icon: "iphone", title: "Execution", value: "On device")
                     Divider().overlay(MuesliTheme.surfaceBorder)

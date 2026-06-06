@@ -11,8 +11,8 @@ enum ModelPreparationPhase: Equatable {
 struct ModelPreparationState: Equatable {
     var phase: ModelPreparationPhase = .idle
     var progress: Double?
-    var status = "Parakeet v3 is not downloaded"
-    var detail = "On-device CoreML / ANE transcription"
+    var status = "\(LocalTranscriptionModel.defaultModel.shortName) is not downloaded"
+    var detail = LocalTranscriptionModel.defaultModel.detail
 
     var isPreparing: Bool {
         phase == .downloading || phase == .preparing

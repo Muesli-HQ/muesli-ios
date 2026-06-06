@@ -33,6 +33,27 @@ final class DictationCoordinator {
     var selectedUseCase = OnboardingUseCase(
         rawValue: UserDefaults.standard.string(forKey: useCaseKey) ?? ""
     ) ?? .keyboardDictation
+    var selectedTranscriptionModel = MuesliPreferences.transcriptionModel {
+        didSet {
+            guard oldValue != selectedTranscriptionModel else { return }
+            UserDefaults.standard.set(
+                selectedTranscriptionModel.rawValue,
+                forKey: MuesliPreferences.transcriptionModelKey
+            )
+            modelPreparationTask?.cancel()
+            modelPreparation = ModelPreparationState(
+                status: "\(selectedTranscriptionModel.shortName) is not downloaded",
+                detail: selectedTranscriptionModel.detail
+            )
+            Task { [engine, selectedTranscriptionModel] in
+                await engine.selectModel(selectedTranscriptionModel)
+            }
+            AppTelemetry.signal(
+                "transcription_model_selected",
+                parameters: ["engine": selectedTranscriptionModel.engineIdentifier]
+            )
+        }
+    }
     var modelPreparation = ModelPreparationState()
     var isOnboardingTestRecording = false
     var isOnboardingTestTranscribing = false
@@ -350,18 +371,20 @@ final class DictationCoordinator {
     func prepareModelForOnboarding() {
         guard !modelPreparation.isPreparing, !modelPreparation.isReady else { return }
 
+        let model = selectedTranscriptionModel
         modelPreparationTask?.cancel()
         modelPreparation = ModelPreparationState(
             phase: .downloading,
             progress: 0,
             status: "Checking model files...",
-            detail: "Parakeet v3"
+            detail: model.shortName
         )
-        AppTelemetry.signal("model_prepare_started", parameters: ["engine": engine.identifier])
+        AppTelemetry.signal("model_prepare_started", parameters: ["engine": model.engineIdentifier])
 
         let coordinator = self
-        modelPreparationTask = Task { [engine] in
+        modelPreparationTask = Task { [engine, model] in
             do {
+                await engine.selectModel(model)
                 try await engine.prepare { progress, status in
                     Task { @MainActor in
                         coordinator.applyModelPreparationProgress(progress, status: status)
@@ -373,10 +396,10 @@ final class DictationCoordinator {
                     coordinator.modelPreparation = ModelPreparationState(
                         phase: .ready,
                         progress: 1,
-                        status: "Parakeet v3 ready",
-                        detail: "Ready for on-device dictation"
+                        status: "\(model.shortName) ready",
+                        detail: model.detail
                     )
-                    AppTelemetry.signal("model_prepare_completed", parameters: ["engine": coordinator.engine.identifier])
+                    AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -394,7 +417,7 @@ final class DictationCoordinator {
                     AppTelemetry.signal(
                         "model_prepare_failed",
                         parameters: [
-                            "engine": coordinator.engine.identifier,
+                            "engine": model.engineIdentifier,
                             "error": String(describing: type(of: error))
                         ]
                     )
@@ -492,7 +515,9 @@ final class DictationCoordinator {
         modelPreparation = ModelPreparationState(
             phase: phase,
             progress: normalizedProgress,
-            status: phase == .preparing ? "Optimizing for this iPhone..." : "Downloading Parakeet v3",
+            status: phase == .preparing
+                ? "Optimizing for this iPhone..."
+                : "Downloading \(selectedTranscriptionModel.shortName)",
             detail: detail
         )
     }

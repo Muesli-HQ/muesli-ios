@@ -9,6 +9,7 @@ enum MuesliPreferences {
     static let keyboardSessionTimeoutMinutesKey = "muesli.keyboardSession.timeoutMinutes"
     static let fillerWordRemovalKey = "muesli.transcription.fillerWordRemoval"
     static let customDictionaryKey = "muesli.transcription.customDictionary"
+    static let transcriptionModelKey = "muesli.transcription.localModel"
     static let keepMeetingAudioRecordingsKey = "muesli.meetings.keepAudioRecordings"
     static let meetingSummariesEnabledKey = "muesli.meetings.summaries.enabled"
     static let meetingSummaryBackendKey = "muesli.meetings.summary.backend"
@@ -53,6 +54,12 @@ enum MuesliPreferences {
 
     static var customDictionaryEnabled: Bool {
         bool(for: customDictionaryKey, defaultValue: true)
+    }
+
+    static var transcriptionModel: LocalTranscriptionModel {
+        LocalTranscriptionModel(
+            rawValue: UserDefaults.standard.string(forKey: transcriptionModelKey) ?? ""
+        ) ?? .defaultModel
     }
 
     static var keepMeetingAudioRecordingsEnabled: Bool {

@@ -6,10 +6,19 @@ import Foundation
 extension OfflineDiarizerManager: @retroactive @unchecked Sendable {}
 
 actor FluidAudioTranscriptionEngine: TranscriptionEngine {
-    nonisolated let identifier = "parakeet-v3"
+    nonisolated var identifier: String {
+        MuesliPreferences.transcriptionModel.engineIdentifier
+    }
 
     private var manager: AsrManager?
+    private var selectedModel = MuesliPreferences.transcriptionModel
     private var diarizationRuntime: FluidAudioDiarizationRuntime?
+
+    func selectModel(_ model: LocalTranscriptionModel) {
+        guard selectedModel != model else { return }
+        selectedModel = model
+        manager = nil
+    }
 
     func prepare(progress: (@Sendable (Double, String?) -> Void)? = nil) async throws {
         _ = try await loadedManager(progress: progress)
@@ -56,7 +65,8 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             return manager
         }
 
-        let models = try await AsrModels.downloadAndLoad(version: .v3) { downloadProgress in
+        let model = selectedModel
+        let models = try await AsrModels.downloadAndLoad(version: model.asrVersion) { downloadProgress in
             let fraction = min(max(downloadProgress.fractionCompleted, 0), 1)
             progress?(fraction, Self.statusText(for: downloadProgress.phase, fraction: fraction))
         }
@@ -64,7 +74,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         self.manager = manager
-        progress?(1.0, "Parakeet v3 ready")
+        progress?(1.0, "\(model.shortName) ready")
         return manager
     }
 

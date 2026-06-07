@@ -11,6 +11,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
     }
 
     private var manager: AsrManager?
+    private var isLoadingManager = false
     private var selectedModel = MuesliPreferences.transcriptionModel
     private var diarizationRuntime: FluidAudioDiarizationRuntime?
 
@@ -18,6 +19,11 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         guard selectedModel != model else { return }
         selectedModel = model
         manager = nil
+        isLoadingManager = false
+    }
+
+    func isLoaded(for model: LocalTranscriptionModel) -> Bool {
+        manager != nil && selectedModel == model
     }
 
     func prepare(progress: (@Sendable (Double, String?) -> Void)? = nil) async throws {
@@ -63,6 +69,18 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
     private func loadedManager(progress: (@Sendable (Double, String?) -> Void)?) async throws -> AsrManager {
         if let manager {
             return manager
+        }
+
+        while isLoadingManager {
+            try await Task.sleep(for: .milliseconds(150))
+            if let manager {
+                return manager
+            }
+        }
+
+        isLoadingManager = true
+        defer {
+            isLoadingManager = false
         }
 
         let model = selectedModel

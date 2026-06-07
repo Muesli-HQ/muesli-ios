@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+@preconcurrency import FluidAudio
 import Observation
 import UIKit
 
@@ -13,13 +14,20 @@ final class DictationCoordinator {
     private let store = SharedStore()
     private let engine = FluidAudioTranscriptionEngine()
     private let recorder = AudioRecorder()
+    private var meetingRecorder: StreamingMeetingRecorder?
+    private var meetingVadController: StreamingVadController?
     private let keyboardSessionKeeper = KeyboardSessionKeeper()
     private let liveActivityController = MuesliLiveActivityController()
     private var modelPreparationTask: Task<Void, Never>?
+    private var modelPrewarmTask: Task<Void, Never>?
     private var meteringTask: Task<Void, Never>?
     private var commandPollingTask: Task<Void, Never>?
     private var keyboardRuntimePollingTask: Task<Void, Never>?
     private var keyboardSessionTimeoutTask: Task<Void, Never>?
+    private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
+    private var meetingChunkTranscriptions: [MeetingChunkTranscription] = []
+    private var meetingChunksDirectory: URL?
+    private let meetingVadQueue = DispatchQueue(label: "com.phequals7.muesli.meeting-vad")
     private var transcriptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     private var activeRequest: DictationRequest?
@@ -41,6 +49,8 @@ final class DictationCoordinator {
                 forKey: MuesliPreferences.transcriptionModelKey
             )
             modelPreparationTask?.cancel()
+            modelPrewarmTask?.cancel()
+            modelPrewarmTask = nil
             modelPreparation = ModelPreparationState(
                 status: "\(selectedTranscriptionModel.shortName) is not downloaded",
                 detail: selectedTranscriptionModel.detail
@@ -83,6 +93,7 @@ final class DictationCoordinator {
         Task {
             await liveActivityController.endInactiveActivities()
         }
+        prewarmModelIfNeeded(reason: "launch")
         if MuesliPreferences.keyboardSessionModeEnabled {
             Task { @MainActor in
                 await startKeyboardSessionMode()
@@ -270,6 +281,7 @@ final class DictationCoordinator {
 
     func startKeyboardSessionMode() async {
         guard !isKeyboardSessionArmed else {
+            prewarmModelIfNeeded(reason: "keyboard_session")
             saveKeyboardRuntimeStatus(
                 isActive: true,
                 activeRequestID: activeRequest?.id,
@@ -284,6 +296,7 @@ final class DictationCoordinator {
         do {
             try await keyboardSessionKeeper.start()
             isKeyboardSessionArmed = true
+            prewarmModelIfNeeded(reason: "keyboard_session")
             keyboardSessionStatusText = "Ready"
             isKeyboardHandoffActive = false
             startKeyboardRuntimePolling()
@@ -430,6 +443,69 @@ final class DictationCoordinator {
         prepareModelForOnboarding()
     }
 
+    func prewarmModelIfNeeded(reason: String) {
+        guard hasCompletedOnboarding else { return }
+        guard modelPrewarmTask == nil else { return }
+        guard modelPreparationTask == nil, !modelPreparation.isPreparing else { return }
+        guard !isRecording, !isMeetingRecording else { return }
+
+        let model = selectedTranscriptionModel
+        let coordinator = self
+        modelPrewarmTask = Task { [engine, model] in
+            do {
+                await engine.selectModel(model)
+                guard await !engine.isLoaded(for: model) else {
+                    await MainActor.run {
+                        coordinator.modelPrewarmTask = nil
+                        coordinator.modelPreparation = ModelPreparationState(
+                            phase: .ready,
+                            progress: 1,
+                            status: "\(model.shortName) ready",
+                            detail: "Loaded in memory"
+                        )
+                    }
+                    return
+                }
+
+                AppTelemetry.signal(
+                    "model_prewarm_started",
+                    parameters: ["engine": model.engineIdentifier, "reason": reason]
+                )
+                try await engine.prepare()
+
+                await MainActor.run {
+                    coordinator.modelPrewarmTask = nil
+                    coordinator.modelPreparation = ModelPreparationState(
+                        phase: .ready,
+                        progress: 1,
+                        status: "\(model.shortName) ready",
+                        detail: "Loaded in memory"
+                    )
+                    AppTelemetry.signal(
+                        "model_prewarm_completed",
+                        parameters: ["engine": model.engineIdentifier, "reason": reason]
+                    )
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    coordinator.modelPrewarmTask = nil
+                }
+            } catch {
+                await MainActor.run {
+                    coordinator.modelPrewarmTask = nil
+                    AppTelemetry.signal(
+                        "model_prewarm_failed",
+                        parameters: [
+                            "engine": model.engineIdentifier,
+                            "reason": reason,
+                            "error": String(describing: type(of: error))
+                        ]
+                    )
+                }
+            }
+        }
+    }
+
     func startOnboardingTestDictation() {
         guard !isOnboardingTestRecording else { return }
         MuesliHaptics.dictationStart()
@@ -502,6 +578,7 @@ final class DictationCoordinator {
                 "use_case": selectedUseCase.rawValue
             ]
         )
+        prewarmModelIfNeeded(reason: "onboarding_completed")
     }
 
     private func applyModelPreparationProgress(_ progress: Double, status: String?) {
@@ -749,17 +826,40 @@ final class DictationCoordinator {
         Task {
             do {
                 let audioURL = try store.newAudioFileURL(sessionID: session.id)
+                let chunksDirectory = try meetingChunkDirectory(for: session.id)
+                try? FileManager.default.removeItem(at: chunksDirectory)
                 session.audioFileName = audioURL.lastPathComponent
                 session.startedAt = .now
                 try store.saveSession(session)
                 try await recorder.requestPermission()
-                try recorder.start(outputURL: audioURL)
+
+                let vadManager = try await VadManager()
+                let vadController = StreamingVadController(vadManager: vadManager)
+                let streamingRecorder = StreamingMeetingRecorder()
+                vadController.onChunkBoundary = { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.rotateActiveMeetingChunk()
+                    }
+                }
+                streamingRecorder.onAudioSamples = { [vadController, meetingVadQueue] samples in
+                    meetingVadQueue.async {
+                        vadController.processAudio(samples)
+                    }
+                }
+
+                try streamingRecorder.start(chunksDirectory: chunksDirectory, retainedAudioURL: audioURL)
+                vadController.start()
+
+                meetingRecorder = streamingRecorder
+                meetingVadController = vadController
+                meetingChunksDirectory = chunksDirectory
+                meetingChunkTasks.removeAll(keepingCapacity: true)
+                meetingChunkTranscriptions.removeAll(keepingCapacity: true)
                 activeSession = session
                 isMeetingRecording = true
                 meetingStatusText = "Recording"
-                startMetering { [weak self] level in
-                    self?.inputLevel = level
-                }
+                startMeetingMetering()
+                prewarmModelIfNeeded(reason: "meeting_recording")
                 refreshHistory()
                 AppTelemetry.signal("meeting_recording_started")
                 Task {
@@ -787,40 +887,178 @@ final class DictationCoordinator {
         guard isMeetingRecording, var session = activeSession, session.kind == .meeting else { return }
         MuesliHaptics.dictationStop()
         isMeetingRecording = false
+        isMeetingTranscribing = true
         stopMetering()
-        meetingStatusText = queueForTranscription ? "Queued for transcription" : "Transcribing"
+        meetingStatusText = "Finishing recording"
 
         do {
-            let audioURL = try recorder.stop()
-            session.audioFileName = session.audioFileName ?? audioURL.lastPathComponent
+            meetingVadController?.stop()
+            let stoppedAudio = meetingRecorder?.stop()
+            meetingRecorder = nil
+            meetingVadController = nil
+            if let finalChunk = stoppedAudio?.finalChunk {
+                scheduleMeetingChunkTranscription(finalChunk, sessionID: session.id)
+            }
+            session.audioFileName = session.audioFileName ?? stoppedAudio?.retainedAudioURL?.lastPathComponent
             session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
             session.endedAt = .now
-            session.phase = queueForTranscription ? .transcriptionQueued : .transcribing
+            session.phase = .transcribing
             try store.saveSession(session)
             activeSession = nil
             refreshHistory()
             Task {
-                await liveActivityController.end(
-                    phase: queueForTranscription ? "Queued" : "Transcribing",
-                    detail: queueForTranscription ? "Saved for delayed transcription" : "Transcribing locally",
+                await liveActivityController.update(
+                    phase: "Transcribing",
+                    detail: "Processing meeting chunks",
                     session: session
                 )
             }
             AppTelemetry.signal("meeting_recording_stopped", parameters: [
-                "queued": queueForTranscription ? "true" : "false"
+                "queued": "false"
             ])
 
-            if !queueForTranscription {
-                transcribeSession(session)
-            }
+            finalizeStreamingMeeting(session)
         } catch {
             session.phase = .failed
             session.errorMessage = error.localizedDescription
             try? store.saveSession(session)
             activeSession = nil
+            isMeetingTranscribing = false
             meetingStatusText = error.localizedDescription
             refreshHistory()
             AppTelemetry.signal("meeting_recording_failed", parameters: ["stage": "stop"])
+        }
+    }
+
+    private func rotateActiveMeetingChunk() {
+        guard isMeetingRecording, let session = activeSession, session.kind == .meeting else { return }
+        guard let chunk = meetingRecorder?.rotateChunk() else { return }
+        meetingVadController?.notifyRotation()
+        scheduleMeetingChunkTranscription(chunk, sessionID: session.id)
+    }
+
+    private func scheduleMeetingChunkTranscription(_ chunk: MeetingAudioChunk, sessionID: UUID) {
+        let task: Task<MeetingChunkTranscription?, Never> = Task { [engine] in
+            do {
+                let result = try await engine.transcribeDetailed(audioURL: chunk.url)
+                try? FileManager.default.removeItem(at: chunk.url)
+                return MeetingChunkTranscription(chunk: chunk, result: result)
+            } catch {
+                AppTelemetry.signal("meeting_chunk_transcription_failed", parameters: [
+                    "chunk": "\(chunk.index)",
+                    "error": String(describing: type(of: error))
+                ])
+                return nil
+            }
+        }
+        meetingChunkTasks.append(task)
+
+        Task { @MainActor [weak self] in
+            guard let self, let transcription = await task.value else { return }
+            self.meetingChunkTranscriptions.append(transcription)
+            self.savePartialMeetingTranscript(sessionID: sessionID)
+        }
+    }
+
+    private func savePartialMeetingTranscript(sessionID: UUID) {
+        let merged = MeetingChunkTranscriptMerger.merge(meetingChunkTranscriptions)
+        let text = postProcessTranscript(merged.text)
+        guard !text.isEmpty else { return }
+
+        let transcript = Transcript(
+            sessionID: sessionID,
+            text: text,
+            engineIdentifier: engine.identifier,
+            speakerTranscript: nil,
+            summaryText: nil,
+            diarizationState: .processing,
+            summaryState: MuesliPreferences.meetingSummariesEnabled ? .processing : .notStarted
+        )
+        try? store.saveTranscript(transcript)
+        if var session = try? store.recordingSession(id: sessionID) {
+            session.transcriptID = transcript.id
+            session.engineIdentifier = engine.identifier
+            try? store.saveSession(session)
+        }
+        refreshHistory()
+    }
+
+    private func finalizeStreamingMeeting(_ session: RecordingSession) {
+        beginTranscriptionBackgroundTask()
+        Task {
+            defer {
+                endTranscriptionBackgroundTask()
+                isMeetingTranscribing = false
+            }
+
+            var session = session
+            do {
+                meetingStatusText = "Transcribing"
+                for task in meetingChunkTasks {
+                    if let transcription = await task.value,
+                       !meetingChunkTranscriptions.contains(where: { $0.chunk.index == transcription.chunk.index }) {
+                        meetingChunkTranscriptions.append(transcription)
+                    }
+                }
+                meetingChunkTasks.removeAll(keepingCapacity: false)
+
+                let mergedTranscription = MeetingChunkTranscriptMerger.merge(meetingChunkTranscriptions)
+                let text = postProcessTranscript(mergedTranscription.text)
+                let audioURL = try session.audioFileName.map { try store.audioFileURL(fileName: $0) }
+                let finalTranscript = try await finalizeMeetingTranscript(
+                    session: session,
+                    text: text,
+                    detailedTranscription: DetailedTranscriptionResult(
+                        text: text,
+                        duration: mergedTranscription.duration,
+                        tokens: mergedTranscription.tokens
+                    ),
+                    audioURL: audioURL
+                )
+
+                session.phase = .completed
+                session.title = finalTranscript.resolvedTitle
+                session.transcriptID = finalTranscript.transcript.id
+                session.engineIdentifier = engine.identifier
+                session.errorMessage = nil
+                if !session.keepsAudioRecording, let audioFileName = session.audioFileName {
+                    try? store.deleteAudioFile(fileName: audioFileName)
+                    session.audioFileName = nil
+                }
+                try store.saveSession(session)
+                cleanupMeetingChunks()
+                meetingStatusText = "Ready"
+                refreshHistory()
+                await liveActivityController.end(
+                    phase: "Completed",
+                    detail: finalTranscript.transcript.summaryText == nil ? "Meeting transcript saved" : "Meeting notes saved",
+                    session: session
+                )
+                AppTelemetry.signal("meeting_transcription_completed", parameters: [
+                    "engine": engine.identifier,
+                    "empty": text.isEmpty ? "true" : "false",
+                    "diarized": finalTranscript.transcript.diarizationState == .completed ? "true" : "false",
+                    "summarized": finalTranscript.transcript.summaryState == .completed ? "true" : "false",
+                    "chunked": "true"
+                ])
+            } catch {
+                session.phase = .failed
+                session.errorMessage = error.localizedDescription
+                try? store.saveSession(session)
+                cleanupMeetingChunks()
+                meetingStatusText = error.localizedDescription
+                refreshHistory()
+                await liveActivityController.end(
+                    phase: "Failed",
+                    detail: "Transcription failed",
+                    session: session
+                )
+                AppTelemetry.signal("meeting_transcription_failed", parameters: [
+                    "engine": engine.identifier,
+                    "error": String(describing: type(of: error)),
+                    "chunked": "true"
+                ])
+            }
         }
     }
 
@@ -855,90 +1093,19 @@ final class DictationCoordinator {
                 let audioURL = try store.audioFileURL(fileName: audioFileName)
                 let detailedTranscription = try await engine.transcribeDetailed(audioURL: audioURL)
                 let text = postProcessTranscript(detailedTranscription.text)
-                var speakerTranscript: String?
-                var diarizationState: MeetingProcessingState = .processing
-                var diarizationErrorMessage: String?
-                meetingStatusText = "Diarizing"
-
-                do {
-                    let diarizationSegments = try await engine.diarize(audioURL: audioURL)
-                    speakerTranscript = MeetingTranscriptFormatter.speakerTranscript(
-                        transcription: DetailedTranscriptionResult(
-                            text: text,
-                            duration: detailedTranscription.duration,
-                            tokens: detailedTranscription.tokens
-                        ),
-                        diarizationSegments: diarizationSegments,
-                        meetingStart: session.startedAt ?? session.createdAt
-                    )
-                    diarizationState = .completed
-                } catch {
-                    speakerTranscript = nil
-                    diarizationState = .failed
-                    diarizationErrorMessage = error.localizedDescription
-                    AppTelemetry.signal("meeting_diarization_failed", parameters: [
-                        "error": String(describing: type(of: error))
-                    ])
-                }
-
-                var summaryText: String?
-                var summaryState: MeetingProcessingState = MuesliPreferences.meetingSummariesEnabled ? .processing : .notStarted
-                var summaryBackend: String?
-                var summaryModel: String?
-                var summaryErrorMessage: String?
-                var resolvedTitle = session.title
-
-                if MuesliPreferences.meetingSummariesEnabled {
-                    meetingStatusText = "Summarizing"
-                    let summarySource = speakerTranscript?.isEmpty == false ? speakerTranscript! : text
-                    do {
-                        let summary = try await MeetingSummaryClient.summarize(
-                            transcript: summarySource,
-                            meetingTitle: session.title ?? session.kind.title
-                        )
-                        summaryText = summary.notes
-                        summaryState = .completed
-                        summaryBackend = summary.backend.rawValue
-                        summaryModel = summary.model
-                        if !summary.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            resolvedTitle = summary.title
-                        }
-                    } catch {
-                        summaryText = MeetingSummaryClient.failureNotes(
-                            transcript: summarySource,
-                            meetingTitle: session.title ?? session.kind.title,
-                            error: error
-                        )
-                        summaryState = .failed
-                        summaryBackend = MuesliPreferences.meetingSummaryBackend.rawValue
-                        summaryModel = MuesliPreferences.meetingSummaryBackend == .chatGPT
-                            ? MuesliPreferences.chatGPTModel
-                            : MuesliPreferences.openRouterModel
-                        summaryErrorMessage = error.localizedDescription
-                        AppTelemetry.signal("meeting_summary_failed", parameters: [
-                            "backend": summaryBackend ?? "unknown",
-                            "error": String(describing: type(of: error))
-                        ])
-                    }
-                }
-
-                let transcript = Transcript(
-                    sessionID: session.id,
+                let finalTranscript = try await finalizeMeetingTranscript(
+                    session: session,
                     text: text,
-                    engineIdentifier: engine.identifier,
-                    speakerTranscript: speakerTranscript,
-                    summaryText: summaryText,
-                    diarizationState: diarizationState,
-                    diarizationErrorMessage: diarizationErrorMessage,
-                    summaryState: summaryState,
-                    summaryBackend: summaryBackend,
-                    summaryModel: summaryModel,
-                    summaryErrorMessage: summaryErrorMessage
+                    detailedTranscription: DetailedTranscriptionResult(
+                        text: text,
+                        duration: detailedTranscription.duration,
+                        tokens: detailedTranscription.tokens
+                    ),
+                    audioURL: audioURL
                 )
-                try store.saveTranscript(transcript)
                 session.phase = .completed
-                session.title = resolvedTitle
-                session.transcriptID = transcript.id
+                session.title = finalTranscript.resolvedTitle
+                session.transcriptID = finalTranscript.transcript.id
                 session.engineIdentifier = engine.identifier
                 session.errorMessage = nil
                 if !session.keepsAudioRecording {
@@ -950,14 +1117,14 @@ final class DictationCoordinator {
                 refreshHistory()
                 await liveActivityController.end(
                     phase: "Completed",
-                    detail: summaryText == nil ? "Meeting transcript saved" : "Meeting notes saved",
+                    detail: finalTranscript.transcript.summaryText == nil ? "Meeting transcript saved" : "Meeting notes saved",
                     session: session
                 )
                 AppTelemetry.signal("meeting_transcription_completed", parameters: [
                     "engine": engine.identifier,
                     "empty": text.isEmpty ? "true" : "false",
-                    "diarized": diarizationState == .completed ? "true" : "false",
-                    "summarized": summaryState == .completed ? "true" : "false"
+                    "diarized": finalTranscript.transcript.diarizationState == .completed ? "true" : "false",
+                    "summarized": finalTranscript.transcript.summaryState == .completed ? "true" : "false"
                 ])
             } catch {
                 session.phase = .failed
@@ -978,6 +1145,116 @@ final class DictationCoordinator {
         }
     }
 
+    private struct FinalizedMeetingTranscript {
+        let transcript: Transcript
+        let resolvedTitle: String?
+    }
+
+    private func finalizeMeetingTranscript(
+        session: RecordingSession,
+        text: String,
+        detailedTranscription: DetailedTranscriptionResult,
+        audioURL: URL?
+    ) async throws -> FinalizedMeetingTranscript {
+        var speakerTranscript: String?
+        var diarizationState: MeetingProcessingState = audioURL == nil ? .unavailable : .processing
+        var diarizationErrorMessage: String?
+
+        if let audioURL {
+            meetingStatusText = "Diarizing"
+            do {
+                let diarizationSegments = try await engine.diarize(audioURL: audioURL)
+                speakerTranscript = MeetingTranscriptFormatter.speakerTranscript(
+                    transcription: detailedTranscription,
+                    diarizationSegments: diarizationSegments,
+                    meetingStart: session.startedAt ?? session.createdAt
+                )
+                diarizationState = .completed
+            } catch {
+                speakerTranscript = nil
+                diarizationState = .failed
+                diarizationErrorMessage = error.localizedDescription
+                AppTelemetry.signal("meeting_diarization_failed", parameters: [
+                    "error": String(describing: type(of: error))
+                ])
+            }
+        }
+
+        var summaryText: String?
+        var summaryState: MeetingProcessingState = MuesliPreferences.meetingSummariesEnabled ? .processing : .notStarted
+        var summaryBackend: String?
+        var summaryModel: String?
+        var summaryErrorMessage: String?
+        var resolvedTitle = session.title
+
+        if MuesliPreferences.meetingSummariesEnabled {
+            meetingStatusText = "Summarizing"
+            let summarySource = speakerTranscript?.isEmpty == false ? speakerTranscript! : text
+            do {
+                let summary = try await MeetingSummaryClient.summarize(
+                    transcript: summarySource,
+                    meetingTitle: session.title ?? session.kind.title
+                )
+                summaryText = summary.notes
+                summaryState = .completed
+                summaryBackend = summary.backend.rawValue
+                summaryModel = summary.model
+                if !summary.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    resolvedTitle = summary.title
+                }
+            } catch {
+                summaryText = MeetingSummaryClient.failureNotes(
+                    transcript: summarySource,
+                    meetingTitle: session.title ?? session.kind.title,
+                    error: error
+                )
+                summaryState = .failed
+                summaryBackend = MuesliPreferences.meetingSummaryBackend.rawValue
+                summaryModel = MuesliPreferences.meetingSummaryBackend == .chatGPT
+                    ? MuesliPreferences.chatGPTModel
+                    : MuesliPreferences.openRouterModel
+                summaryErrorMessage = error.localizedDescription
+                AppTelemetry.signal("meeting_summary_failed", parameters: [
+                    "backend": summaryBackend ?? "unknown",
+                    "error": String(describing: type(of: error))
+                ])
+            }
+        }
+
+        let transcript = Transcript(
+            sessionID: session.id,
+            text: text,
+            engineIdentifier: engine.identifier,
+            speakerTranscript: speakerTranscript,
+            summaryText: summaryText,
+            diarizationState: diarizationState,
+            diarizationErrorMessage: diarizationErrorMessage,
+            summaryState: summaryState,
+            summaryBackend: summaryBackend,
+            summaryModel: summaryModel,
+            summaryErrorMessage: summaryErrorMessage
+        )
+        try store.saveTranscript(transcript)
+        return FinalizedMeetingTranscript(transcript: transcript, resolvedTitle: resolvedTitle)
+    }
+
+    private func meetingChunkDirectory(for sessionID: UUID) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-meeting-chunks", isDirectory: true)
+            .appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func cleanupMeetingChunks() {
+        if let meetingChunksDirectory {
+            try? FileManager.default.removeItem(at: meetingChunksDirectory)
+        }
+        meetingChunksDirectory = nil
+        meetingChunkTasks.removeAll(keepingCapacity: false)
+        meetingChunkTranscriptions.removeAll(keepingCapacity: false)
+    }
+
     private func startMetering(update: @escaping @MainActor (Double) -> Void) {
         meteringTask?.cancel()
         meteringTask = Task { @MainActor [weak self] in
@@ -989,6 +1266,22 @@ final class DictationCoordinator {
                 let normalized = min(max((power + 50) / 50, 0), 1)
                 smoothedLevel = (0.35 * normalized) + (0.65 * smoothedLevel)
                 update(smoothedLevel)
+                try? await Task.sleep(for: .milliseconds(33))
+            }
+        }
+    }
+
+    private func startMeetingMetering() {
+        meteringTask?.cancel()
+        meteringTask = Task { @MainActor [weak self] in
+            var smoothedLevel = 0.0
+
+            while !Task.isCancelled {
+                guard let self else { return }
+                let power = Double(self.meetingRecorder?.currentPower() ?? -160)
+                let normalized = min(max((power + 50) / 50, 0), 1)
+                smoothedLevel = (0.35 * normalized) + (0.65 * smoothedLevel)
+                self.inputLevel = smoothedLevel
                 try? await Task.sleep(for: .milliseconds(33))
             }
         }

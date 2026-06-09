@@ -36,7 +36,7 @@ struct KeyboardRootView: View {
                         primaryButtonLabel
                     }
                     .simultaneousGesture(TapGesture().onEnded {
-                        controller.startDictation()
+                        controller.primaryLaunchAction()
                     })
                     .buttonStyle(.plain)
                 } else {

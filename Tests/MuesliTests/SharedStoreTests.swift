@@ -107,6 +107,38 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try store.resultsHistory().map(\.text), ["newer dictation", "older dictation"])
     }
 
+    func testKeyboardHandoffStatePersistsAndClears() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let started = KeyboardHandoffState(
+            requestID: requestID,
+            phase: .startRequested,
+            message: "Starting"
+        )
+        let acknowledged = started.advanced(
+            to: .startAcknowledged,
+            message: "Starting",
+            recoveryAttemptCount: 1
+        )
+
+        XCTAssertEqual(try store.keyboardHandoffState(), .idle)
+
+        try store.saveKeyboardHandoffState(started)
+        XCTAssertEqual(try store.keyboardHandoffState(), started)
+
+        try store.saveKeyboardHandoffState(acknowledged)
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, requestID)
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .startAcknowledged)
+        XCTAssertEqual(try store.keyboardHandoffState().message, "Starting")
+        XCTAssertEqual(try store.keyboardHandoffState().recoveryAttemptCount, 1)
+
+        try store.clearKeyboardHandoffState()
+        XCTAssertEqual(try store.keyboardHandoffState(), .idle)
+    }
+
     func testResultsHistoryReplacesResultForSameRequest() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)

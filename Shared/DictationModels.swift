@@ -15,6 +15,37 @@ enum DictationCommandAction: String, Codable, Sendable, Equatable {
     case cancel
 }
 
+enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
+    case idle
+    case startRequested
+    case startAcknowledged
+    case recordingStarted
+    case stopRequested
+    case stopAcknowledged
+    case audioSaved
+    case transcribingStarted
+    case resultReady
+    case inserted
+    case recoveryRequested
+    case failed
+    case cancelled
+
+    var dictationPhase: DictationPhase {
+        switch self {
+        case .idle, .inserted, .cancelled:
+            .idle
+        case .startRequested, .startAcknowledged:
+            .requested
+        case .recordingStarted, .stopRequested:
+            .recording
+        case .stopAcknowledged, .audioSaved, .transcribingStarted, .resultReady:
+            .transcribing
+        case .recoveryRequested, .failed:
+            .failed
+        }
+    }
+}
+
 enum RecordingSessionKind: String, Codable, Sendable, Equatable, CaseIterable {
     case quickDictation
     case keyboardDictation
@@ -79,6 +110,49 @@ struct DictationCommand: Codable, Sendable, Equatable {
         self.action = action
         self.createdAt = createdAt
     }
+}
+
+struct KeyboardHandoffState: Codable, Sendable, Equatable {
+    let requestID: UUID?
+    let phase: KeyboardHandoffPhase
+    let message: String?
+    let recoveryAttemptCount: Int
+    let createdAt: Date
+    let updatedAt: Date
+
+    init(
+        requestID: UUID?,
+        phase: KeyboardHandoffPhase,
+        message: String? = nil,
+        recoveryAttemptCount: Int = 0,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.requestID = requestID
+        self.phase = phase
+        self.message = message
+        self.recoveryAttemptCount = recoveryAttemptCount
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func advanced(
+        to phase: KeyboardHandoffPhase,
+        message: String? = nil,
+        recoveryAttemptCount: Int? = nil,
+        updatedAt: Date = .now
+    ) -> KeyboardHandoffState {
+        KeyboardHandoffState(
+            requestID: requestID,
+            phase: phase,
+            message: message,
+            recoveryAttemptCount: recoveryAttemptCount ?? self.recoveryAttemptCount,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    static let idle = KeyboardHandoffState(requestID: nil, phase: .idle)
 }
 
 struct DictationResult: Codable, Sendable, Equatable, Identifiable {

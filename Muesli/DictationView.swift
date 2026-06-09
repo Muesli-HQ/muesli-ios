@@ -79,6 +79,27 @@ struct DictationView: View {
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
 
+                if shouldShowRealtimeTranscript {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                        HStack(spacing: MuesliTheme.spacing8) {
+                            Image(systemName: "text.bubble")
+                            Text("Live Transcript")
+                        }
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.accent)
+
+                        Text(coordinator.liveDictationTranscript)
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(MuesliTheme.spacing12)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+
                 Button {
                     coordinator.toggleRecording()
                 } label: {
@@ -176,6 +197,12 @@ struct DictationView: View {
 
     private var isTranscribing: Bool {
         coordinator.statusText == "Transcribing"
+    }
+
+    private var shouldShowRealtimeTranscript: Bool {
+        coordinator.selectedTranscriptionModel.supportsRealtimeStreaming
+            && isWaveformActive
+            && !coordinator.liveDictationTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var isDictationButtonDisabled: Bool {

@@ -15,6 +15,11 @@ final class DictationCoordinator {
     private let engine = FluidAudioTranscriptionEngine()
     private let recorder = AudioRecorder()
     private var meetingRecorder: StreamingMeetingRecorder?
+    private var realtimeDictationRecorder: StreamingMeetingRecorder?
+    private var realtimeDictationBufferPipe: RealtimeAudioBufferPipe?
+    private var realtimeDictationProcessingTask: Task<Void, Never>?
+    private var realtimeDictationChunksDirectory: URL?
+    private var realtimeDictationCommittedText = ""
     private var meetingVadController: StreamingVadController?
     private let keyboardSessionKeeper = KeyboardSessionKeeper()
     private let liveActivityController = MuesliLiveActivityController()
@@ -75,12 +80,31 @@ final class DictationCoordinator {
     var statusText = "Ready"
     var meetingStatusText = "Ready"
     var lastTranscript = ""
+    var liveDictationTranscript = ""
     var dictationHistory: [DictationResult] = []
     var recordingSessions: [RecordingSession] = []
     var isMeetingRecording = false
     var isMeetingTranscribing = false
     var activeMeetingTitle = "Untitled Meeting"
     var clipboardStatusText: String?
+
+    var hasMeetingRecordingInProgress: Bool {
+        isMeetingRecording || persistedRecordingMeetingSession != nil
+    }
+
+    var effectiveMeetingStatusText: String {
+        if isMeetingRecording || persistedRecordingMeetingSession != nil {
+            "Recording"
+        } else {
+            meetingStatusText
+        }
+    }
+
+    private var persistedRecordingMeetingSession: RecordingSession? {
+        recordingSessions.first { session in
+            session.kind == .meeting && session.phase == .recording
+        }
+    }
 
     init() {
         #if DEBUG
@@ -91,7 +115,9 @@ final class DictationCoordinator {
 
         refreshHistory()
         Task {
-            await liveActivityController.endInactiveActivities()
+            await liveActivityController.endAllActivities(
+                detail: "Recovered from interrupted session"
+            )
         }
         prewarmModelIfNeeded(reason: "launch")
         if MuesliPreferences.keyboardSessionModeEnabled {
@@ -599,9 +625,84 @@ final class DictationCoordinator {
         )
     }
 
+    private func startRealtimeDictationRecorder(audioURL: URL, sessionID: UUID) async throws {
+        await engine.selectModel(selectedTranscriptionModel)
+        realtimeDictationCommittedText = ""
+        liveDictationTranscript = ""
+        try await engine.startRealtimeSession(
+            partialTranscript: { [weak self] partial in
+                Task { @MainActor in
+                    self?.updateRealtimeDictationPartial(partial)
+                }
+            },
+            endOfUtterance: { [weak self] utterance in
+                Task { @MainActor in
+                    self?.commitRealtimeDictationUtterance(utterance)
+                }
+            }
+        )
+
+        let chunksDirectory = try meetingChunkDirectory(for: sessionID)
+        try? FileManager.default.removeItem(at: chunksDirectory)
+        try FileManager.default.createDirectory(at: chunksDirectory, withIntermediateDirectories: true)
+
+        let pipe = RealtimeAudioBufferPipe()
+        let streamingRecorder = StreamingMeetingRecorder()
+        streamingRecorder.onAudioBuffer = { [pipe] buffer in
+            pipe.append(buffer)
+        }
+
+        realtimeDictationProcessingTask = Task { [engine, pipe] in
+            for await audioBuffer in pipe.stream {
+                do {
+                    try await engine.processRealtimeAudioBuffer(audioBuffer.buffer)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    AppTelemetry.signal(
+                        "realtime_dictation_buffer_failed",
+                        parameters: ["error": String(describing: type(of: error))]
+                    )
+                }
+            }
+        }
+
+        try streamingRecorder.start(chunksDirectory: chunksDirectory, retainedAudioURL: audioURL)
+        realtimeDictationRecorder = streamingRecorder
+        realtimeDictationBufferPipe = pipe
+        realtimeDictationChunksDirectory = chunksDirectory
+    }
+
+    private func updateRealtimeDictationPartial(_ partial: String) {
+        let partial = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !partial.isEmpty else { return }
+
+        let committed = realtimeDictationCommittedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if committed.isEmpty {
+            liveDictationTranscript = partial
+        } else {
+            liveDictationTranscript = "\(committed) \(partial)"
+        }
+    }
+
+    private func commitRealtimeDictationUtterance(_ utterance: String) {
+        let utterance = utterance.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !utterance.isEmpty else { return }
+
+        let committed = realtimeDictationCommittedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if committed.isEmpty {
+            realtimeDictationCommittedText = utterance
+        } else if !committed.hasSuffix(utterance) {
+            realtimeDictationCommittedText = "\(committed) \(utterance)"
+        }
+        liveDictationTranscript = realtimeDictationCommittedText
+    }
+
     private func startRecording(for request: DictationRequest, source: String) {
         guard !isRecording, !isMeetingRecording, statusText != "Transcribing" else { return }
         activeRequest = request
+        liveDictationTranscript = ""
+        realtimeDictationCommittedText = ""
         let kind: RecordingSessionKind = source == "keyboard" ? .keyboardDictation : .quickDictation
         var session = RecordingSession(requestID: request.id, kind: kind)
 
@@ -616,7 +717,11 @@ final class DictationCoordinator {
                     keyboardSessionKeeper.stop(deactivateSession: false)
                     keyboardSessionStatusText = "Recording"
                 }
-                try recorder.start(outputURL: audioURL)
+                if selectedTranscriptionModel.supportsRealtimeStreaming {
+                    try await startRealtimeDictationRecorder(audioURL: audioURL, sessionID: session.id)
+                } else {
+                    try recorder.start(outputURL: audioURL)
+                }
                 activeSession = session
                 isRecording = true
                 if source == "keyboard" {
@@ -716,12 +821,38 @@ final class DictationCoordinator {
             defer { endTranscriptionBackgroundTask() }
 
             do {
-                let audioURL = try recorder.stop()
+                let usesRealtimeStreaming = realtimeDictationRecorder != nil
+                let audioURL: URL
+                var text: String
+
+                if usesRealtimeStreaming {
+                    let stoppedAudio = realtimeDictationRecorder?.stop()
+                    realtimeDictationRecorder = nil
+                    realtimeDictationBufferPipe?.finish()
+                    await realtimeDictationProcessingTask?.value
+                    realtimeDictationProcessingTask = nil
+                    realtimeDictationBufferPipe = nil
+                    if let realtimeDictationChunksDirectory {
+                        try? FileManager.default.removeItem(at: realtimeDictationChunksDirectory)
+                    }
+                    realtimeDictationChunksDirectory = nil
+                    guard let retainedAudioURL = stoppedAudio?.retainedAudioURL else {
+                        throw AudioRecorder.RecordingError.noRecording
+                    }
+                    audioURL = retainedAudioURL
+                    text = postProcessTranscript(try await engine.finishRealtimeSession())
+                    if text.isEmpty {
+                        text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                    }
+                    liveDictationTranscript = text
+                } else {
+                    audioURL = try recorder.stop()
+                    text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                }
                 if isKeyboardSessionArmed {
                     try? await keyboardSessionKeeper.start()
                     keyboardSessionStatusText = "Transcribing"
                 }
-                let text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
                 let completedSession = activeSession ?? session
                 let transcript: Transcript?
                 if var completedSession {
@@ -765,6 +896,8 @@ final class DictationCoordinator {
                 isKeyboardHandoffActive = false
                 resumeKeyboardSessionKeeperIfNeeded()
                 statusText = "Ready"
+                liveDictationTranscript = ""
+                realtimeDictationCommittedText = ""
                 if let completedSession = try? store.recordingSession(requestID: request.id) {
                     Task {
                         await liveActivityController.end(
@@ -799,6 +932,18 @@ final class DictationCoordinator {
                 )
                 isKeyboardHandoffActive = false
                 resumeKeyboardSessionKeeperIfNeeded()
+                realtimeDictationRecorder?.cancel()
+                realtimeDictationRecorder = nil
+                realtimeDictationBufferPipe?.finish()
+                realtimeDictationBufferPipe = nil
+                realtimeDictationProcessingTask?.cancel()
+                realtimeDictationProcessingTask = nil
+                if let realtimeDictationChunksDirectory {
+                    try? FileManager.default.removeItem(at: realtimeDictationChunksDirectory)
+                }
+                realtimeDictationChunksDirectory = nil
+                liveDictationTranscript = ""
+                realtimeDictationCommittedText = ""
                 statusText = error.localizedDescription
                 refreshHistory()
                 AppTelemetry.signal(
@@ -821,7 +966,7 @@ final class DictationCoordinator {
             ? "Untitled Meeting"
             : title.trimmingCharacters(in: .whitespacesAndNewlines)
         var session = RecordingSession(kind: .meeting, title: activeMeetingTitle)
-        session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
+        session.keepsAudioRecording = true
 
         Task {
             do {
@@ -883,8 +1028,38 @@ final class DictationCoordinator {
         }
     }
 
-    func stopMeetingRecording(queueForTranscription: Bool = true) {
-        guard isMeetingRecording, var session = activeSession, session.kind == .meeting else { return }
+    func stopCurrentMeetingRecording() {
+        if isMeetingRecording || meetingRecorder != nil {
+            stopMeetingRecording()
+            return
+        }
+
+        guard var session = persistedRecordingMeetingSession else { return }
+        session.endedAt = .now
+
+        guard session.audioFileName != nil else {
+            session.phase = .failed
+            session.errorMessage = "Muesli found a recording session without an active recorder or saved audio."
+            try? store.saveSession(session)
+            meetingStatusText = session.errorMessage ?? "Recording recovery failed"
+            refreshHistory()
+            AppTelemetry.signal("meeting_recording_recovery_failed", parameters: [
+                "reason": "missing_audio"
+            ])
+            return
+        }
+
+        session.phase = .transcriptionQueued
+        session.errorMessage = nil
+        try? store.saveSession(session)
+        refreshHistory()
+        AppTelemetry.signal("meeting_recording_recovered_for_transcription")
+        transcribeSession(session)
+    }
+
+    func stopMeetingRecording(queueForTranscription _: Bool = false) {
+        guard isMeetingRecording || meetingRecorder != nil else { return }
+        guard var session = activeSession ?? persistedRecordingMeetingSession, session.kind == .meeting else { return }
         MuesliHaptics.dictationStop()
         isMeetingRecording = false
         isMeetingTranscribing = true
@@ -900,7 +1075,7 @@ final class DictationCoordinator {
                 scheduleMeetingChunkTranscription(finalChunk, sessionID: session.id)
             }
             session.audioFileName = session.audioFileName ?? stoppedAudio?.retainedAudioURL?.lastPathComponent
-            session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
+            session.keepsAudioRecording = true
             session.endedAt = .now
             session.phase = .transcribing
             try store.saveSession(session)
@@ -1021,10 +1196,6 @@ final class DictationCoordinator {
                 session.transcriptID = finalTranscript.transcript.id
                 session.engineIdentifier = engine.identifier
                 session.errorMessage = nil
-                if !session.keepsAudioRecording, let audioFileName = session.audioFileName {
-                    try? store.deleteAudioFile(fileName: audioFileName)
-                    session.audioFileName = nil
-                }
                 try store.saveSession(session)
                 cleanupMeetingChunks()
                 meetingStatusText = "Ready"
@@ -1068,7 +1239,7 @@ final class DictationCoordinator {
         var session = session
         session.phase = .transcribing
         session.errorMessage = nil
-        session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
+        session.keepsAudioRecording = true
         try? store.saveSession(session)
         refreshHistory()
         isMeetingTranscribing = true
@@ -1108,10 +1279,6 @@ final class DictationCoordinator {
                 session.transcriptID = finalTranscript.transcript.id
                 session.engineIdentifier = engine.identifier
                 session.errorMessage = nil
-                if !session.keepsAudioRecording {
-                    try? store.deleteAudioFile(fileName: audioFileName)
-                    session.audioFileName = nil
-                }
                 try store.saveSession(session)
                 meetingStatusText = "Ready"
                 refreshHistory()
@@ -1262,7 +1429,7 @@ final class DictationCoordinator {
 
             while !Task.isCancelled {
                 guard let self else { return }
-                let power = Double(self.recorder.currentPower())
+                let power = Double(self.realtimeDictationRecorder?.currentPower() ?? self.recorder.currentPower())
                 let normalized = min(max((power + 50) / 50, 0), 1)
                 smoothedLevel = (0.35 * normalized) + (0.65 * smoothedLevel)
                 update(smoothedLevel)
@@ -1467,6 +1634,7 @@ final class DictationCoordinator {
         stopMetering()
         stopCommandPolling()
         _ = try? recorder.stop()
+        cleanupRealtimeDictationRecorder()
         if var session = activeSession {
             session.phase = .cancelled
             session.endedAt = .now
@@ -1494,5 +1662,53 @@ final class DictationCoordinator {
         try? store.clearPendingCommand()
         try? store.clearPendingRequest()
         try? store.saveStatus(.idle)
+    }
+
+    private func cleanupRealtimeDictationRecorder() {
+        realtimeDictationRecorder?.cancel()
+        realtimeDictationRecorder = nil
+        realtimeDictationBufferPipe?.finish()
+        realtimeDictationBufferPipe = nil
+        realtimeDictationProcessingTask?.cancel()
+        realtimeDictationProcessingTask = nil
+        if let realtimeDictationChunksDirectory {
+            try? FileManager.default.removeItem(at: realtimeDictationChunksDirectory)
+        }
+        realtimeDictationChunksDirectory = nil
+        realtimeDictationCommittedText = ""
+        liveDictationTranscript = ""
+    }
+}
+
+private struct SendableAudioBuffer: @unchecked Sendable {
+    let buffer: AVAudioPCMBuffer
+}
+
+private final class RealtimeAudioBufferPipe: @unchecked Sendable {
+    let stream: AsyncStream<SendableAudioBuffer>
+    private let lock = NSLock()
+    private var continuation: AsyncStream<SendableAudioBuffer>.Continuation?
+
+    init() {
+        var streamContinuation: AsyncStream<SendableAudioBuffer>.Continuation?
+        stream = AsyncStream<SendableAudioBuffer> { continuation in
+            streamContinuation = continuation
+        }
+        continuation = streamContinuation
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        let continuation = continuation
+        lock.unlock()
+        continuation?.yield(SendableAudioBuffer(buffer: buffer))
+    }
+
+    func finish() {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.finish()
     }
 }

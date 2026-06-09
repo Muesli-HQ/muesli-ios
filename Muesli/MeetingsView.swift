@@ -81,7 +81,7 @@ struct MeetingsView: View {
             Text("Meetings")
                 .font(MuesliTheme.title1())
                 .foregroundStyle(MuesliTheme.textPrimary)
-            Text("Record offline conversations and transcribe them locally when you are ready.")
+            Text("Record offline conversations and turn them into local notes.")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -96,14 +96,14 @@ struct MeetingsView: View {
                         Text("Meeting Recorder")
                             .font(MuesliTheme.title3())
                             .foregroundStyle(MuesliTheme.textPrimary)
-                        Text(coordinator.meetingStatusText)
+                        Text(coordinator.effectiveMeetingStatusText)
                             .font(MuesliTheme.callout())
                             .foregroundStyle(statusColor)
                     }
 
                     Spacer()
 
-                    Image(systemName: coordinator.isMeetingRecording ? "stop.circle.fill" : "mic.circle.fill")
+                    Image(systemName: coordinator.hasMeetingRecordingInProgress ? "stop.circle.fill" : "mic.circle.fill")
                         .font(.system(size: 30, weight: .semibold))
                         .foregroundStyle(statusColor)
                 }
@@ -115,11 +115,11 @@ struct MeetingsView: View {
                     .frame(height: 44)
                     .background(MuesliTheme.surfacePrimary)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    .disabled(coordinator.isMeetingRecording || coordinator.isMeetingTranscribing)
+                    .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)
 
                 meetingTemplatePicker
 
-                if coordinator.isMeetingRecording || coordinator.isMeetingTranscribing {
+                if coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing {
                     VStack(spacing: MuesliTheme.spacing8) {
                         MuesliInlineWaveformView(
                             mode: coordinator.isMeetingRecording ? .level : .waiting,
@@ -131,7 +131,7 @@ struct MeetingsView: View {
                         .frame(height: 54)
                         .padding(.horizontal, MuesliTheme.spacing16)
 
-                        Text(coordinator.isMeetingRecording ? "Recording" : "Transcribing")
+                        Text(coordinator.hasMeetingRecordingInProgress ? "Recording" : "Processing")
                             .font(MuesliTheme.captionMedium())
                             .foregroundStyle(MuesliTheme.textSecondary)
                     }
@@ -142,15 +142,15 @@ struct MeetingsView: View {
                 }
 
                 Button {
-                    if coordinator.isMeetingRecording {
-                        coordinator.stopMeetingRecording(queueForTranscription: true)
+                    if coordinator.hasMeetingRecordingInProgress {
+                        coordinator.stopCurrentMeetingRecording()
                     } else {
                         coordinator.startMeetingRecording(title: meetingTitle)
                     }
                 } label: {
                     Label(
-                        coordinator.isMeetingRecording ? "Stop and Queue" : "Start Meeting",
-                        systemImage: coordinator.isMeetingRecording ? "stop.fill" : "mic.fill"
+                        coordinator.hasMeetingRecordingInProgress ? "Stop Meeting" : "Start Meeting",
+                        systemImage: coordinator.hasMeetingRecordingInProgress ? "stop.fill" : "mic.fill"
                     )
                     .font(MuesliTheme.headline())
                     .frame(maxWidth: .infinity)
@@ -209,7 +209,7 @@ struct MeetingsView: View {
             .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
         .buttonStyle(.plain)
-        .disabled(coordinator.isMeetingRecording || coordinator.isMeetingTranscribing)
+        .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)
     }
 
     @ViewBuilder
@@ -295,7 +295,7 @@ struct MeetingsView: View {
     }
 
     private var statusColor: Color {
-        if coordinator.isMeetingRecording {
+        if coordinator.hasMeetingRecordingInProgress {
             MuesliTheme.recording
         } else if coordinator.isMeetingTranscribing {
             MuesliTheme.transcribing
@@ -1350,6 +1350,6 @@ private extension RecordingSessionPhase {
 
 private extension RecordingSession {
     var hasRetainedAudio: Bool {
-        phase == .completed && keepsAudioRecording && audioFileName != nil
+        kind == .meeting && audioFileName != nil
     }
 }

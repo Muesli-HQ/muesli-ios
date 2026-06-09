@@ -87,6 +87,28 @@ actor MuesliLiveActivityController {
         }
     }
 
+    func endAllActivities(phase: String = "Ended", detail: String = "Session ended") async {
+        for visibleActivity in Activity<MuesliLiveActivityAttributes>.activities {
+            await visibleActivity.end(
+                ActivityContent(
+                    state: MuesliLiveActivityAttributes.ContentState(
+                        title: visibleActivity.content.state.title,
+                        phase: phase,
+                        detail: detail,
+                        startedAt: visibleActivity.content.state.startedAt,
+                        accent: "blue"
+                    ),
+                    staleDate: nil
+                ),
+                dismissalPolicy: .immediate
+            )
+
+            if visibleActivity.id == activity?.id {
+                activity = nil
+            }
+        }
+    }
+
     func endDisabledActivities() async {
         if !MuesliPreferences.liveActivitiesForDictationsEnabled {
             await endActivities(forKinds: [.quickDictation, .keyboardDictation])

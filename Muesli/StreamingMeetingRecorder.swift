@@ -10,6 +10,7 @@ struct MeetingAudioChunk: Sendable, Equatable {
 
 final class StreamingMeetingRecorder: @unchecked Sendable {
     var onAudioSamples: (([Float]) -> Void)?
+    var onAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
 
     private struct FileState {
         var chunkFile: AVAudioFile?
@@ -253,7 +254,33 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         }
         lock.unlock()
 
+        if let audioBuffer = Self.copyBuffer(monoBuffer) {
+            onAudioBuffer?(audioBuffer)
+        }
         onAudioSamples?(samples)
+    }
+
+    private static func copyBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let copy = AVAudioPCMBuffer(
+            pcmFormat: buffer.format,
+            frameCapacity: buffer.frameLength
+        ) else {
+            return nil
+        }
+
+        copy.frameLength = buffer.frameLength
+        let channelCount = Int(buffer.format.channelCount)
+        let frameCount = Int(buffer.frameLength)
+        if let source = buffer.floatChannelData, let destination = copy.floatChannelData {
+            for channel in 0..<channelCount {
+                destination[channel].update(from: source[channel], count: frameCount)
+            }
+        } else if let source = buffer.int16ChannelData, let destination = copy.int16ChannelData {
+            for channel in 0..<channelCount {
+                destination[channel].update(from: source[channel], count: frameCount)
+            }
+        }
+        return copy
     }
 
     private func cleanupAfterFailedStart() {

@@ -15,6 +15,37 @@ enum DictationCommandAction: String, Codable, Sendable, Equatable {
     case cancel
 }
 
+enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
+    case idle
+    case startRequested
+    case startAcknowledged
+    case recordingStarted
+    case stopRequested
+    case stopAcknowledged
+    case audioSaved
+    case transcribingStarted
+    case resultReady
+    case inserted
+    case recoveryRequested
+    case failed
+    case cancelled
+
+    var dictationPhase: DictationPhase {
+        switch self {
+        case .idle, .inserted, .cancelled:
+            .idle
+        case .startRequested, .startAcknowledged:
+            .requested
+        case .recordingStarted, .stopRequested:
+            .recording
+        case .stopAcknowledged, .audioSaved, .transcribingStarted, .resultReady:
+            .transcribing
+        case .recoveryRequested, .failed:
+            .failed
+        }
+    }
+}
+
 enum RecordingSessionKind: String, Codable, Sendable, Equatable, CaseIterable {
     case quickDictation
     case keyboardDictation
@@ -78,6 +109,138 @@ struct DictationCommand: Codable, Sendable, Equatable {
         self.requestID = requestID
         self.action = action
         self.createdAt = createdAt
+    }
+}
+
+struct KeyboardHandoffState: Codable, Sendable, Equatable {
+    let requestID: UUID?
+    let phase: KeyboardHandoffPhase
+    let message: String?
+    let recoveryAttemptCount: Int
+    let createdAt: Date
+    let updatedAt: Date
+
+    init(
+        requestID: UUID?,
+        phase: KeyboardHandoffPhase,
+        message: String? = nil,
+        recoveryAttemptCount: Int = 0,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.requestID = requestID
+        self.phase = phase
+        self.message = message
+        self.recoveryAttemptCount = recoveryAttemptCount
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func advanced(
+        to phase: KeyboardHandoffPhase,
+        message: String? = nil,
+        recoveryAttemptCount: Int? = nil,
+        updatedAt: Date = .now
+    ) -> KeyboardHandoffState {
+        KeyboardHandoffState(
+            requestID: requestID,
+            phase: phase,
+            message: message,
+            recoveryAttemptCount: recoveryAttemptCount ?? self.recoveryAttemptCount,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    static let idle = KeyboardHandoffState(requestID: nil, phase: .idle)
+}
+
+enum KeyboardHandoffRecoveryAction: Sendable, Equatable {
+    case none
+    case retry(DictationCommandAction, KeyboardHandoffState)
+    case recover(KeyboardHandoffState)
+}
+
+struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
+    let staleStartInterval: TimeInterval
+    let staleRecordingInterval: TimeInterval
+    let staleStopRequestInterval: TimeInterval
+    let staleTranscribingInterval: TimeInterval
+    let runtimeFreshnessInterval: TimeInterval
+
+    static let keyboardDefaults = KeyboardHandoffRecoveryPolicy(
+        staleStartInterval: 10,
+        staleRecordingInterval: 45,
+        staleStopRequestInterval: 8,
+        staleTranscribingInterval: 120,
+        runtimeFreshnessInterval: 8
+    )
+
+    func action(
+        for state: KeyboardHandoffState,
+        latestRuntimeStatus: KeyboardRuntimeStatus?,
+        canUseRuntimeStart: Bool,
+        now: Date = .now
+    ) -> KeyboardHandoffRecoveryAction {
+        guard let requestID = state.requestID else { return .none }
+
+        if let latestRuntimeStatus,
+           latestRuntimeStatus.activeRequestID == requestID,
+           now.timeIntervalSince(latestRuntimeStatus.updatedAt) < runtimeFreshnessInterval,
+           [.recording, .transcribing].contains(latestRuntimeStatus.phase),
+           state.phase != .stopRequested
+        {
+            return .none
+        }
+
+        let threshold: TimeInterval
+        let retryAction: DictationCommandAction?
+        let recoveryMessage: String
+
+        switch state.phase {
+        case .startRequested, .startAcknowledged:
+            threshold = staleStartInterval
+            retryAction = .start
+            recoveryMessage = "Open Muesli to start"
+        case .recordingStarted:
+            threshold = staleRecordingInterval
+            retryAction = nil
+            recoveryMessage = "Open Muesli to continue"
+        case .stopRequested:
+            threshold = staleStopRequestInterval
+            retryAction = .stop
+            recoveryMessage = "Open Muesli to finish"
+        case .stopAcknowledged, .audioSaved, .transcribingStarted:
+            threshold = staleTranscribingInterval
+            retryAction = nil
+            recoveryMessage = "Open Muesli to finish"
+        case .recoveryRequested:
+            return .recover(state)
+        default:
+            return .none
+        }
+
+        guard now.timeIntervalSince(state.updatedAt) > threshold else {
+            return .none
+        }
+
+        if let retryAction, state.recoveryAttemptCount == 0, canUseRuntimeStart {
+            let retrying = state.advanced(
+                to: state.phase,
+                message: retryAction == .start ? "Retrying start" : "Retrying stop",
+                recoveryAttemptCount: 1,
+                updatedAt: now
+            )
+            return .retry(retryAction, retrying)
+        }
+
+        let recovery = state.advanced(
+            to: .recoveryRequested,
+            message: recoveryMessage,
+            recoveryAttemptCount: max(state.recoveryAttemptCount, 1),
+            updatedAt: now
+        )
+        return .recover(recovery)
     }
 }
 

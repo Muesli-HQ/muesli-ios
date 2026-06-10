@@ -107,6 +107,149 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try store.resultsHistory().map(\.text), ["newer dictation", "older dictation"])
     }
 
+    func testKeyboardHandoffStatePersistsAndClears() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let started = KeyboardHandoffState(
+            requestID: requestID,
+            phase: .startRequested,
+            message: "Starting"
+        )
+        let acknowledged = started.advanced(
+            to: .startAcknowledged,
+            message: "Starting",
+            recoveryAttemptCount: 1
+        )
+
+        XCTAssertEqual(try store.keyboardHandoffState(), .idle)
+
+        try store.saveKeyboardHandoffState(started)
+        XCTAssertEqual(try store.keyboardHandoffState(), started)
+
+        try store.saveKeyboardHandoffState(acknowledged)
+        let retrieved = try store.keyboardHandoffState()
+        XCTAssertEqual(retrieved.requestID, requestID)
+        XCTAssertEqual(retrieved.phase, .startAcknowledged)
+        XCTAssertEqual(retrieved.message, "Starting")
+        XCTAssertEqual(retrieved.recoveryAttemptCount, 1)
+
+        try store.clearKeyboardHandoffState()
+        XCTAssertEqual(try store.keyboardHandoffState(), .idle)
+    }
+
+    func testKeyboardHandoffRecoveryPolicyRetriesStaleStartOnce() throws {
+        let requestID = UUID()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let staleStart = KeyboardHandoffState(
+            requestID: requestID,
+            phase: .startRequested,
+            message: "Starting",
+            recoveryAttemptCount: 0,
+            createdAt: now.addingTimeInterval(-11),
+            updatedAt: now.addingTimeInterval(-11)
+        )
+
+        let action = KeyboardHandoffRecoveryPolicy.keyboardDefaults.action(
+            for: staleStart,
+            latestRuntimeStatus: nil,
+            canUseRuntimeStart: true,
+            now: now
+        )
+
+        guard case let .retry(retryAction, retryingState) = action else {
+            return XCTFail("Expected stale start to retry once")
+        }
+        XCTAssertEqual(retryAction, .start)
+        XCTAssertEqual(retryingState.phase, .startRequested)
+        XCTAssertEqual(retryingState.message, "Retrying start")
+        XCTAssertEqual(retryingState.recoveryAttemptCount, 1)
+    }
+
+    func testKeyboardHandoffRecoveryPolicyRecoversStaleStartAfterRetry() throws {
+        let requestID = UUID()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let staleStart = KeyboardHandoffState(
+            requestID: requestID,
+            phase: .startRequested,
+            message: "Retrying start",
+            recoveryAttemptCount: 1,
+            createdAt: now.addingTimeInterval(-20),
+            updatedAt: now.addingTimeInterval(-20)
+        )
+
+        let action = KeyboardHandoffRecoveryPolicy.keyboardDefaults.action(
+            for: staleStart,
+            latestRuntimeStatus: nil,
+            canUseRuntimeStart: true,
+            now: now
+        )
+
+        guard case let .recover(recoveryState) = action else {
+            return XCTFail("Expected stale retried start to request recovery")
+        }
+        XCTAssertEqual(recoveryState.phase, .recoveryRequested)
+        XCTAssertEqual(recoveryState.message, "Open Muesli to start")
+        XCTAssertEqual(recoveryState.recoveryAttemptCount, 1)
+    }
+
+    func testKeyboardHandoffRecoveryPolicyRecoversStaleRecordingWithoutRetry() throws {
+        let requestID = UUID()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let staleRecording = KeyboardHandoffState(
+            requestID: requestID,
+            phase: .recordingStarted,
+            message: "Listening",
+            createdAt: now.addingTimeInterval(-46),
+            updatedAt: now.addingTimeInterval(-46)
+        )
+
+        let action = KeyboardHandoffRecoveryPolicy.keyboardDefaults.action(
+            for: staleRecording,
+            latestRuntimeStatus: nil,
+            canUseRuntimeStart: true,
+            now: now
+        )
+
+        guard case let .recover(recoveryState) = action else {
+            return XCTFail("Expected stale recording to request recovery")
+        }
+        XCTAssertEqual(recoveryState.phase, .recoveryRequested)
+        XCTAssertEqual(recoveryState.message, "Open Muesli to continue")
+        XCTAssertEqual(recoveryState.recoveryAttemptCount, 1)
+    }
+
+    func testKeyboardHandoffRecoveryPolicyIgnoresFreshActiveRuntimeStatus() throws {
+        let requestID = UUID()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let staleRecording = KeyboardHandoffState(
+            requestID: requestID,
+            phase: .recordingStarted,
+            message: "Listening",
+            createdAt: now.addingTimeInterval(-60),
+            updatedAt: now.addingTimeInterval(-60)
+        )
+        let freshRuntimeStatus = KeyboardRuntimeStatus(
+            isActive: true,
+            activeRequestID: requestID,
+            phase: .recording,
+            message: "Listening",
+            supportsBackgroundStart: true,
+            updatedAt: now.addingTimeInterval(-2)
+        )
+
+        let action = KeyboardHandoffRecoveryPolicy.keyboardDefaults.action(
+            for: staleRecording,
+            latestRuntimeStatus: freshRuntimeStatus,
+            canUseRuntimeStart: true,
+            now: now
+        )
+
+        XCTAssertEqual(action, .none)
+    }
+
     func testResultsHistoryReplacesResultForSameRequest() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)

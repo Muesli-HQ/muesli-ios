@@ -4,11 +4,19 @@ import Observation
 @MainActor
 @Observable
 final class KeyboardController {
+    private static let staleRecordingInterval: TimeInterval = 45
+    private static let staleStoppingInterval: TimeInterval = 10
+    private static let staleTranscribingInterval: TimeInterval = 120
+
     private let store = SharedStore()
+    private let handoffRecoveryPolicy = KeyboardHandoffRecoveryPolicy.keyboardDefaults
     private var pollingTask: Task<Void, Never>?
     private var latestResultID: UUID?
     private var preparedRequest: DictationRequest?
     private var activeRequestID: UUID?
+    private var recoveryRequestID: UUID?
+    private var latestHandoffState: KeyboardHandoffState?
+    private var latestRuntimeStatus: KeyboardRuntimeStatus?
     private var insertedRequestIDs = Set<UUID>()
 
     var statusText = "Record in Muesli first"
@@ -21,7 +29,15 @@ final class KeyboardController {
     private var canUseRuntimeStart = false
 
     var primaryButtonTitle: String {
-        switch dictationPhase {
+        if recoveryRequestID != nil {
+            return "Open Muesli"
+        }
+
+        if latestHandoffState?.phase == .stopRequested {
+            return "Waiting for Muesli"
+        }
+
+        return switch dictationPhase {
         case .requested:
             activeRequestID == nil ? "Open Muesli" : "Stop Dictation"
         case .recording:
@@ -36,7 +52,15 @@ final class KeyboardController {
     }
 
     var primaryButtonIcon: String {
-        switch dictationPhase {
+        if recoveryRequestID != nil {
+            return "arrow.up.forward.app"
+        }
+
+        if latestHandoffState?.phase == .stopRequested {
+            return "hourglass"
+        }
+
+        return switch dictationPhase {
         case .requested, .recording:
             "stop.fill"
         case .transcribing:
@@ -60,7 +84,11 @@ final class KeyboardController {
     }
 
     var isPrimaryButtonDisabled: Bool {
-        dictationPhase == .transcribing || dictationPhase == .finished
+        recoveryRequestID == nil && (
+            dictationPhase == .transcribing
+            || dictationPhase == .finished
+            || latestHandoffState?.phase == .stopRequested
+        )
     }
 
     var canInsertLatest: Bool {
@@ -68,8 +96,18 @@ final class KeyboardController {
     }
 
     var opensMuesliFromPrimaryButton: Bool {
-        !canUseRuntimeStart
+        recoveryRequestID != nil
+            || !canUseRuntimeStart
             && (dictationPhase == .idle || dictationPhase == .failed || (dictationPhase == .requested && activeRequestID == nil))
+    }
+
+    func primaryLaunchAction() {
+        if recoveryRequestID != nil {
+            statusText = "Opening Muesli"
+            return
+        }
+
+        startDictation()
     }
 
     func primaryAction() {
@@ -119,6 +157,7 @@ final class KeyboardController {
         MuesliHaptics.dictationStart()
         let request = preparedRequest ?? DictationRequest()
         preparedRequest = nil
+        recoveryRequestID = nil
         launchURL = makeLaunchURL(for: request)
         activeRequestID = request.id
         insertedRequestIDs.remove(request.id)
@@ -128,6 +167,11 @@ final class KeyboardController {
         do {
             try store.clearPendingCommand()
             try store.saveRequest(request)
+            try store.saveKeyboardHandoffState(.init(
+                requestID: request.id,
+                phase: .startRequested,
+                message: canUseRuntimeStart ? "Starting" : "Opening Muesli"
+            ))
             if canUseRuntimeStart {
                 try store.saveCommand(.init(requestID: request.id, action: .start))
                 try store.saveStatus(.init(requestID: request.id, phase: .requested, message: "Starting"))
@@ -155,9 +199,14 @@ final class KeyboardController {
         MuesliHaptics.dictationStop()
         do {
             try store.saveCommand(.init(requestID: activeRequestID, action: .stop))
-            try store.saveStatus(.init(requestID: activeRequestID, phase: .transcribing, message: "Stopping"))
-            dictationPhase = .transcribing
-            statusText = "Transcribing"
+            try store.saveKeyboardHandoffState(.init(
+                requestID: activeRequestID,
+                phase: .stopRequested,
+                message: "Stopping"
+            ))
+            try store.saveStatus(.init(requestID: activeRequestID, phase: .recording, message: "Stopping"))
+            dictationPhase = .recording
+            statusText = "Stopping"
         } catch {
             statusText = "Enable Full Access"
         }
@@ -206,9 +255,13 @@ final class KeyboardController {
 
     private func refreshLatestDictation() {
         do {
-            apply(runtimeStatus: try store.keyboardRuntimeStatus())
-            let status = try store.status()
-            apply(status: status)
+            let runtimeStatus = try store.keyboardRuntimeStatus()
+            latestRuntimeStatus = runtimeStatus
+            apply(runtimeStatus: runtimeStatus)
+
+            let handoffState = try store.keyboardHandoffState()
+            latestHandoffState = handoffState
+            apply(handoffState: handoffState)
 
             guard let result = try store.resultsHistory().first else {
                 latestResultID = nil
@@ -225,6 +278,11 @@ final class KeyboardController {
                 return
             }
 
+            if handoffState.requestID == nil || handoffState.phase == .idle {
+                let status = try store.status()
+                apply(status: status)
+            }
+
             if latestResultID != result.id {
                 latestResultID = result.id
                 if activeRequestID == nil {
@@ -235,6 +293,83 @@ final class KeyboardController {
             }
         } catch {
             statusText = "Waiting for Full Access"
+        }
+    }
+
+    private func apply(handoffState: KeyboardHandoffState) {
+        guard let requestID = handoffState.requestID else { return }
+
+        let resumablePhases: [KeyboardHandoffPhase] = [
+            .startRequested,
+            .startAcknowledged,
+            .recordingStarted,
+            .stopRequested,
+            .stopAcknowledged,
+            .audioSaved,
+            .transcribingStarted,
+            .resultReady,
+            .recoveryRequested
+        ]
+        if activeRequestID == nil, resumablePhases.contains(handoffState.phase) {
+            activeRequestID = requestID
+        }
+
+        guard activeRequestID == requestID else { return }
+
+        if markHandoffForRecoveryIfStale(handoffState) {
+            return
+        }
+
+        recoveryRequestID = handoffState.phase == .recoveryRequested ? requestID : nil
+
+        switch handoffState.phase {
+        case .idle:
+            dictationPhase = .idle
+            activeRequestID = nil
+            statusText = hasLatestDictation ? "Latest ready" : "Ready"
+        case .startRequested:
+            dictationPhase = .requested
+            statusText = handoffState.message ?? "Starting"
+        case .startAcknowledged:
+            dictationPhase = .requested
+            statusText = handoffState.message ?? "Starting"
+        case .recordingStarted:
+            dictationPhase = .recording
+            statusText = handoffState.message ?? "Listening"
+        case .stopRequested:
+            dictationPhase = .recording
+            statusText = handoffState.message ?? "Stopping"
+        case .stopAcknowledged:
+            dictationPhase = .transcribing
+            statusText = handoffState.message ?? "Finalizing audio"
+        case .audioSaved:
+            dictationPhase = .transcribing
+            statusText = handoffState.message ?? "Audio saved"
+        case .transcribingStarted:
+            dictationPhase = .transcribing
+            statusText = handoffState.message ?? "Transcribing"
+        case .resultReady:
+            dictationPhase = .transcribing
+            statusText = handoffState.message ?? "Inserting"
+        case .inserted:
+            dictationPhase = .finished
+            activeRequestID = nil
+            statusText = "Inserted"
+        case .recoveryRequested:
+            dictationPhase = .failed
+            recoveryRequestID = requestID
+            launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
+            statusText = handoffState.message ?? "Open Muesli to finish"
+        case .failed:
+            dictationPhase = .failed
+            activeRequestID = nil
+            recoveryRequestID = nil
+            statusText = handoffState.message ?? "Dictation failed"
+        case .cancelled:
+            dictationPhase = .idle
+            activeRequestID = nil
+            recoveryRequestID = nil
+            statusText = hasLatestDictation ? "Latest ready" : "Ready"
         }
     }
 
@@ -272,8 +407,13 @@ final class KeyboardController {
 
         guard activeRequestID == requestID else { return }
 
+        if markForRecoveryIfStale(status, requestID: requestID) {
+            return
+        }
+
         switch status.phase {
         case .requested:
+            recoveryRequestID = nil
             if activeRequestID == nil {
                 dictationPhase = .requested
                 statusText = "Open Muesli to record"
@@ -282,22 +422,97 @@ final class KeyboardController {
                 statusText = "Recording in Muesli"
             }
         case .recording:
+            recoveryRequestID = nil
             dictationPhase = .recording
             statusText = "Recording in Muesli"
         case .transcribing:
+            recoveryRequestID = nil
             dictationPhase = .transcribing
             statusText = status.message ?? "Transcribing"
         case .failed:
+            recoveryRequestID = nil
             dictationPhase = .failed
             activeRequestID = nil
             statusText = status.message ?? "Dictation failed"
         case .finished:
+            recoveryRequestID = nil
             dictationPhase = .finished
             break
         case .idle:
+            recoveryRequestID = nil
             dictationPhase = .idle
             activeRequestID = nil
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
+        }
+    }
+
+    private func markForRecoveryIfStale(_ status: DictationStatus, requestID: UUID) -> Bool {
+        if let latestRuntimeStatus,
+           latestRuntimeStatus.activeRequestID == requestID,
+           Date().timeIntervalSince(latestRuntimeStatus.updatedAt) < 8,
+           [.recording, .transcribing].contains(latestRuntimeStatus.phase)
+        {
+            recoveryRequestID = nil
+            dictationPhase = latestRuntimeStatus.phase
+            statusText = latestRuntimeStatus.message ?? status.message ?? latestRuntimeStatus.phase.rawValue.capitalized
+            return true
+        }
+
+        let age = Date().timeIntervalSince(status.updatedAt)
+        let threshold: TimeInterval
+        let message: String
+
+        switch status.phase {
+        case .requested, .recording:
+            threshold = Self.staleRecordingInterval
+            message = "Open Muesli to continue"
+        case .transcribing:
+            threshold = status.message == "Stopping" ? Self.staleStoppingInterval : Self.staleTranscribingInterval
+            message = "Open Muesli to finish"
+        default:
+            return false
+        }
+
+        guard age > threshold else { return false }
+
+        recoveryRequestID = requestID
+        launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
+        dictationPhase = .failed
+        activeRequestID = nil
+        statusText = message
+        return true
+    }
+
+    private func markHandoffForRecoveryIfStale(_ state: KeyboardHandoffState) -> Bool {
+        guard let requestID = state.requestID else { return false }
+
+        let action = handoffRecoveryPolicy.action(
+            for: state,
+            latestRuntimeStatus: latestRuntimeStatus,
+            canUseRuntimeStart: canUseRuntimeStart
+        )
+
+        switch action {
+        case .none:
+            return false
+
+        case let .retry(retryAction, retrying):
+            try? store.saveCommand(.init(requestID: requestID, action: retryAction))
+            try? store.saveKeyboardHandoffState(retrying)
+            latestHandoffState = retrying
+            dictationPhase = retrying.phase.dictationPhase
+            statusText = retrying.message ?? "Retrying"
+            return true
+
+        case let .recover(recovery):
+            try? store.saveKeyboardHandoffState(recovery)
+            latestHandoffState = recovery
+            recoveryRequestID = requestID
+            launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
+            dictationPhase = .failed
+            activeRequestID = nil
+            statusText = recovery.message ?? "Open Muesli to finish"
+            return true
         }
     }
 
@@ -309,11 +524,17 @@ final class KeyboardController {
         hasLatestDictation = true
         activeRequestID = nil
         preparedRequest = nil
+        recoveryRequestID = nil
         launchURL = nil
         dictationPhase = .finished
         statusText = "Inserted"
         try? store.clearPendingRequest()
         try? store.clearPendingCommand()
+        try? store.saveKeyboardHandoffState(.init(
+            requestID: result.requestID,
+            phase: .inserted,
+            message: "Inserted"
+        ))
         try? store.saveStatus(.idle)
         prepareLaunchRequestIfNeeded()
 
@@ -326,12 +547,16 @@ final class KeyboardController {
     }
 
     private func makeLaunchURL(for request: DictationRequest) -> URL? {
+        makeLaunchURL(for: request.id, action: MuesliAppConstants.startAction)
+    }
+
+    private func makeLaunchURL(for requestID: UUID, action: String) -> URL? {
         var components = URLComponents()
         components.scheme = MuesliAppConstants.urlScheme
         components.host = MuesliAppConstants.dictateHost
         components.queryItems = [
-            URLQueryItem(name: MuesliAppConstants.requestQueryItem, value: request.id.uuidString),
-            URLQueryItem(name: MuesliAppConstants.actionQueryItem, value: MuesliAppConstants.startAction)
+            URLQueryItem(name: MuesliAppConstants.requestQueryItem, value: requestID.uuidString),
+            URLQueryItem(name: MuesliAppConstants.actionQueryItem, value: action)
         ]
 
         return components.url

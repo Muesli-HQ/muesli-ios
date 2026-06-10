@@ -52,6 +52,18 @@ struct SharedStore: Sendable {
         try database().clearValue(key: .pendingCommand)
     }
 
+    func saveKeyboardHandoffState(_ state: KeyboardHandoffState) throws {
+        try database().saveValue(state, key: .keyboardHandoffState)
+    }
+
+    func keyboardHandoffState() throws -> KeyboardHandoffState {
+        try database().value(KeyboardHandoffState.self, key: .keyboardHandoffState) ?? .idle
+    }
+
+    func clearKeyboardHandoffState() throws {
+        try database().clearValue(key: .keyboardHandoffState)
+    }
+
     func saveStatus(_ status: DictationStatus) throws {
         try database().saveValue(status, key: .dictationStatus)
     }
@@ -202,6 +214,7 @@ struct SharedStore: Sendable {
 private enum SharedStoreKey: String {
     case pendingRequest = "pending_request"
     case pendingCommand = "pending_command"
+    case keyboardHandoffState = "keyboard_handoff_state"
     case dictationStatus = "dictation_status"
     case keyboardExtensionStatus = "keyboard_extension_status"
     case keyboardRuntimeStatus = "keyboard_runtime_status"

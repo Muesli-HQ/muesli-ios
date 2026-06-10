@@ -986,8 +986,6 @@ final class DictationCoordinator {
                 phase: .stopAcknowledged,
                 message: "Finalizing audio"
             )
-        }
-        if isKeyboardHandoffActive {
             saveKeyboardRuntimeStatus(
                 isActive: true,
                 activeRequestID: request.id,
@@ -1036,9 +1034,6 @@ final class DictationCoordinator {
                     }
                     audioURL = retainedAudioURL
                     if startedFromKeyboard {
-                        saveKeyboardHandoff(requestID: request.id, phase: .audioSaved, message: "Audio saved")
-                    }
-                    if startedFromKeyboard {
                         saveKeyboardHandoff(
                             requestID: request.id,
                             phase: .transcribingStarted,
@@ -1052,9 +1047,6 @@ final class DictationCoordinator {
                     liveDictationTranscript = text
                 } else {
                     audioURL = try recorder.stop()
-                    if startedFromKeyboard {
-                        saveKeyboardHandoff(requestID: request.id, phase: .audioSaved, message: "Audio saved")
-                    }
                     if startedFromKeyboard {
                         saveKeyboardHandoff(
                             requestID: request.id,
@@ -1755,11 +1747,6 @@ final class DictationCoordinator {
                         : DictationRequest(id: command.requestID)
                     self.isKeyboardHandoffActive = true
                     self.activeRequest = request
-                    self.saveKeyboardHandoff(
-                        requestID: request.id,
-                        phase: .startAcknowledged,
-                        message: "Starting"
-                    )
                     self.startRecording(for: request, source: "keyboard")
                 }
 

@@ -4,13 +4,12 @@ import Observation
 @MainActor
 @Observable
 final class KeyboardController {
-    private static let staleStartInterval: TimeInterval = 10
     private static let staleRecordingInterval: TimeInterval = 45
-    private static let staleStopRequestInterval: TimeInterval = 8
     private static let staleStoppingInterval: TimeInterval = 10
     private static let staleTranscribingInterval: TimeInterval = 120
 
     private let store = SharedStore()
+    private let handoffRecoveryPolicy = KeyboardHandoffRecoveryPolicy.keyboardDefaults
     private var pollingTask: Task<Void, Never>?
     private var latestResultID: UUID?
     private var preparedRequest: DictationRequest?
@@ -487,76 +486,34 @@ final class KeyboardController {
     private func markHandoffForRecoveryIfStale(_ state: KeyboardHandoffState) -> Bool {
         guard let requestID = state.requestID else { return false }
 
-        if let latestRuntimeStatus,
-           latestRuntimeStatus.activeRequestID == requestID,
-           Date().timeIntervalSince(latestRuntimeStatus.updatedAt) < 8,
-           [.recording, .transcribing].contains(latestRuntimeStatus.phase),
-           state.phase != .stopRequested
-        {
+        let action = handoffRecoveryPolicy.action(
+            for: state,
+            latestRuntimeStatus: latestRuntimeStatus,
+            canUseRuntimeStart: canUseRuntimeStart
+        )
+
+        switch action {
+        case .none:
             return false
-        }
 
-        let age = Date().timeIntervalSince(state.updatedAt)
-        let threshold: TimeInterval
-        let retryAction: DictationCommandAction?
-        let recoveryMessage: String
-
-        switch state.phase {
-        case .startRequested, .startAcknowledged:
-            threshold = Self.staleStartInterval
-            retryAction = .start
-            recoveryMessage = "Open Muesli to start"
-        case .recordingStarted:
-            threshold = Self.staleRecordingInterval
-            retryAction = nil
-            recoveryMessage = "Open Muesli to continue"
-        case .stopRequested:
-            threshold = Self.staleStopRequestInterval
-            retryAction = .stop
-            recoveryMessage = "Open Muesli to finish"
-        case .stopAcknowledged, .audioSaved, .transcribingStarted:
-            threshold = Self.staleTranscribingInterval
-            retryAction = nil
-            recoveryMessage = "Open Muesli to finish"
-        case .recoveryRequested:
-            recoveryRequestID = requestID
-            launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
-            dictationPhase = .failed
-            statusText = state.message ?? "Open Muesli to finish"
-            return true
-        default:
-            return false
-        }
-
-        guard age > threshold else { return false }
-
-        if let retryAction, state.recoveryAttemptCount == 0, canUseRuntimeStart {
-            let retrying = state.advanced(
-                to: state.phase,
-                message: retryAction == .start ? "Retrying start" : "Retrying stop",
-                recoveryAttemptCount: 1
-            )
+        case let .retry(retryAction, retrying):
             try? store.saveCommand(.init(requestID: requestID, action: retryAction))
             try? store.saveKeyboardHandoffState(retrying)
             latestHandoffState = retrying
             dictationPhase = retrying.phase.dictationPhase
             statusText = retrying.message ?? "Retrying"
             return true
-        }
 
-        let recovery = state.advanced(
-            to: .recoveryRequested,
-            message: recoveryMessage,
-            recoveryAttemptCount: max(state.recoveryAttemptCount, 1)
-        )
-        try? store.saveKeyboardHandoffState(recovery)
-        latestHandoffState = recovery
-        recoveryRequestID = requestID
-        launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
-        dictationPhase = .failed
-        activeRequestID = nil
-        statusText = recoveryMessage
-        return true
+        case let .recover(recovery):
+            try? store.saveKeyboardHandoffState(recovery)
+            latestHandoffState = recovery
+            recoveryRequestID = requestID
+            launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
+            dictationPhase = .failed
+            activeRequestID = nil
+            statusText = recovery.message ?? "Open Muesli to finish"
+            return true
+        }
     }
 
     private func insertCompletedResult(_ result: DictationResult) {

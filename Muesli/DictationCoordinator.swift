@@ -157,6 +157,9 @@ final class DictationCoordinator {
         let request = pendingRequest?.id == requestID
             ? pendingRequest!
             : DictationRequest(id: requestID)
+        if refreshActiveKeyboardRequestIfNeeded(request) {
+            return
+        }
         if recoverKeyboardRequestIfNeeded(request) {
             return
         }
@@ -164,6 +167,64 @@ final class DictationCoordinator {
         activeRequest = request
         startKeyboardRuntimePolling()
         startRecording(for: request, source: "keyboard")
+    }
+
+    private func refreshActiveKeyboardRequestIfNeeded(_ request: DictationRequest) -> Bool {
+        guard activeRequest?.id == request.id else { return false }
+
+        isKeyboardHandoffActive = true
+        startKeyboardRuntimePolling()
+
+        if isRecording {
+            saveKeyboardHandoff(
+                requestID: request.id,
+                phase: .recordingStarted,
+                message: "Listening"
+            )
+            saveKeyboardRuntimeStatus(
+                isActive: true,
+                activeRequestID: request.id,
+                phase: .recording,
+                message: "Listening",
+                supportsBackgroundStart: isKeyboardSessionArmed
+            )
+            return true
+        }
+
+        if statusText == "Transcribing" || activeSession?.requestID == request.id {
+            try? store.saveStatus(.init(
+                requestID: request.id,
+                phase: .transcribing,
+                message: "Transcribing"
+            ))
+            saveKeyboardHandoff(
+                requestID: request.id,
+                phase: .transcribingStarted,
+                message: "Transcribing"
+            )
+            saveKeyboardRuntimeStatus(
+                isActive: true,
+                activeRequestID: request.id,
+                phase: .transcribing,
+                message: "Transcribing",
+                supportsBackgroundStart: isKeyboardSessionArmed
+            )
+            return true
+        }
+
+        saveKeyboardHandoff(
+            requestID: request.id,
+            phase: .startAcknowledged,
+            message: "Starting"
+        )
+        saveKeyboardRuntimeStatus(
+            isActive: true,
+            activeRequestID: request.id,
+            phase: .requested,
+            message: "Starting",
+            supportsBackgroundStart: isKeyboardSessionArmed
+        )
+        return true
     }
 
     private func recoverKeyboardRequestIfNeeded(_ request: DictationRequest) -> Bool {
@@ -752,6 +813,10 @@ final class DictationCoordinator {
     private func startRecording(for request: DictationRequest, source: String) {
         guard !isRecording, !isMeetingRecording, statusText != "Transcribing" else {
             if source == "keyboard" {
+                if refreshActiveKeyboardRequestIfNeeded(request) {
+                    return
+                }
+
                 let message = "Muesli is busy"
                 if activeRequest?.id == request.id {
                     activeRequest = nil
@@ -1726,6 +1791,16 @@ final class DictationCoordinator {
 
                 if let command = try? self.store.pendingCommand(), command.action == .start {
                     try? self.store.clearPendingCommand()
+                    let pendingRequest = try? self.store.pendingRequest()
+                    let request = pendingRequest?.id == command.requestID
+                        ? pendingRequest!
+                        : DictationRequest(id: command.requestID)
+
+                    if self.refreshActiveKeyboardRequestIfNeeded(request) {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        continue
+                    }
+
                     guard !self.isRecording, !self.isMeetingRecording, self.statusText != "Transcribing" else {
                         self.saveKeyboardHandoff(
                             requestID: command.requestID,
@@ -1741,10 +1816,6 @@ final class DictationCoordinator {
                         continue
                     }
 
-                    let pendingRequest = try? self.store.pendingRequest()
-                    let request = pendingRequest?.id == command.requestID
-                        ? pendingRequest!
-                        : DictationRequest(id: command.requestID)
                     self.isKeyboardHandoffActive = true
                     self.activeRequest = request
                     self.startRecording(for: request, source: "keyboard")

@@ -362,6 +362,28 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertNil(try store.keyboardRuntimeStatus())
     }
 
+    func testKeyboardLiveTranscriptRoundTripsAndClears() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let transcript = KeyboardLiveTranscript(
+            requestID: requestID,
+            text: "partial dictation",
+            updatedAt: Date(timeIntervalSince1970: 700)
+        )
+
+        try store.saveKeyboardLiveTranscript(transcript)
+
+        XCTAssertEqual(try store.keyboardLiveTranscript(), transcript)
+
+        try store.clearKeyboardLiveTranscript()
+
+        XCTAssertNil(try store.keyboardLiveTranscript())
+    }
+
     func testSavingPendingRequestDoesNotOverwriteStatus() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)

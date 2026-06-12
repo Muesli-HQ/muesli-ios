@@ -49,6 +49,10 @@ struct KeyboardRootView: View {
                     .disabled(controller.isPrimaryButtonDisabled)
                 }
 
+                if controller.showsLiveTranscript {
+                    KeyboardLiveTranscriptPreview(text: controller.liveTranscript)
+                }
+
                 if controller.canInsertLatest {
                     Button {
                         controller.insertLatestDictation()
@@ -110,6 +114,31 @@ struct KeyboardRootView: View {
         case .transcribing:
             MuesliTheme.transcribing
         }
+    }
+}
+
+private struct KeyboardLiveTranscriptPreview: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            HStack(spacing: MuesliTheme.spacing8) {
+                Image(systemName: "text.bubble")
+                Text("Live Transcript")
+            }
+            .font(MuesliTheme.captionMedium())
+            .foregroundStyle(MuesliTheme.accent)
+
+            Text(text)
+                .font(MuesliTheme.callout())
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .lineLimit(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(MuesliTheme.spacing12)
+        .background(MuesliTheme.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
     }
 }
 

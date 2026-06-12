@@ -741,6 +741,7 @@ final class DictationCoordinator {
         await engine.selectModel(selectedTranscriptionModel)
         realtimeDictationCommittedText = ""
         liveDictationTranscript = ""
+        clearKeyboardLiveTranscript()
         try await engine.startRealtimeSession(
             partialTranscript: { [weak self] partial in
                 Task { @MainActor in
@@ -795,6 +796,7 @@ final class DictationCoordinator {
         } else {
             liveDictationTranscript = "\(committed) \(partial)"
         }
+        saveKeyboardLiveTranscript(text: liveDictationTranscript, isFinal: false)
     }
 
     private func commitRealtimeDictationUtterance(_ utterance: String) {
@@ -808,6 +810,7 @@ final class DictationCoordinator {
             realtimeDictationCommittedText = "\(committed) \(utterance)"
         }
         liveDictationTranscript = realtimeDictationCommittedText
+        saveKeyboardLiveTranscript(text: liveDictationTranscript, isFinal: false)
     }
 
     private func startRecording(for request: DictationRequest, source: String) {
@@ -836,6 +839,7 @@ final class DictationCoordinator {
         activeRequest = request
         liveDictationTranscript = ""
         realtimeDictationCommittedText = ""
+        clearKeyboardLiveTranscript()
         let kind: RecordingSessionKind = source == "keyboard" ? .keyboardDictation : .quickDictation
         var session = RecordingSession(requestID: request.id, kind: kind)
         if source == "keyboard" {
@@ -904,6 +908,7 @@ final class DictationCoordinator {
                 activeSession = nil
                 activeRequest = nil
                 statusText = error.localizedDescription
+                clearKeyboardLiveTranscript()
                 stopMetering()
                 resumeKeyboardSessionKeeperIfNeeded()
                 AppTelemetry.signal("dictation_failed", parameters: ["stage": "recording"])
@@ -963,6 +968,7 @@ final class DictationCoordinator {
                     engineIdentifier: engine.identifier
                 )
                 try store.saveResult(result)
+                saveKeyboardLiveTranscript(text: text, isFinal: true)
                 saveKeyboardHandoff(requestID: request.id, phase: .resultReady, message: "Ready to insert")
                 try store.clearPendingRequest()
                 activeRequest = nil
@@ -1152,6 +1158,7 @@ final class DictationCoordinator {
                 )
                 try store.saveResult(result)
                 if startedFromKeyboard {
+                    saveKeyboardLiveTranscript(text: text, isFinal: true)
                     saveKeyboardHandoff(requestID: request.id, phase: .resultReady, message: "Ready to insert")
                 }
                 try store.clearPendingRequest()
@@ -1219,6 +1226,7 @@ final class DictationCoordinator {
                 realtimeDictationChunksDirectory = nil
                 liveDictationTranscript = ""
                 realtimeDictationCommittedText = ""
+                clearKeyboardLiveTranscript()
                 statusText = error.localizedDescription
                 refreshHistory()
                 AppTelemetry.signal(
@@ -1884,6 +1892,26 @@ final class DictationCoordinator {
         try? store.saveKeyboardHandoffState(state)
     }
 
+    private func saveKeyboardLiveTranscript(text: String, isFinal: Bool) {
+        guard isKeyboardHandoffActive, let requestID = activeRequest?.id else { return }
+
+        let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedText.isEmpty else {
+            clearKeyboardLiveTranscript()
+            return
+        }
+
+        try? store.saveKeyboardLiveTranscript(.init(
+            requestID: requestID,
+            text: cleanedText,
+            isFinal: isFinal
+        ))
+    }
+
+    private func clearKeyboardLiveTranscript() {
+        try? store.clearKeyboardLiveTranscript()
+    }
+
     private func scheduleKeyboardSessionTimeout() {
         keyboardSessionTimeoutTask?.cancel()
         let timeoutMinutes = MuesliPreferences.keyboardSessionTimeoutMinutes
@@ -1981,6 +2009,7 @@ final class DictationCoordinator {
         try? store.clearPendingRequest()
         try? store.saveStatus(.idle)
         saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
+        clearKeyboardLiveTranscript()
     }
 
     private func cleanupRealtimeDictationRecorder() {

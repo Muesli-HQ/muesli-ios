@@ -556,3 +556,22 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
 }
+
+struct KeyboardLiveTranscript: Codable, Sendable, Equatable {
+    let requestID: UUID
+    let text: String
+    let isFinal: Bool
+    let updatedAt: Date
+
+    init(
+        requestID: UUID,
+        text: String,
+        isFinal: Bool = false,
+        updatedAt: Date = .now
+    ) {
+        self.requestID = requestID
+        self.text = text
+        self.isFinal = isFinal
+        self.updatedAt = updatedAt
+    }
+}

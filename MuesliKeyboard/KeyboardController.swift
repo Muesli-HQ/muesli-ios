@@ -25,8 +25,15 @@ final class KeyboardController {
     var launchURL: URL?
     var textInserter: (@MainActor (String) -> Void)?
     var textDeleter: (@MainActor (Int) -> Void)?
+    var liveTranscript = ""
     private var lastInsertedCharacterCount = 0
     private var canUseRuntimeStart = false
+
+    var showsLiveTranscript: Bool {
+        activeRequestID != nil
+            && !liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && [.recording, .transcribing].contains(dictationPhase)
+    }
 
     var primaryButtonTitle: String {
         if recoveryRequestID != nil {
@@ -160,12 +167,14 @@ final class KeyboardController {
         recoveryRequestID = nil
         launchURL = makeLaunchURL(for: request)
         activeRequestID = request.id
+        liveTranscript = ""
         insertedRequestIDs.remove(request.id)
         dictationPhase = .recording
         statusText = "Opening Muesli"
 
         do {
             try store.clearPendingCommand()
+            try store.clearKeyboardLiveTranscript()
             try store.saveRequest(request)
             try store.saveKeyboardHandoffState(.init(
                 requestID: request.id,
@@ -262,6 +271,7 @@ final class KeyboardController {
             let handoffState = try store.keyboardHandoffState()
             latestHandoffState = handoffState
             apply(handoffState: handoffState)
+            apply(liveTranscript: try store.keyboardLiveTranscript())
 
             guard let result = try store.resultsHistory().first else {
                 latestResultID = nil
@@ -326,6 +336,7 @@ final class KeyboardController {
         case .idle:
             dictationPhase = .idle
             activeRequestID = nil
+            liveTranscript = ""
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         case .startRequested:
             dictationPhase = .requested
@@ -354,6 +365,7 @@ final class KeyboardController {
         case .inserted:
             dictationPhase = .finished
             activeRequestID = nil
+            liveTranscript = ""
             statusText = "Inserted"
         case .recoveryRequested:
             dictationPhase = .failed
@@ -364,11 +376,13 @@ final class KeyboardController {
             dictationPhase = .failed
             activeRequestID = nil
             recoveryRequestID = nil
+            liveTranscript = ""
             statusText = handoffState.message ?? "Dictation failed"
         case .cancelled:
             dictationPhase = .idle
             activeRequestID = nil
             recoveryRequestID = nil
+            liveTranscript = ""
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         }
     }
@@ -391,6 +405,7 @@ final class KeyboardController {
             if activeRequestID != nil {
                 activeRequestID = nil
                 dictationPhase = .idle
+                liveTranscript = ""
             }
             return
         }
@@ -433,6 +448,7 @@ final class KeyboardController {
             recoveryRequestID = nil
             dictationPhase = .failed
             activeRequestID = nil
+            liveTranscript = ""
             statusText = status.message ?? "Dictation failed"
         case .finished:
             recoveryRequestID = nil
@@ -442,8 +458,25 @@ final class KeyboardController {
             recoveryRequestID = nil
             dictationPhase = .idle
             activeRequestID = nil
+            liveTranscript = ""
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         }
+    }
+
+    private func apply(liveTranscript transcript: KeyboardLiveTranscript?) {
+        guard let activeRequestID else {
+            liveTranscript = ""
+            return
+        }
+
+        guard let transcript,
+              transcript.requestID == activeRequestID,
+              Date().timeIntervalSince(transcript.updatedAt) < 120
+        else {
+            return
+        }
+
+        liveTranscript = transcript.text
     }
 
     private func markForRecoveryIfStale(_ status: DictationStatus, requestID: UUID) -> Bool {
@@ -479,6 +512,7 @@ final class KeyboardController {
         launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
         dictationPhase = .failed
         activeRequestID = nil
+        liveTranscript = ""
         statusText = message
         return true
     }
@@ -511,6 +545,7 @@ final class KeyboardController {
             launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
             dictationPhase = .failed
             activeRequestID = nil
+            liveTranscript = ""
             statusText = recovery.message ?? "Open Muesli to finish"
             return true
         }
@@ -523,6 +558,7 @@ final class KeyboardController {
         latestResultID = result.id
         hasLatestDictation = true
         activeRequestID = nil
+        liveTranscript = ""
         preparedRequest = nil
         recoveryRequestID = nil
         launchURL = nil
@@ -530,6 +566,7 @@ final class KeyboardController {
         statusText = "Inserted"
         try? store.clearPendingRequest()
         try? store.clearPendingCommand()
+        try? store.clearKeyboardLiveTranscript()
         try? store.saveKeyboardHandoffState(.init(
             requestID: result.requestID,
             phase: .inserted,

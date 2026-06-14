@@ -341,6 +341,7 @@ private struct MuesliTabSwitcher: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("tab.\(section.rawValue)")
             }
         }
         .padding(MuesliTheme.spacing8)

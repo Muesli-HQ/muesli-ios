@@ -162,9 +162,11 @@ struct MeetingsView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(coordinator.isMeetingTranscribing)
+                .accessibilityIdentifier("meetings.primaryButton")
             }
             .padding(MuesliTheme.spacing16)
         }
+        .accessibilityIdentifier("meetings.recorderPanel")
     }
 
     private var meetingTemplatePicker: some View {

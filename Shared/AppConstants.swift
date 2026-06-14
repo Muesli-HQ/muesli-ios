@@ -7,6 +7,7 @@ enum MuesliAppConstants {
     static let debugHost = "debug"
     static let resetOnboardingPath = "/reset-onboarding"
     static let resetOnboardingLaunchArgument = "--muesli-reset-onboarding"
+    static let uiTestingLaunchArgument = "--muesli-ui-testing"
     static let requestQueryItem = "request"
     static let actionQueryItem = "action"
     static let startAction = "start"

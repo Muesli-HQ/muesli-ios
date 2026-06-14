@@ -108,7 +108,9 @@ final class DictationCoordinator {
 
     init() {
         #if DEBUG
-        if Self.shouldResetOnboardingFromLaunchArguments() {
+        if Self.shouldConfigureForUITestingFromLaunchArguments() {
+            configureForUITesting()
+        } else if Self.shouldResetOnboardingFromLaunchArguments() {
             resetOnboardingForTesting()
         }
         #endif
@@ -294,6 +296,34 @@ final class DictationCoordinator {
 
     private static func shouldResetOnboardingFromLaunchArguments() -> Bool {
         ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.resetOnboardingLaunchArgument)
+    }
+
+    private static func shouldConfigureForUITestingFromLaunchArguments() -> Bool {
+        ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.uiTestingLaunchArgument)
+    }
+
+    private static func shouldSkipModelPrewarmForTesting() -> Bool {
+        shouldConfigureForUITestingFromLaunchArguments()
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    private func configureForUITesting() {
+        OnboardingPreferenceKeys.clear()
+        hasCompletedOnboarding = true
+        userName = "UI Tests"
+        selectedUseCase = .everything
+        selectedTranscriptionModel = .defaultModel
+        isKeyboardHandoffActive = false
+        UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
+        UserDefaults.standard.set(userName, forKey: Self.userNameKey)
+        UserDefaults.standard.set(selectedUseCase.rawValue, forKey: Self.useCaseKey)
+        UserDefaults.standard.set(AppSection.defaultPinnedStorage, forKey: MuesliPreferences.pinnedSectionsKey)
+        modelPreparation = ModelPreparationState(
+            phase: .ready,
+            progress: 1,
+            status: "\(selectedTranscriptionModel.shortName) ready",
+            detail: "UI testing"
+        )
     }
     #endif
 
@@ -582,6 +612,9 @@ final class DictationCoordinator {
     }
 
     func prewarmModelIfNeeded(reason: String) {
+        #if DEBUG
+        guard !Self.shouldSkipModelPrewarmForTesting() else { return }
+        #endif
         guard hasCompletedOnboarding else { return }
         guard modelPrewarmTask == nil else { return }
         guard modelPreparationTask == nil, !modelPreparation.isPreparing else { return }

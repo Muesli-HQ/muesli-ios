@@ -117,9 +117,11 @@ struct DictationView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isDictationButtonDisabled)
+                .accessibilityIdentifier("dictation.primaryButton")
             }
             .padding()
         }
+        .accessibilityIdentifier("dictation.recorderPanel")
     }
 
     @ViewBuilder

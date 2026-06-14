@@ -94,6 +94,18 @@ targets:
       - target: Muesli
       - sdk: libsqlite3.tbd
 
+  MuesliUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/MuesliUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.uitests
+        GENERATE_INFOPLIST_FILE: true
+    dependencies:
+      - target: Muesli
+
 schemes:
   Muesli:
     build:
@@ -107,6 +119,7 @@ schemes:
       config: Debug
       targets:
         - MuesliTests
+        - MuesliUITests
     archive:
       config: Release
 

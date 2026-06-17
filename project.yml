@@ -42,7 +42,7 @@ targets:
         INFOPLIST_FILE: Muesli/Info.plist
         CODE_SIGN_ENTITLEMENTS: Muesli/Muesli.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MUESLI_TELEMETRYDECK_APP_ID: ""
+        MUESLI_TELEMETRYDECK_APP_ID: A851C6BD-4F55-41ED-A6BC-DA43C850B069
     dependencies:
       - target: MuesliKeyboard
       - target: MuesliLiveActivityExtension

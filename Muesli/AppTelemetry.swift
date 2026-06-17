@@ -4,7 +4,7 @@ import TelemetryDeck
 @MainActor
 enum AppTelemetry {
     private static let appIDInfoKey = "MuesliTelemetryDeckAppID"
-    private static let fallbackAppID = "7F2B7846-1CB5-4FE6-8ABC-56F217B06A86"
+    private static let fallbackAppID = "A851C6BD-4F55-41ED-A6BC-DA43C850B069"
     private static var isInitialized = false
 
     static func configure() {

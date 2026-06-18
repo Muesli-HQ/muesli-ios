@@ -18,6 +18,7 @@ struct MuesliApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         coordinator.prewarmModelIfNeeded(reason: "foreground")
+                        coordinator.syncICloudTextIfEnabled(reason: "foreground")
                     }
                 }
         }

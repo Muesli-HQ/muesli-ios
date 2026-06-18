@@ -590,7 +590,7 @@ private struct SyncView: View {
                         Text("Sync")
                             .font(MuesliTheme.title1())
                             .foregroundStyle(MuesliTheme.textPrimary)
-                        Text("Prepare private iCloud sync for Muesli data.")
+                        Text("Sync text records through private iCloud.")
                             .font(MuesliTheme.callout())
                             .foregroundStyle(MuesliTheme.textSecondary)
                     }
@@ -607,7 +607,7 @@ private struct SyncView: View {
                                     Text("iCloud Sync")
                                         .font(MuesliTheme.headline())
                                         .foregroundStyle(MuesliTheme.textPrimary)
-                                    Text("Sync dictations, meetings, summaries, dictionary terms, and settings through your private iCloud account.")
+                                    Text("Sync dictation text, meeting transcripts, notes, and summaries through your private iCloud account. Audio stays local.")
                                         .font(MuesliTheme.caption())
                                         .foregroundStyle(MuesliTheme.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)

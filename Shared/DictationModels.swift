@@ -80,6 +80,31 @@ enum MeetingProcessingState: String, Codable, Sendable, Equatable {
     case unavailable
 }
 
+enum SyncTextRecordKind: String, Codable, Sendable, Equatable {
+    case dictation
+    case meeting
+}
+
+struct SyncTextRecord: Codable, Sendable, Equatable, Identifiable {
+    let id: String
+    let kind: SyncTextRecordKind
+    var title: String?
+    var text: String
+    var speakerTranscript: String?
+    var summaryText: String?
+    var manualNotes: String?
+    var source: String?
+    var engineIdentifier: String?
+    var createdAt: Date
+    var updatedAt: Date
+    var startedAt: Date?
+    var endedAt: Date?
+    var durationSeconds: Double
+    var wordCount: Int
+    var isDeleted: Bool
+    var cloudChangeTag: String?
+}
+
 struct DictationRequest: Codable, Sendable, Equatable, Identifiable {
     let id: UUID
     let createdAt: Date

@@ -59,8 +59,13 @@ struct SettingsView: View {
                     parameters: ["enabled": enabled ? "true" : "false"]
                 )
                 appleSyncStatusText = enabled
-                    ? "iCloud sync is enabled. Full transcript syncing will start once the CloudKit sync engine is connected."
+                    ? "iCloud text sync is enabled. Audio stays only on this iPhone."
                     : "iCloud sync is off. Your data stays local on this iPhone."
+                if enabled {
+                    coordinator.syncICloudTextIfEnabled(reason: "settings_toggle")
+                } else {
+                    coordinator.iCloudSyncStatusText = "iCloud sync is off."
+                }
                 refreshAppleSyncSettings()
             }
         }
@@ -359,7 +364,7 @@ struct SettingsView: View {
                 SettingsToggleRow(
                     icon: "icloud",
                     title: "iCloud Sync",
-                    detail: "Sync dictations, meetings, summaries, dictionary terms, and settings through your private iCloud account.",
+                    detail: "Sync dictation text, meeting transcripts, notes, and summaries through your private iCloud account. Audio is never synced.",
                     isOn: $iCloudSyncEnabled
                 )
                 Divider().overlay(MuesliTheme.surfaceBorder)
@@ -403,10 +408,32 @@ struct SettingsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
 
+                Button {
+                    coordinator.syncICloudTextIfEnabled(reason: "settings_manual")
+                } label: {
+                    Label("Sync now", systemImage: "arrow.triangle.2.circlepath")
+                        .font(MuesliTheme.headline())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .foregroundStyle(iCloudSyncEnabled ? .white : MuesliTheme.textTertiary)
+                        .background(iCloudSyncEnabled ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+                .buttonStyle(.plain)
+                .disabled(!iCloudSyncEnabled)
+
                 Text(appleSyncStatusText ?? appleSyncSnapshot.detail)
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if let syncStatus = coordinator.iCloudSyncStatusText {
+                    Text(syncStatus)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -606,7 +633,7 @@ struct SettingsView: View {
             } else if iCloudSyncEnabled && !appleSyncSnapshot.isSignedInWithApple {
                 appleSyncStatusText = "Sign in with Apple to confirm the account Muesli should prepare for sync."
             } else if iCloudSyncEnabled {
-                appleSyncStatusText = "Ready for private iCloud sync. Transcription still happens on-device."
+                appleSyncStatusText = "Ready for private text sync. Audio and transcription stay on-device."
             } else {
                 appleSyncStatusText = nil
             }
@@ -1190,9 +1217,9 @@ final class AppleSyncAccountManager {
         if !cloud.isAvailable {
             detail = "Muesli sync needs iCloud enabled on this iPhone."
         } else if !isSignedIn {
-            detail = "Sign in with Apple to prepare private iCloud sync for this app."
+            detail = "Sign in with Apple to prepare private text sync for this app."
         } else {
-            detail = "Ready for private iCloud sync. Transcripts and summaries will sync through your iCloud account."
+            detail = "Ready for private text sync. Transcripts, notes, and summaries will sync through your iCloud account."
         }
 
         return AppleSyncAccountSnapshot(

@@ -115,7 +115,7 @@ struct OnboardingView: View {
                 parameters: ["enabled": enabled ? "true" : "false"]
             )
             appleSyncStatusText = enabled
-                ? "Muesli will prepare private iCloud sync once your Apple account is connected."
+                ? "Muesli will sync text records through your private iCloud account. Audio stays local."
                 : "iCloud sync is off. Dictations and meetings stay local on this iPhone."
             refreshAppleSyncStatus()
         }
@@ -385,7 +385,7 @@ struct OnboardingView: View {
                             Text("Sync with iCloud")
                                 .font(MuesliTheme.headline())
                                 .foregroundStyle(MuesliTheme.textPrimary)
-                            Text("Dictations, meetings, summaries, dictionary terms, and settings can sync across Muesli apps.")
+                            Text("Dictation text, meeting transcripts, notes, and summaries can sync across Muesli apps. Audio stays local.")
                                 .font(MuesliTheme.caption())
                                 .foregroundStyle(MuesliTheme.textTertiary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1060,9 +1060,9 @@ struct OnboardingView: View {
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
             } else if iCloudSyncEnabled && !appleSyncSnapshot.isSignedInWithApple {
-                appleSyncStatusText = "Sign in with Apple to prepare this account for private iCloud sync."
+                appleSyncStatusText = "Sign in with Apple to prepare this account for private text sync."
             } else if iCloudSyncEnabled {
-                appleSyncStatusText = "Ready for private iCloud sync. Transcription still happens on-device."
+                appleSyncStatusText = "Ready for private text sync. Audio and transcription stay on-device."
             } else {
                 appleSyncStatusText = nil
             }
@@ -1259,7 +1259,7 @@ private enum OnboardingStep: Int, CaseIterable {
         case .permissions:
             "Grant only what the selected workflow needs."
         case .sync:
-            "Optional private iCloud sync."
+            "Optional private text sync."
         case .model:
             "Download and compile local transcription."
         case .test:

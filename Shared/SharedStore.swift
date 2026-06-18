@@ -180,6 +180,18 @@ struct SharedStore: Sendable {
         try database().removeCustomWord(id: id)
     }
 
+    func textRecordsNeedingSync(limit: Int = 200) throws -> [SyncTextRecord] {
+        try database().textRecordsNeedingSync(limit: limit)
+    }
+
+    func upsertSyncedTextRecord(_ record: SyncTextRecord) throws {
+        try database().upsertSyncedTextRecord(record)
+    }
+
+    func markTextRecordSynced(kind: SyncTextRecordKind, recordName: String, changeTag: String?) throws {
+        try database().markTextRecordSynced(kind: kind, recordName: recordName, changeTag: changeTag)
+    }
+
     func newAudioFileURL(sessionID: UUID) throws -> URL {
         let fileName = audioFileName(sessionID: sessionID)
         return try audioFileURL(fileName: fileName)
@@ -535,6 +547,142 @@ private struct SharedStoreDatabase {
         }
     }
 
+    func textRecordsNeedingSync(limit: Int = 200) throws -> [SyncTextRecord] {
+        try withDatabase { db in
+            var records: [SyncTextRecord] = []
+            let dictationRows = try queryRows(
+                """
+                SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
+                       deleted_at, session_id, cloud_change_tag
+                FROM result_history
+                WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                db: db
+            ) { statement in
+                try bind(limit, to: statement, at: 1)
+            } read: { statement in
+                SyncTextRecord(
+                    id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
+                    kind: .dictation,
+                    title: nil,
+                    text: sqliteColumnString(statement, 1) ?? "",
+                    speakerTranscript: nil,
+                    summaryText: nil,
+                    manualNotes: nil,
+                    source: "ios",
+                    engineIdentifier: sqliteColumnString(statement, 2),
+                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
+                    updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
+                    startedAt: nil,
+                    endedAt: nil,
+                    durationSeconds: 0,
+                    wordCount: Self.wordCount(sqliteColumnString(statement, 1) ?? ""),
+                    isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
+                    cloudChangeTag: sqliteColumnString(statement, 7)
+                )
+            }
+            records.append(contentsOf: dictationRows)
+
+            let remaining = max(limit - records.count, 0)
+            guard remaining > 0 else { return records }
+
+            let meetingRows = try queryRows(
+                """
+                SELECT s.cloud_record_name, s.id, s.title, s.kind, s.phase, s.created_at,
+                       s.started_at, s.ended_at, s.engine_identifier, s.error_message,
+                       s.updated_at, s.deleted_at, s.cloud_change_tag,
+                       t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
+                       t.summary_model, t.updated_at, t.deleted_at
+                FROM recording_sessions s
+                LEFT JOIN transcripts t ON t.session_id = s.id
+                WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
+                  AND s.cloud_record_name IS NOT NULL
+                  AND s.kind = ?
+                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0)) DESC
+                LIMIT ?
+                """,
+                db: db
+            ) { statement in
+                try bind(RecordingSessionKind.meeting.rawValue, to: statement, at: 1)
+                try bind(remaining, to: statement, at: 2)
+            } read: { statement in
+                let started = Self.optionalDate(statement, 6)
+                let ended = Self.optionalDate(statement, 7)
+                let text = sqliteColumnString(statement, 13) ?? ""
+                let summary = sqliteColumnString(statement, 15)
+                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 18))
+                return SyncTextRecord(
+                    id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
+                    kind: .meeting,
+                    title: sqliteColumnString(statement, 2),
+                    text: text,
+                    speakerTranscript: sqliteColumnString(statement, 14),
+                    summaryText: summary,
+                    manualNotes: nil,
+                    source: "ios",
+                    engineIdentifier: sqliteColumnString(statement, 8),
+                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
+                    updatedAt: Date(timeIntervalSince1970: updated),
+                    startedAt: started,
+                    endedAt: ended,
+                    durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
+                    wordCount: Self.wordCount(text + " " + (summary ?? "")),
+                    isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 19) != SQLITE_NULL,
+                    cloudChangeTag: sqliteColumnString(statement, 12)
+                )
+            }
+            records.append(contentsOf: meetingRows)
+            return records
+        }
+    }
+
+    func upsertSyncedTextRecord(_ record: SyncTextRecord) throws {
+        try withDatabase { db in
+            switch record.kind {
+            case .dictation:
+                try upsertSyncedDictation(record, db: db)
+            case .meeting:
+                try upsertSyncedMeeting(record, db: db)
+            }
+        }
+    }
+
+    func markTextRecordSynced(kind: SyncTextRecordKind, recordName: String, changeTag: String?) throws {
+        try withDatabase { db in
+            let now = Date().timeIntervalSince1970
+            let table = kind == .dictation ? "result_history" : "recording_sessions"
+            try execute(
+                """
+                UPDATE \(table)
+                SET cloud_change_tag = ?, last_synced_at = ?, sync_dirty = 0
+                WHERE cloud_record_name = ?
+                """,
+                db: db
+            ) { statement in
+                try bind(changeTag, to: statement, at: 1)
+                try bind(now, to: statement, at: 2)
+                try bind(recordName, to: statement, at: 3)
+            }
+            if kind == .meeting {
+                try execute(
+                    """
+                    UPDATE transcripts
+                    SET last_synced_at = ?, sync_dirty = 0
+                    WHERE session_id IN (
+                        SELECT id FROM recording_sessions WHERE cloud_record_name = ?
+                    )
+                    """,
+                    db: db
+                ) { statement in
+                    try bind(now, to: statement, at: 1)
+                    try bind(recordName, to: statement, at: 2)
+                }
+            }
+        }
+    }
+
     private func withDatabase<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         var database: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
@@ -642,6 +790,23 @@ private struct SharedStoreDatabase {
                 columnCache[migration.table]?.insert(migration.column)
             }
         }
+
+        try ensureSyncIndexes(db)
+    }
+
+    private func ensureSyncIndexes(_ db: OpaquePointer) throws {
+        try exec(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_result_history_cloud_record_name ON result_history(cloud_record_name)",
+            db: db
+        )
+        try exec(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_recording_sessions_cloud_record_name ON recording_sessions(cloud_record_name)",
+            db: db
+        )
+        try exec(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_transcripts_cloud_record_name ON transcripts(cloud_record_name)",
+            db: db
+        )
     }
 
     private func tableColumns(_ table: String, db: OpaquePointer) throws -> Set<String> {
@@ -1113,6 +1278,180 @@ private struct SharedStoreDatabase {
         }
     }
 
+    private func upsertSyncedDictation(_ record: SyncTextRecord, db: OpaquePointer) throws {
+        if let localUpdatedAt = try localUpdatedAt(table: "result_history", recordName: record.id, db: db),
+           localUpdatedAt > record.updatedAt.timeIntervalSince1970 {
+            return
+        }
+
+        let resultID = UUID(uuidString: record.id) ?? UUID()
+        let requestID = resultID
+        let result = DictationResult(
+            id: resultID,
+            requestID: requestID,
+            sessionID: nil,
+            text: record.text,
+            createdAt: record.createdAt,
+            engineIdentifier: record.engineIdentifier ?? "icloud"
+        )
+        try execute(
+            """
+            INSERT INTO result_history (
+                id, request_id, session_id, text, engine_identifier, created_at, updated_at,
+                deleted_at, cloud_record_name, cloud_change_tag, last_synced_at, sync_dirty, payload
+            )
+            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            ON CONFLICT(cloud_record_name) DO UPDATE SET
+                id = excluded.id,
+                request_id = excluded.request_id,
+                text = excluded.text,
+                engine_identifier = excluded.engine_identifier,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                deleted_at = excluded.deleted_at,
+                cloud_record_name = excluded.cloud_record_name,
+                cloud_change_tag = excluded.cloud_change_tag,
+                last_synced_at = excluded.last_synced_at,
+                sync_dirty = 0,
+                payload = excluded.payload
+            """,
+            db: db
+        ) { statement in
+            try bind(resultID.uuidString, to: statement, at: 1)
+            try bind(requestID.uuidString, to: statement, at: 2)
+            try bind(record.text, to: statement, at: 3)
+            try bind(record.engineIdentifier ?? "icloud", to: statement, at: 4)
+            try bind(record.createdAt.timeIntervalSince1970, to: statement, at: 5)
+            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 6)
+            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 7)
+            try bind(record.id, to: statement, at: 8)
+            try bind(record.cloudChangeTag, to: statement, at: 9)
+            try bind(Date().timeIntervalSince1970, to: statement, at: 10)
+            try bind(try encoder.encode(result), to: statement, at: 11)
+        }
+    }
+
+    private func upsertSyncedMeeting(_ record: SyncTextRecord, db: OpaquePointer) throws {
+        if let localUpdatedAt = try localUpdatedAt(table: "recording_sessions", recordName: record.id, db: db),
+           localUpdatedAt > record.updatedAt.timeIntervalSince1970 {
+            return
+        }
+
+        let existingSessionID = try queryRows(
+            "SELECT id FROM recording_sessions WHERE cloud_record_name = ? LIMIT 1",
+            db: db
+        ) { statement in
+            try bind(record.id, to: statement, at: 1)
+        } read: { statement in
+            sqliteColumnString(statement, 0)
+        }.first ?? nil
+        let sessionID = existingSessionID.flatMap(UUID.init(uuidString:)) ?? UUID(uuidString: record.id) ?? UUID()
+        let transcriptID = UUID()
+        let session = RecordingSession(
+            id: sessionID,
+            requestID: nil,
+            kind: .meeting,
+            title: record.title ?? "Meeting",
+            createdAt: record.createdAt,
+            startedAt: record.startedAt,
+            endedAt: record.endedAt,
+            phase: record.isDeleted ? .cancelled : .completed,
+            audioFileName: nil,
+            keepsAudioRecording: false,
+            transcriptID: transcriptID,
+            engineIdentifier: record.engineIdentifier,
+            errorMessage: nil
+        )
+        let transcript = Transcript(
+            id: transcriptID,
+            sessionID: sessionID,
+            text: record.text,
+            createdAt: record.createdAt,
+            engineIdentifier: record.engineIdentifier ?? "icloud",
+            speakerTranscript: record.speakerTranscript,
+            summaryText: record.summaryText,
+            diarizationState: .completed,
+            summaryState: record.summaryText == nil ? .notStarted : .completed
+        )
+
+        try execute(
+            """
+            INSERT INTO recording_sessions (
+                id, request_id, kind, title, phase, created_at, started_at, ended_at,
+                audio_file_name, keeps_audio_recording, transcript_id, engine_identifier,
+                error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
+                last_synced_at, sync_dirty, payload
+            )
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, NULL, ?, ?, ?, ?, ?, 0, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                phase = excluded.phase,
+                started_at = excluded.started_at,
+                ended_at = excluded.ended_at,
+                audio_file_name = NULL,
+                keeps_audio_recording = 0,
+                transcript_id = excluded.transcript_id,
+                engine_identifier = excluded.engine_identifier,
+                updated_at = excluded.updated_at,
+                deleted_at = excluded.deleted_at,
+                cloud_record_name = excluded.cloud_record_name,
+                cloud_change_tag = excluded.cloud_change_tag,
+                last_synced_at = excluded.last_synced_at,
+                sync_dirty = 0,
+                payload = excluded.payload
+            """,
+            db: db
+        ) { statement in
+            try bind(session.id.uuidString, to: statement, at: 1)
+            try bind(session.kind.rawValue, to: statement, at: 2)
+            try bind(session.title, to: statement, at: 3)
+            try bind(session.phase.rawValue, to: statement, at: 4)
+            try bind(session.createdAt.timeIntervalSince1970, to: statement, at: 5)
+            try bind(session.startedAt?.timeIntervalSince1970, to: statement, at: 6)
+            try bind(session.endedAt?.timeIntervalSince1970, to: statement, at: 7)
+            try bind(transcriptID.uuidString, to: statement, at: 8)
+            try bind(session.engineIdentifier, to: statement, at: 9)
+            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 10)
+            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 11)
+            try bind(record.id, to: statement, at: 12)
+            try bind(record.cloudChangeTag, to: statement, at: 13)
+            try bind(Date().timeIntervalSince1970, to: statement, at: 14)
+            try bind(try encoder.encode(session), to: statement, at: 15)
+        }
+
+        try execute("DELETE FROM transcripts WHERE session_id = ?", db: db) { statement in
+            try bind(sessionID.uuidString, to: statement, at: 1)
+        }
+        try insertTranscript(transcript, db: db)
+        try execute(
+            """
+            UPDATE transcripts
+            SET updated_at = ?, deleted_at = ?, cloud_record_name = ?, cloud_change_tag = ?,
+                last_synced_at = ?, sync_dirty = 0
+            WHERE session_id = ?
+            """,
+            db: db
+        ) { statement in
+            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 1)
+            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 2)
+            try bind("\(record.id)-transcript", to: statement, at: 3)
+            try bind(record.cloudChangeTag, to: statement, at: 4)
+            try bind(Date().timeIntervalSince1970, to: statement, at: 5)
+            try bind(sessionID.uuidString, to: statement, at: 6)
+        }
+    }
+
+    private func localUpdatedAt(table: String, recordName: String, db: OpaquePointer) throws -> Double? {
+        try queryRows(
+            "SELECT updated_at FROM \(table) WHERE cloud_record_name = ? LIMIT 1",
+            db: db
+        ) { statement in
+            try bind(recordName, to: statement, at: 1)
+        } read: { statement in
+            sqlite3_column_double(statement, 0)
+        }.first ?? nil
+    }
+
     private func transaction(db: OpaquePointer, _ body: () throws -> Void) throws {
         try exec("BEGIN IMMEDIATE TRANSACTION", db: db)
         do {
@@ -1171,6 +1510,34 @@ private struct SharedStoreDatabase {
                     continue
                 }
                 rows.append(Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0))))
+            } else if result == SQLITE_DONE {
+                return rows
+            } else {
+                throw SharedStoreDatabaseError.stepFailed(sqlite3ErrorMessage(db))
+            }
+        }
+    }
+
+    private func queryRows<T>(
+        _ sql: String,
+        db: OpaquePointer,
+        bindValues: (OpaquePointer) throws -> Void,
+        read: (OpaquePointer) throws -> T
+    ) throws -> [T] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw SharedStoreDatabaseError.prepareFailed(sqlite3ErrorMessage(db))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        try bindValues(statement)
+
+        var rows: [T] = []
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_ROW {
+                rows.append(try read(statement))
             } else if result == SQLITE_DONE {
                 return rows
             } else {
@@ -1295,6 +1662,17 @@ private struct SharedStoreDatabase {
             return nil
         }
         return Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, index)))
+    }
+
+    private static func optionalDate(_ statement: OpaquePointer, _ index: Int32) -> Date? {
+        guard sqlite3_column_type(statement, index) != SQLITE_NULL else { return nil }
+        let value = sqlite3_column_double(statement, index)
+        guard value > 0 else { return nil }
+        return Date(timeIntervalSince1970: value)
+    }
+
+    private static func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: \.isWhitespace).count
     }
 
     private static let schemaSQL = """

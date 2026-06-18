@@ -29,6 +29,7 @@ final class DictationCoordinator {
     private var commandPollingTask: Task<Void, Never>?
     private var keyboardRuntimePollingTask: Task<Void, Never>?
     private var keyboardSessionTimeoutTask: Task<Void, Never>?
+    private var iCloudSyncTask: Task<Void, Never>?
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
     private var meetingChunkTranscriptions: [MeetingChunkTranscription] = []
     private var meetingChunksDirectory: URL?
@@ -41,6 +42,7 @@ final class DictationCoordinator {
     var isKeyboardHandoffActive = false
     var isKeyboardSessionArmed = false
     var keyboardSessionStatusText = "Off"
+    var iCloudSyncStatusText: String?
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
     var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
     var selectedUseCase = OnboardingUseCase(
@@ -430,6 +432,35 @@ final class DictationCoordinator {
     func applyLiveActivityPreferences() {
         Task {
             await liveActivityController.endDisabledActivities()
+        }
+    }
+
+    func syncICloudTextIfEnabled(reason: String = "manual") {
+        guard MuesliPreferences.iCloudSyncEnabled else {
+            iCloudSyncStatusText = "iCloud sync is off."
+            return
+        }
+        guard iCloudSyncTask == nil else { return }
+        iCloudSyncStatusText = "Syncing text records..."
+        iCloudSyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await ICloudTextSyncEngine().sync(store: self.store)
+                self.iCloudSyncTask = nil
+                self.iCloudSyncStatusText = "Synced \(result.uploaded) up, \(result.downloaded) down."
+                self.refreshHistory()
+                AppTelemetry.signal(
+                    "icloud_text_sync_completed",
+                    parameters: ["reason": reason]
+                )
+            } catch {
+                self.iCloudSyncTask = nil
+                self.iCloudSyncStatusText = "Sync failed: \(error.localizedDescription)"
+                AppTelemetry.signal(
+                    "icloud_text_sync_failed",
+                    parameters: ["reason": reason, "error": String(describing: type(of: error))]
+                )
+            }
         }
     }
 

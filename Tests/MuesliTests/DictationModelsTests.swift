@@ -6,7 +6,8 @@ final class DictationModelsTests: XCTestCase {
         let result = DictationResult(
             requestID: requestID,
             text: "Hello from Muesli",
-            engineIdentifier: "test-engine"
+            engineIdentifier: "test-engine",
+            source: "macos"
         )
 
         let data = try JSONEncoder().encode(result)
@@ -15,6 +16,26 @@ final class DictationModelsTests: XCTestCase {
         XCTAssertEqual(decoded.requestID, requestID)
         XCTAssertEqual(decoded.text, "Hello from Muesli")
         XCTAssertEqual(decoded.engineIdentifier, "test-engine")
+        XCTAssertEqual(decoded.source, "macos")
+    }
+
+    func testDictationResultDecodesWithoutSource() throws {
+        let requestID = UUID()
+        let data = """
+        {
+          "id": "\(UUID().uuidString)",
+          "requestID": "\(requestID.uuidString)",
+          "text": "Legacy dictation",
+          "createdAt": 740000000,
+          "engineIdentifier": "icloud"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(DictationResult.self, from: data)
+
+        XCTAssertEqual(decoded.requestID, requestID)
+        XCTAssertEqual(decoded.text, "Legacy dictation")
+        XCTAssertNil(decoded.source)
     }
 
     func testFillerWordFilterRemovesCommonDisfluencies() {

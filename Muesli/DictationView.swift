@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DictationView: View {
     @Bindable var coordinator: DictationCoordinator
+    @State private var sourceFilter: DictationSourceFilter = .all
 
     var body: some View {
         NavigationStack {
@@ -146,11 +147,15 @@ struct DictationView: View {
                 }
             }
 
-            if coordinator.dictationHistory.isEmpty {
+            if !coordinator.dictationHistory.isEmpty {
+                DictationSourceFilterPicker(selection: $sourceFilter)
+            }
+
+            if filteredHistory.isEmpty {
                 emptyHistory
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
-                    ForEach(coordinator.dictationHistory) { result in
+                    ForEach(filteredHistory) { result in
                         DictationHistoryRow(
                             result: result,
                             onCopy: { coordinator.copyToClipboard(result) },
@@ -162,6 +167,10 @@ struct DictationView: View {
         }
     }
 
+    private var filteredHistory: [DictationResult] {
+        coordinator.dictationHistory.filter { sourceFilter.includes($0.syncOrigin) }
+    }
+
     private var emptyHistory: some View {
         MuesliSurface {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
@@ -169,11 +178,11 @@ struct DictationView: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(MuesliTheme.accent)
 
-                Text("No dictations yet")
+                Text(emptyHistoryTitle)
                     .font(MuesliTheme.headline())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text("Recorded dictations from the app will appear here as a timeline.")
+                Text(emptyHistoryDetail)
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -181,6 +190,17 @@ struct DictationView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(MuesliTheme.spacing16)
         }
+    }
+
+    private var emptyHistoryTitle: String {
+        coordinator.dictationHistory.isEmpty ? "No dictations yet" : "No \(sourceFilter.title.lowercased()) dictations"
+    }
+
+    private var emptyHistoryDetail: String {
+        if coordinator.dictationHistory.isEmpty {
+            return "Recorded dictations from the app will appear here as a timeline."
+        }
+        return "Switch filters to see the complete dictation history."
     }
 
     private var statusColor: Color {
@@ -232,6 +252,133 @@ struct DictationView: View {
     }
 }
 
+private enum DictationSourceFilter: String, CaseIterable, Identifiable {
+    case all
+    case thisIPhone
+    case fromMac
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            "All"
+        case .thisIPhone:
+            "This iPhone"
+        case .fromMac:
+            "From Mac"
+        }
+    }
+
+    func includes(_ origin: DictationSyncOrigin) -> Bool {
+        switch self {
+        case .all:
+            true
+        case .thisIPhone:
+            origin == .thisIPhone
+        case .fromMac:
+            origin == .fromMac
+        }
+    }
+}
+
+private enum DictationSyncOrigin: Equatable {
+    case thisIPhone
+    case fromMac
+
+    var title: String {
+        switch self {
+        case .thisIPhone:
+            "This iPhone"
+        case .fromMac:
+            "From Mac"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .thisIPhone:
+            "Recorded locally"
+        case .fromMac:
+            "Synced via iCloud"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .thisIPhone:
+            "iphone"
+        case .fromMac:
+            "macbook"
+        }
+    }
+
+    var accentColor: Color {
+        switch self {
+        case .thisIPhone:
+            MuesliTheme.accent
+        case .fromMac:
+            Color(hex: 0x2DD4BF)
+        }
+    }
+}
+
+private extension DictationResult {
+    var syncOrigin: DictationSyncOrigin {
+        let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let normalizedSource, normalizedSource == "ios" {
+            return .thisIPhone
+        }
+
+        if let normalizedSource, !normalizedSource.isEmpty {
+            return .fromMac
+        }
+
+        // Older synced rows were stored before source was persisted and used
+        // the fallback engine label. Treat those as Mac-origin cloud imports.
+        if normalizedSource == nil && engineIdentifier.lowercased() == "icloud" {
+            return .fromMac
+        }
+
+        return .thisIPhone
+    }
+}
+
+private struct DictationSourceFilterPicker: View {
+    @Binding var selection: DictationSourceFilter
+
+    var body: some View {
+        HStack(spacing: MuesliTheme.spacing4) {
+            ForEach(DictationSourceFilter.allCases) { filter in
+                Button {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        selection = filter
+                    }
+                } label: {
+                    Text(filter.title)
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(selection == filter ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(selection == filter ? MuesliTheme.surfaceSelected : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Show \(filter.title.lowercased()) dictations")
+            }
+        }
+        .padding(3)
+        .background(MuesliTheme.surfacePrimary.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+}
+
 private struct DictationHistoryRow: View {
     let result: DictationResult
     let onCopy: () -> Void
@@ -254,8 +401,17 @@ private struct DictationHistoryRow: View {
             )
         ) {
             MuesliSurface {
-                rowContent
-                    .padding(MuesliTheme.spacing16)
+                HStack(spacing: 0) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(origin.accentColor)
+                        .frame(width: 3)
+                        .padding(.vertical, MuesliTheme.spacing12)
+
+                    rowContent
+                        .padding(.vertical, MuesliTheme.spacing16)
+                        .padding(.leading, MuesliTheme.spacing12)
+                        .padding(.trailing, MuesliTheme.spacing16)
+                }
             }
         }
         .confirmationDialog(
@@ -272,14 +428,20 @@ private struct DictationHistoryRow: View {
 
     private var rowContent: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                Text(result.createdAt, formatter: Self.dateFormatter)
-                    .font(MuesliTheme.captionMedium())
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                Text(TranscriptionDisplayName.engineName(for: result.engineIdentifier))
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .lineLimit(1)
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text(result.createdAt, formatter: Self.dateFormatter)
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                    Text(origin.detail)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(origin.accentColor.opacity(0.9))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: MuesliTheme.spacing8)
+
+                DictationOriginChip(origin: origin)
             }
 
             Text(result.text)
@@ -291,10 +453,39 @@ private struct DictationHistoryRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var origin: DictationSyncOrigin {
+        result.syncOrigin
+    }
+
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter
     }()
+}
+
+private struct DictationOriginChip: View {
+    let origin: DictationSyncOrigin
+
+    var body: some View {
+        Label {
+            Text(origin.title)
+                .lineLimit(1)
+        } icon: {
+            Image(systemName: origin.systemImage)
+                .font(.system(size: 9, weight: .semibold))
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(origin.accentColor)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(origin.accentColor.opacity(0.13))
+        .clipShape(Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(origin.accentColor.opacity(0.28), lineWidth: 1)
+        )
+        .accessibilityLabel(origin.title)
+    }
 }

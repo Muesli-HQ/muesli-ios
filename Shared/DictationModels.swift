@@ -276,6 +276,7 @@ struct DictationResult: Codable, Sendable, Equatable, Identifiable {
     let text: String
     let createdAt: Date
     let engineIdentifier: String
+    let source: String?
 
     init(
         id: UUID = UUID(),
@@ -283,7 +284,8 @@ struct DictationResult: Codable, Sendable, Equatable, Identifiable {
         sessionID: UUID? = nil,
         text: String,
         createdAt: Date = .now,
-        engineIdentifier: String
+        engineIdentifier: String,
+        source: String? = nil
     ) {
         self.id = id
         self.requestID = requestID
@@ -291,6 +293,7 @@ struct DictationResult: Codable, Sendable, Equatable, Identifiable {
         self.text = text
         self.createdAt = createdAt
         self.engineIdentifier = engineIdentifier
+        self.source = source
     }
 }
 

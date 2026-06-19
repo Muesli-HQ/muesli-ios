@@ -1292,7 +1292,8 @@ private struct SharedStoreDatabase {
             sessionID: nil,
             text: record.text,
             createdAt: record.createdAt,
-            engineIdentifier: record.engineIdentifier ?? "icloud"
+            engineIdentifier: record.engineIdentifier ?? "icloud",
+            source: record.source
         )
         try execute(
             """

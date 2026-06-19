@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DictationView: View {
     @Bindable var coordinator: DictationCoordinator
+    @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var sourceFilter: DictationSourceFilter = .all
 
     var body: some View {
@@ -34,6 +35,15 @@ struct DictationView: View {
                 Text("muesli")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
+
+                Spacer(minLength: MuesliTheme.spacing12)
+
+                ICloudSyncHeaderButton(
+                    isEnabled: iCloudSyncEnabled,
+                    isSyncing: coordinator.isICloudSyncInProgress,
+                    hasError: syncStatusIsError,
+                    action: handleHeaderSyncTap
+                )
             }
 
             Text("Local-first dictation history for iOS")
@@ -231,6 +241,10 @@ struct DictationView: View {
         isTranscribing
     }
 
+    private var syncStatusIsError: Bool {
+        coordinator.iCloudSyncStatusText?.localizedCaseInsensitiveContains("sync failed") == true
+    }
+
     private var dictationButtonTitle: String {
         if coordinator.isRecording {
             "Stop Recording"
@@ -248,6 +262,103 @@ struct DictationView: View {
             "waveform"
         } else {
             "mic.fill"
+        }
+    }
+
+    private func handleHeaderSyncTap() {
+        if !iCloudSyncEnabled {
+            iCloudSyncEnabled = true
+        }
+        coordinator.syncICloudTextIfEnabled(reason: "home_manual")
+    }
+}
+
+private struct ICloudSyncHeaderButton: View {
+    let isEnabled: Bool
+    let isSyncing: Bool
+    let hasError: Bool
+    let action: () -> Void
+
+    private var tint: Color {
+        if hasError {
+            return MuesliTheme.transcribing
+        }
+        if isEnabled {
+            return MuesliTheme.accent
+        }
+        return MuesliTheme.textTertiary
+    }
+
+    private var accessibilityLabel: String {
+        if isSyncing {
+            return "Syncing with iCloud"
+        }
+        if hasError {
+            return "Retry iCloud sync"
+        }
+        if isEnabled {
+            return "Sync with iCloud"
+        }
+        return "Turn on iCloud sync"
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Image(systemName: hasError ? "icloud.slash" : "icloud")
+                    .font(.system(size: 23, weight: .semibold))
+                RotatingSyncGlyph(isAnimating: isSyncing)
+                    .font(.system(size: 11, weight: .bold))
+                    .offset(y: 1)
+                    .opacity(hasError ? 0 : 1)
+            }
+            .foregroundStyle(tint)
+            .frame(width: 44, height: 44)
+            .background(tint.opacity(isEnabled || hasError ? 0.14 : 0.08))
+            .clipShape(Circle())
+            .overlay(
+                Circle()
+                    .strokeBorder(tint.opacity(isEnabled || hasError ? 0.28 : 0.14), lineWidth: 1)
+            )
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSyncing)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint("Double tap to sync text with your Mac through private iCloud.")
+    }
+}
+
+private struct RotatingSyncGlyph: View {
+    let isAnimating: Bool
+    @State private var rotationDegrees = 0.0
+
+    var body: some View {
+        Image(systemName: "arrow.triangle.2.circlepath")
+            .rotationEffect(.degrees(rotationDegrees))
+            .onAppear {
+                updateRotation(animated: false)
+            }
+            .onChange(of: isAnimating) { _, _ in
+                updateRotation(animated: true)
+            }
+    }
+
+    private func updateRotation(animated: Bool) {
+        guard isAnimating else {
+            if animated {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    rotationDegrees = 0
+                }
+            } else {
+                rotationDegrees = 0
+            }
+            return
+        }
+
+        rotationDegrees = 0
+        withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+            rotationDegrees = 360
         }
     }
 }

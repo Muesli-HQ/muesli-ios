@@ -45,6 +45,7 @@ final class DictationCoordinator {
     var isKeyboardSessionArmed = false
     var keyboardSessionStatusText = "Off"
     var iCloudSyncStatusText: String?
+    var isICloudSyncInProgress = false
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
     var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
     var selectedUseCase = OnboardingUseCase(
@@ -442,18 +443,22 @@ final class DictationCoordinator {
     func syncICloudTextIfEnabled(reason: String = "manual") {
         guard MuesliPreferences.iCloudSyncEnabled else {
             iCloudSyncStatusText = "iCloud sync is off."
+            isICloudSyncInProgress = false
             return
         }
         guard iCloudSyncTask == nil else {
+            isICloudSyncInProgress = true
             pendingICloudSyncReason = reason
             return
         }
+        isICloudSyncInProgress = true
         iCloudSyncStatusText = "Syncing through private iCloud..."
         iCloudSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let result = try await ICloudTextSyncEngine().sync(store: self.store)
                 self.iCloudSyncTask = nil
+                self.isICloudSyncInProgress = false
                 if result.downloaded > 0 {
                     self.iCloudSyncStatusText = "Synced with your Mac."
                     AppTelemetry.signal(
@@ -479,6 +484,7 @@ final class DictationCoordinator {
                 self.runPendingICloudSyncIfNeeded()
             } catch {
                 self.iCloudSyncTask = nil
+                self.isICloudSyncInProgress = false
                 self.iCloudSyncStatusText = "Sync failed: \(error.localizedDescription)"
                 AppTelemetry.signal(
                     "icloud_text_sync_failed",

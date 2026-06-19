@@ -1,4 +1,3 @@
-import AuthenticationServices
 import CloudKit
 import SwiftUI
 
@@ -59,9 +58,10 @@ struct SettingsView: View {
                     parameters: ["enabled": enabled ? "true" : "false"]
                 )
                 appleSyncStatusText = enabled
-                    ? "iCloud text sync is enabled. Audio stays only on this iPhone."
+                    ? "Private iCloud sync is on. Open Muesli on your Mac to see the same text history."
                     : "iCloud sync is off. Your data stays local on this iPhone."
                 if enabled {
+                    AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "settings"])
                     coordinator.syncICloudTextIfEnabled(reason: "settings_toggle")
                 } else {
                     coordinator.iCloudSyncStatusText = "iCloud sync is off."
@@ -363,7 +363,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                 SettingsToggleRow(
                     icon: "icloud",
-                    title: "iCloud Sync",
+                    title: "Sync with Mac",
                     detail: "Sync dictation text, meeting transcripts, notes, and summaries through your private iCloud account. Audio is never synced.",
                     isOn: $iCloudSyncEnabled
                 )
@@ -375,38 +375,6 @@ struct SettingsView: View {
                     iconColor: appleSyncSnapshot.isICloudAvailable ? MuesliTheme.success : MuesliTheme.accent,
                     valueColor: appleSyncSnapshot.isICloudAvailable ? MuesliTheme.success : MuesliTheme.textTertiary
                 )
-                Divider().overlay(MuesliTheme.surfaceBorder)
-                SettingsRow(
-                    icon: "person.crop.circle.badge.checkmark",
-                    title: "Apple Account",
-                    value: appleSyncSnapshot.appleAccountLabel,
-                    iconColor: appleSyncSnapshot.isSignedInWithApple ? MuesliTheme.success : MuesliTheme.accent,
-                    valueColor: appleSyncSnapshot.isSignedInWithApple ? MuesliTheme.success : MuesliTheme.textTertiary
-                )
-
-                if appleSyncSnapshot.isSignedInWithApple {
-                    Button(action: signOutOfAppleSync) {
-                        Label("Signed in · Sign Out", systemImage: "checkmark.circle.fill")
-                            .font(MuesliTheme.headline())
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                            .foregroundStyle(.white)
-                            .background(MuesliTheme.success)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    SignInWithAppleButton(.signIn) { request in
-                        AppTelemetry.signal("apple_sync_sign_in_started")
-                        request.requestedScopes = [.fullName, .email]
-                    } onCompletion: { result in
-                        handleAppleSyncSignIn(result)
-                    }
-                    .signInWithAppleButtonStyle(.white)
-                    .frame(height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                }
 
                 Button {
                     coordinator.syncICloudTextIfEnabled(reason: "settings_manual")
@@ -623,58 +591,16 @@ struct SettingsView: View {
             appleSyncSnapshot = await AppleSyncAccountManager.shared.snapshot()
             AppTelemetry.signal(
                 "icloud_sync_status_checked",
-                parameters: [
-                    "icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false",
-                    "apple_signed_in": appleSyncSnapshot.isSignedInWithApple ? "true" : "false",
-                ]
+                parameters: ["icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"]
             )
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
-            } else if iCloudSyncEnabled && !appleSyncSnapshot.isSignedInWithApple {
-                appleSyncStatusText = "Sign in with Apple to confirm the account Muesli should prepare for sync."
             } else if iCloudSyncEnabled {
-                appleSyncStatusText = "Ready for private text sync. Audio and transcription stay on-device."
+                appleSyncStatusText = "Private iCloud sync is on. Your Muesli text history follows this iPhone and Mac."
             } else {
                 appleSyncStatusText = nil
             }
         }
-    }
-
-    private func handleAppleSyncSignIn(_ result: Result<ASAuthorization, Error>) {
-        switch result {
-        case .success(let authorization):
-            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-                appleSyncStatusText = "Apple sign-in did not return an Apple ID credential."
-                AppTelemetry.signal("apple_sync_sign_in_failed", parameters: ["reason": "missing_credential"])
-                return
-            }
-            do {
-                try AppleSyncAccountManager.shared.save(credential: credential)
-                appleSyncStatusText = "Signed in with Apple for Muesli sync."
-                AppTelemetry.signal("apple_sync_sign_in_completed")
-            } catch {
-                appleSyncStatusText = error.localizedDescription
-                AppTelemetry.signal(
-                    "apple_sync_sign_in_failed",
-                    parameters: ["reason": String(describing: type(of: error))]
-                )
-            }
-        case .failure(let error):
-            appleSyncStatusText = error.localizedDescription
-            AppTelemetry.signal(
-                "apple_sync_sign_in_failed",
-                parameters: ["reason": String(describing: type(of: error))]
-            )
-        }
-        refreshAppleSyncSettings()
-    }
-
-    private func signOutOfAppleSync() {
-        AppleSyncAccountManager.shared.signOut()
-        iCloudSyncEnabled = false
-        appleSyncStatusText = "Signed out of Apple sync. iCloud sync is off."
-        AppTelemetry.signal("apple_sync_signed_out")
-        refreshAppleSyncSettings()
     }
 
 }
@@ -727,7 +653,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .models:
             "Local transcription runtime and model preparation."
         case .syncPrivacy:
-            "Private iCloud sync and Apple account setup."
+            "Private iCloud sync between this iPhone and your Mac."
         case .aiSummaries:
             "Meeting summary providers, auth, and model selection."
         }
@@ -1153,126 +1079,37 @@ private struct SettingsMeetingTemplatePicker: View {
 
 struct AppleSyncAccountSnapshot: Equatable {
     let iCloudStatusLabel: String
-    let appleAccountLabel: String
     let detail: String
     let isICloudAvailable: Bool
-    let isSignedInWithApple: Bool
 
     static let checking = AppleSyncAccountSnapshot(
         iCloudStatusLabel: "Checking",
-        appleAccountLabel: "Checking",
-        detail: "Checking iCloud and Apple account status.",
-        isICloudAvailable: false,
-        isSignedInWithApple: false
+        detail: "Checking iCloud status.",
+        isICloudAvailable: false
     )
-}
-
-enum AppleSyncAccountError: Error, LocalizedError {
-    case missingUserIdentifier
-
-    var errorDescription: String? {
-        switch self {
-        case .missingUserIdentifier:
-            "Apple sign-in did not return a user identifier."
-        }
-    }
 }
 
 @MainActor
 final class AppleSyncAccountManager {
     static let shared = AppleSyncAccountManager()
 
-    private static let keychainService = "com.phequals7.muesli.ios.apple-sync"
-    private let keychain = KeychainStore(service: keychainService)
-
     private init() {}
 
     func snapshot() async -> AppleSyncAccountSnapshot {
-        async let cloudStatus = iCloudStatus()
-        async let appleCredential = appleCredentialStatus()
-        let (cloud, credential) = await (cloudStatus, appleCredential)
-
-        let accountLabel: String
-        let isSignedIn: Bool
-        switch credential {
-        case .authorized:
-            accountLabel = storedAccountLabel()
-            isSignedIn = true
-        case .revoked:
-            signOut()
-            accountLabel = "Revoked"
-            isSignedIn = false
-        case .notFound:
-            accountLabel = "Not signed in"
-            isSignedIn = false
-        case .transferred:
-            accountLabel = storedAccountLabel()
-            isSignedIn = true
-        @unknown default:
-            accountLabel = "Unknown"
-            isSignedIn = false
-        }
+        let cloud = await iCloudStatus()
 
         let detail: String
         if !cloud.isAvailable {
-            detail = "Muesli sync needs iCloud enabled on this iPhone."
-        } else if !isSignedIn {
-            detail = "Sign in with Apple to prepare private text sync for this app."
+            detail = "Sign in to iCloud on this iPhone to sync text with your Mac."
         } else {
-            detail = "Ready for private text sync. Transcripts, notes, and summaries will sync through your iCloud account."
+            detail = "Ready for private iCloud text sync. Dictations, transcripts, notes, and summaries will sync through your iCloud account."
         }
 
         return AppleSyncAccountSnapshot(
             iCloudStatusLabel: cloud.label,
-            appleAccountLabel: accountLabel,
             detail: detail,
-            isICloudAvailable: cloud.isAvailable,
-            isSignedInWithApple: isSignedIn
+            isICloudAvailable: cloud.isAvailable
         )
-    }
-
-    func save(credential: ASAuthorizationAppleIDCredential) throws {
-        let user = credential.user.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !user.isEmpty else { throw AppleSyncAccountError.missingUserIdentifier }
-
-        try keychain.set(user, for: "apple_user_id")
-        if let email = credential.email?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
-            try keychain.set(email, for: "apple_email")
-        }
-        let displayName = PersonNameComponentsFormatter().string(from: credential.fullName ?? PersonNameComponents())
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !displayName.isEmpty {
-            try keychain.set(displayName, for: "apple_display_name")
-        }
-    }
-
-    func signOut() {
-        ["apple_user_id", "apple_email", "apple_display_name"].forEach {
-            keychain.delete(account: $0)
-        }
-    }
-
-    private func storedAccountLabel() -> String {
-        let displayName = ((try? keychain.string(for: "apple_display_name")) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !displayName.isEmpty { return displayName }
-
-        let email = ((try? keychain.string(for: "apple_email")) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !email.isEmpty { return email }
-
-        return "Signed in"
-    }
-
-    private func appleCredentialStatus() async -> ASAuthorizationAppleIDProvider.CredentialState {
-        guard let userID = try? keychain.string(for: "apple_user_id"), !userID.isEmpty else {
-            return .notFound
-        }
-        return await withCheckedContinuation { continuation in
-            ASAuthorizationAppleIDProvider().getCredentialState(forUserID: userID) { state, _ in
-                continuation.resume(returning: state)
-            }
-        }
     }
 
     private func iCloudStatus() async -> (label: String, isAvailable: Bool) {

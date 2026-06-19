@@ -1,10 +1,19 @@
 import AVFoundation
-import AuthenticationServices
 import Combine
 import SwiftUI
 import UIKit
 
 struct OnboardingView: View {
+    private enum BridgeState {
+        case notConfigured
+        case checkingICloud
+        case readyToEnable
+        case syncing
+        case active
+        case needsICloud
+        case error
+    }
+
     @Environment(\.scenePhase) private var scenePhase
     @Bindable var coordinator: DictationCoordinator
     @State private var currentStep: OnboardingStep = OnboardingStep(
@@ -32,6 +41,7 @@ struct OnboardingView: View {
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
+    @State private var bridgePromptSeen = false
     private let permissionPoller = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
     private var orderedSteps: [OnboardingStep] {
@@ -79,6 +89,7 @@ struct OnboardingView: View {
                 coordinator.prepareModelForOnboarding()
             }
             if currentStep == .sync {
+                markBridgePromptSeen()
                 refreshAppleSyncStatus()
             }
         }
@@ -86,6 +97,7 @@ struct OnboardingView: View {
             UserDefaults.standard.set(step.rawValue, forKey: OnboardingPreferenceKeys.currentStep)
             AppTelemetry.signal("onboarding_step_viewed", parameters: ["step": step.telemetryName])
             if step == .sync {
+                markBridgePromptSeen()
                 refreshAppleSyncStatus()
             }
             if step == .model {
@@ -115,8 +127,8 @@ struct OnboardingView: View {
                 parameters: ["enabled": enabled ? "true" : "false"]
             )
             appleSyncStatusText = enabled
-                ? "Muesli will sync text records through your private iCloud account. Audio stays local."
-                : "iCloud sync is off. Dictations and meetings stay local on this iPhone."
+                ? "Syncing through your private iCloud account. Audio stays local."
+                : "Sync is off. Dictations and meetings stay local on this iPhone."
             refreshAppleSyncStatus()
         }
         .onChange(of: scenePhase) { _, phase in
@@ -369,10 +381,10 @@ struct OnboardingView: View {
     private var privateSyncStep: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                Text("Private iCloud Sync")
+                Text("Sync with your Mac")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("Optional sync keeps your Muesli data in your private iCloud account. Transcription still happens on-device.")
+                Text("Your Muesli history follows you through private iCloud. Dictations, meeting transcripts, notes, and summaries sync as text. Audio stays local.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -380,18 +392,15 @@ struct OnboardingView: View {
 
             MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                    Toggle(isOn: $iCloudSyncEnabled) {
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                            Text("Sync with iCloud")
-                                .font(MuesliTheme.headline())
-                                .foregroundStyle(MuesliTheme.textPrimary)
-                            Text("Dictation text, meeting transcripts, notes, and summaries can sync across Muesli apps. Audio stays local.")
-                                .font(MuesliTheme.caption())
-                                .foregroundStyle(MuesliTheme.textTertiary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        Text(iCloudSyncEnabled ? "Private iCloud sync is on" : "Continue with private iCloud sync")
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                        Text("Muesli uses the iCloud account already signed in on this iPhone. No extra account sign-in is required.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .tint(MuesliTheme.accent)
 
                     Divider().overlay(MuesliTheme.surfaceBorder)
 
@@ -402,16 +411,20 @@ struct OnboardingView: View {
                         isComplete: appleSyncSnapshot.isICloudAvailable
                     )
 
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-
-                    syncStatusRow(
-                        icon: "person.crop.circle.badge.checkmark",
-                        title: "Apple Account",
-                        value: appleSyncSnapshot.appleAccountLabel,
-                        isComplete: appleSyncSnapshot.isSignedInWithApple
-                    )
-
-                    appleSyncAction
+                    Button {
+                        enablePrivateICloudBridge()
+                    } label: {
+                        Label(bridgeSyncButtonTitle, systemImage: bridgeSyncButtonIcon)
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .foregroundStyle(bridgeActionDisabled ? MuesliTheme.textTertiary : .white)
+                            .background(bridgeActionDisabled ? MuesliTheme.surfacePrimary : MuesliTheme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(bridgeActionDisabled)
 
                     Text(appleSyncStatusText ?? appleSyncSnapshot.detail)
                         .font(MuesliTheme.caption())
@@ -424,6 +437,65 @@ struct OnboardingView: View {
             Text("You can skip this now and enable iCloud Sync later in Settings.")
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textTertiary)
+        }
+    }
+
+    private var bridgeState: BridgeState {
+        let status = coordinator.iCloudSyncStatusText?.lowercased() ?? ""
+        if appleSyncSnapshot.iCloudStatusLabel == "Checking" {
+            return .checkingICloud
+        }
+        if status.contains("syncing") {
+            return .syncing
+        }
+        if status.contains("failed") {
+            return .error
+        }
+        if !appleSyncSnapshot.isICloudAvailable {
+            return .needsICloud
+        }
+        if iCloudSyncEnabled {
+            return .active
+        }
+        return .readyToEnable
+    }
+
+    private var bridgeSyncButtonTitle: String {
+        switch bridgeState {
+        case .active:
+            return "Private iCloud sync on"
+        case .checkingICloud:
+            return "Checking iCloud"
+        case .syncing:
+            return "Syncing"
+        case .needsICloud:
+            return "Sign in to iCloud on this iPhone"
+        case .error:
+            return "Try again"
+        case .notConfigured, .readyToEnable:
+            return "Continue with private iCloud sync"
+        }
+    }
+
+    private var bridgeSyncButtonIcon: String {
+        switch bridgeState {
+        case .active:
+            return "checkmark.icloud"
+        case .checkingICloud, .syncing, .error:
+            return "arrow.triangle.2.circlepath"
+        case .needsICloud:
+            return "exclamationmark.icloud"
+        case .notConfigured, .readyToEnable:
+            return "icloud"
+        }
+    }
+
+    private var bridgeActionDisabled: Bool {
+        switch bridgeState {
+        case .checkingICloud, .syncing, .active, .needsICloud:
+            return true
+        case .notConfigured, .readyToEnable, .error:
+            return false
         }
     }
 
@@ -444,34 +516,6 @@ struct OnboardingView: View {
                 .font(MuesliTheme.callout())
                 .foregroundStyle(isComplete ? MuesliTheme.success : MuesliTheme.textTertiary)
                 .multilineTextAlignment(.trailing)
-        }
-    }
-
-    @ViewBuilder
-    private var appleSyncAction: some View {
-        if appleSyncSnapshot.isSignedInWithApple {
-            Button(action: signOutOfAppleSync) {
-                Label("Signed in · Sign Out", systemImage: "checkmark.circle.fill")
-                    .font(MuesliTheme.headline())
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                    .foregroundStyle(.white)
-                    .background(MuesliTheme.success)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            }
-            .buttonStyle(.plain)
-        } else {
-            SignInWithAppleButton(.signIn) { request in
-                AppTelemetry.signal("onboarding_apple_sync_sign_in_started")
-                AppTelemetry.signal("apple_sync_sign_in_started")
-                request.requestedScopes = [.fullName, .email]
-            } onCompletion: { result in
-                handleAppleSyncSignIn(result)
-            }
-            .signInWithAppleButtonStyle(.white)
-            .frame(height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
     }
 
@@ -905,7 +949,7 @@ struct OnboardingView: View {
         case .permissions:
             "Continue"
         case .sync:
-            appleSyncSnapshot.isSignedInWithApple ? "Continue" : "Skip for Now"
+            iCloudSyncEnabled ? "Continue" : "Skip for Now"
         case .model:
             coordinator.modelPreparation.isReady ? "Continue" : "Skip for Now"
         case .test:
@@ -982,8 +1026,7 @@ struct OnboardingView: View {
         if currentStep == .sync {
             AppTelemetry.signal("onboarding_icloud_sync_configured", parameters: [
                 "enabled": iCloudSyncEnabled ? "true" : "false",
-                "icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false",
-                "apple_signed_in": appleSyncSnapshot.isSignedInWithApple ? "true" : "false"
+                "icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"
             ])
         }
 
@@ -1052,60 +1095,34 @@ struct OnboardingView: View {
             appleSyncSnapshot = await AppleSyncAccountManager.shared.snapshot()
             AppTelemetry.signal(
                 "onboarding_icloud_sync_status_checked",
-                parameters: [
-                    "icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false",
-                    "apple_signed_in": appleSyncSnapshot.isSignedInWithApple ? "true" : "false"
-                ]
+                parameters: ["icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"]
             )
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
-            } else if iCloudSyncEnabled && !appleSyncSnapshot.isSignedInWithApple {
-                appleSyncStatusText = "Sign in with Apple to prepare this account for private text sync."
             } else if iCloudSyncEnabled {
-                appleSyncStatusText = "Ready for private text sync. Audio and transcription stay on-device."
+                appleSyncStatusText = "Private iCloud sync is on. Open Muesli on your Mac to see the same text history."
             } else {
                 appleSyncStatusText = nil
             }
         }
     }
 
-    private func handleAppleSyncSignIn(_ result: Result<ASAuthorization, Error>) {
-        switch result {
-        case .success(let authorization):
-            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-                appleSyncStatusText = "Apple sign-in did not return an Apple ID credential."
-                AppTelemetry.signal("onboarding_apple_sync_sign_in_failed", parameters: ["reason": "missing_credential"])
-                AppTelemetry.signal("apple_sync_sign_in_failed", parameters: ["reason": "missing_credential"])
-                return
-            }
-            do {
-                try AppleSyncAccountManager.shared.save(credential: credential)
-                iCloudSyncEnabled = true
-                appleSyncStatusText = "Signed in with Apple for Muesli sync."
-                AppTelemetry.signal("onboarding_apple_sync_sign_in_completed")
-                AppTelemetry.signal("apple_sync_sign_in_completed")
-            } catch {
-                appleSyncStatusText = error.localizedDescription
-                let reason = String(describing: type(of: error))
-                AppTelemetry.signal("onboarding_apple_sync_sign_in_failed", parameters: ["reason": reason])
-                AppTelemetry.signal("apple_sync_sign_in_failed", parameters: ["reason": reason])
-            }
-        case .failure(let error):
-            appleSyncStatusText = error.localizedDescription
-            let reason = String(describing: type(of: error))
-            AppTelemetry.signal("onboarding_apple_sync_sign_in_failed", parameters: ["reason": reason])
-            AppTelemetry.signal("apple_sync_sign_in_failed", parameters: ["reason": reason])
+    private func enablePrivateICloudBridge() {
+        guard appleSyncSnapshot.isICloudAvailable else {
+            appleSyncStatusText = "Sign in to iCloud on this iPhone, then return to Muesli."
+            return
         }
+        AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "onboarding"])
+        iCloudSyncEnabled = true
+        appleSyncStatusText = "Syncing your text history through private iCloud..."
+        coordinator.syncICloudTextIfEnabled(reason: "onboarding_bridge")
         refreshAppleSyncStatus()
     }
 
-    private func signOutOfAppleSync() {
-        AppleSyncAccountManager.shared.signOut()
-        iCloudSyncEnabled = false
-        appleSyncStatusText = "Signed out of Apple sync. iCloud sync is off."
-        AppTelemetry.signal("onboarding_apple_sync_signed_out")
-        AppTelemetry.signal("apple_sync_signed_out")
-        refreshAppleSyncStatus()
+    private func markBridgePromptSeen() {
+        guard !bridgePromptSeen else { return }
+        bridgePromptSeen = true
+        AppTelemetry.signal("bridge_prompt_seen", parameters: ["platform": "ios"])
     }
 
     private func saveSummaryConfiguration() {

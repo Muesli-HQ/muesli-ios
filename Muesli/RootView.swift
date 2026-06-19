@@ -590,7 +590,7 @@ private struct SyncView: View {
                         Text("Sync")
                             .font(MuesliTheme.title1())
                             .foregroundStyle(MuesliTheme.textPrimary)
-                        Text("Sync text records through private iCloud.")
+                        Text("Bridge your iPhone and Mac through private iCloud.")
                             .font(MuesliTheme.callout())
                             .foregroundStyle(MuesliTheme.textSecondary)
                     }
@@ -604,7 +604,7 @@ private struct SyncView: View {
                                     .frame(width: 22)
 
                                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                                    Text("iCloud Sync")
+                                    Text("Sync with Mac")
                                         .font(MuesliTheme.headline())
                                         .foregroundStyle(MuesliTheme.textPrimary)
                                     Text("Sync dictation text, meeting transcripts, notes, and summaries through your private iCloud account. Audio stays local.")
@@ -615,7 +615,7 @@ private struct SyncView: View {
 
                                 Spacer(minLength: MuesliTheme.spacing12)
 
-                                Toggle("iCloud Sync", isOn: $iCloudSyncEnabled)
+                                Toggle("Sync with Mac", isOn: $iCloudSyncEnabled)
                                     .labelsHidden()
                                     .tint(MuesliTheme.accent)
                             }

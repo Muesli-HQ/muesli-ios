@@ -441,18 +441,34 @@ final class DictationCoordinator {
             return
         }
         guard iCloudSyncTask == nil else { return }
-        iCloudSyncStatusText = "Syncing text records..."
+        iCloudSyncStatusText = "Syncing through private iCloud..."
         iCloudSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let result = try await ICloudTextSyncEngine().sync(store: self.store)
                 self.iCloudSyncTask = nil
-                self.iCloudSyncStatusText = "Synced \(result.uploaded) up, \(result.downloaded) down."
+                if result.downloaded > 0 {
+                    self.iCloudSyncStatusText = "Synced with your Mac."
+                    AppTelemetry.signal(
+                        "bridge_remote_records_seen",
+                        parameters: ["platform": "ios", "count": "\(result.downloaded)"]
+                    )
+                } else if result.uploaded > 0 {
+                    self.iCloudSyncStatusText = "Synced with private iCloud."
+                } else {
+                    self.iCloudSyncStatusText = "All text is up to date."
+                }
                 self.refreshHistory()
                 AppTelemetry.signal(
                     "icloud_text_sync_completed",
                     parameters: ["reason": reason]
                 )
+                if reason == "onboarding_bridge" || reason == "settings_toggle" {
+                    AppTelemetry.signal(
+                        "bridge_enable_completed",
+                        parameters: ["platform": "ios", "source": reason]
+                    )
+                }
             } catch {
                 self.iCloudSyncTask = nil
                 self.iCloudSyncStatusText = "Sync failed: \(error.localizedDescription)"
@@ -460,6 +476,12 @@ final class DictationCoordinator {
                     "icloud_text_sync_failed",
                     parameters: ["reason": reason, "error": String(describing: type(of: error))]
                 )
+                if reason == "onboarding_bridge" || reason == "settings_toggle" {
+                    AppTelemetry.signal(
+                        "bridge_enable_failed",
+                        parameters: ["platform": "ios", "source": reason, "error": String(describing: type(of: error))]
+                    )
+                }
             }
         }
     }

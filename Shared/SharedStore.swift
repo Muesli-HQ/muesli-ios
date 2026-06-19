@@ -184,6 +184,10 @@ struct SharedStore: Sendable {
         try database().textRecordsNeedingSync(limit: limit)
     }
 
+    func textRecordsForSyncMigration(limit: Int = 5_000) throws -> [SyncTextRecord] {
+        try database().textRecordsForSyncMigration(limit: limit)
+    }
+
     func upsertSyncedTextRecord(_ record: SyncTextRecord) throws {
         try database().upsertSyncedTextRecord(record)
     }
@@ -599,6 +603,96 @@ private struct SharedStoreDatabase {
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
                   AND s.cloud_record_name IS NOT NULL
+                  AND s.kind = ?
+                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0)) DESC
+                LIMIT ?
+                """,
+                db: db
+            ) { statement in
+                try bind(RecordingSessionKind.meeting.rawValue, to: statement, at: 1)
+                try bind(remaining, to: statement, at: 2)
+            } read: { statement in
+                let started = Self.optionalDate(statement, 6)
+                let ended = Self.optionalDate(statement, 7)
+                let text = sqliteColumnString(statement, 13) ?? ""
+                let summary = sqliteColumnString(statement, 15)
+                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 18))
+                return SyncTextRecord(
+                    id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
+                    kind: .meeting,
+                    title: sqliteColumnString(statement, 2),
+                    text: text,
+                    speakerTranscript: sqliteColumnString(statement, 14),
+                    summaryText: summary,
+                    manualNotes: nil,
+                    source: "ios",
+                    engineIdentifier: sqliteColumnString(statement, 8),
+                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
+                    updatedAt: Date(timeIntervalSince1970: updated),
+                    startedAt: started,
+                    endedAt: ended,
+                    durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
+                    wordCount: Self.wordCount(text + " " + (summary ?? "")),
+                    isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 19) != SQLITE_NULL,
+                    cloudChangeTag: sqliteColumnString(statement, 12)
+                )
+            }
+            records.append(contentsOf: meetingRows)
+            return records
+        }
+    }
+
+    func textRecordsForSyncMigration(limit: Int = 5_000) throws -> [SyncTextRecord] {
+        try withDatabase { db in
+            var records: [SyncTextRecord] = []
+            let dictationRows = try queryRows(
+                """
+                SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
+                       deleted_at, session_id, cloud_change_tag
+                FROM result_history
+                WHERE cloud_record_name IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                db: db
+            ) { statement in
+                try bind(limit, to: statement, at: 1)
+            } read: { statement in
+                SyncTextRecord(
+                    id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
+                    kind: .dictation,
+                    title: nil,
+                    text: sqliteColumnString(statement, 1) ?? "",
+                    speakerTranscript: nil,
+                    summaryText: nil,
+                    manualNotes: nil,
+                    source: "ios",
+                    engineIdentifier: sqliteColumnString(statement, 2),
+                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
+                    updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
+                    startedAt: nil,
+                    endedAt: nil,
+                    durationSeconds: 0,
+                    wordCount: Self.wordCount(sqliteColumnString(statement, 1) ?? ""),
+                    isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
+                    cloudChangeTag: sqliteColumnString(statement, 7)
+                )
+            }
+            records.append(contentsOf: dictationRows)
+
+            let remaining = max(limit - records.count, 0)
+            guard remaining > 0 else { return records }
+
+            let meetingRows = try queryRows(
+                """
+                SELECT s.cloud_record_name, s.id, s.title, s.kind, s.phase, s.created_at,
+                       s.started_at, s.ended_at, s.engine_identifier, s.error_message,
+                       s.updated_at, s.deleted_at, s.cloud_change_tag,
+                       t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
+                       t.summary_model, t.updated_at, t.deleted_at
+                FROM recording_sessions s
+                LEFT JOIN transcripts t ON t.session_id = s.id
+                WHERE s.cloud_record_name IS NOT NULL
                   AND s.kind = ?
                 ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0)) DESC
                 LIMIT ?

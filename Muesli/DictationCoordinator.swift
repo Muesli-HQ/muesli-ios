@@ -30,6 +30,8 @@ final class DictationCoordinator {
     private var keyboardRuntimePollingTask: Task<Void, Never>?
     private var keyboardSessionTimeoutTask: Task<Void, Never>?
     private var iCloudSyncTask: Task<Void, Never>?
+    private var iCloudSyncDebounceTask: Task<Void, Never>?
+    private var pendingICloudSyncReason: String?
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
     private var meetingChunkTranscriptions: [MeetingChunkTranscription] = []
     private var meetingChunksDirectory: URL?
@@ -376,6 +378,7 @@ final class DictationCoordinator {
             clipboardStatusText = "Deleted"
             AppTelemetry.signal("dictation_deleted")
             clearClipboardStatusSoon()
+            scheduleICloudSyncAfterLocalChange(reason: "dictation_deleted")
         } catch {
             clipboardStatusText = "Delete failed"
             clearClipboardStatusSoon()
@@ -393,6 +396,7 @@ final class DictationCoordinator {
             clipboardStatusText = "Deleted"
             AppTelemetry.signal("meeting_deleted")
             clearClipboardStatusSoon()
+            scheduleICloudSyncAfterLocalChange(reason: "meeting_deleted")
         } catch {
             clipboardStatusText = "Delete failed"
             clearClipboardStatusSoon()
@@ -440,7 +444,10 @@ final class DictationCoordinator {
             iCloudSyncStatusText = "iCloud sync is off."
             return
         }
-        guard iCloudSyncTask == nil else { return }
+        guard iCloudSyncTask == nil else {
+            pendingICloudSyncReason = reason
+            return
+        }
         iCloudSyncStatusText = "Syncing through private iCloud..."
         iCloudSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -469,6 +476,7 @@ final class DictationCoordinator {
                         parameters: ["platform": "ios", "source": reason]
                     )
                 }
+                self.runPendingICloudSyncIfNeeded()
             } catch {
                 self.iCloudSyncTask = nil
                 self.iCloudSyncStatusText = "Sync failed: \(error.localizedDescription)"
@@ -482,8 +490,26 @@ final class DictationCoordinator {
                         parameters: ["platform": "ios", "source": reason, "error": String(describing: type(of: error))]
                     )
                 }
+                self.runPendingICloudSyncIfNeeded()
             }
         }
+    }
+
+    private func scheduleICloudSyncAfterLocalChange(reason: String) {
+        guard MuesliPreferences.iCloudSyncEnabled else { return }
+        iCloudSyncDebounceTask?.cancel()
+        iCloudSyncDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.0))
+            guard !Task.isCancelled else { return }
+            self?.iCloudSyncDebounceTask = nil
+            self?.syncICloudTextIfEnabled(reason: reason)
+        }
+    }
+
+    private func runPendingICloudSyncIfNeeded() {
+        guard let reason = pendingICloudSyncReason else { return }
+        pendingICloudSyncReason = nil
+        scheduleICloudSyncAfterLocalChange(reason: reason)
     }
 
     func setKeyboardSessionModeEnabled(_ enabled: Bool) {
@@ -1054,6 +1080,7 @@ final class DictationCoordinator {
                     engineIdentifier: engine.identifier
                 )
                 try store.saveResult(result)
+                scheduleICloudSyncAfterLocalChange(reason: "dictation_completed")
                 saveKeyboardLiveTranscript(text: text, isFinal: true)
                 saveKeyboardHandoff(requestID: request.id, phase: .resultReady, message: "Ready to insert")
                 try store.clearPendingRequest()
@@ -1243,6 +1270,7 @@ final class DictationCoordinator {
                     engineIdentifier: engine.identifier
                 )
                 try store.saveResult(result)
+                scheduleICloudSyncAfterLocalChange(reason: "dictation_completed")
                 if startedFromKeyboard {
                     saveKeyboardLiveTranscript(text: text, isFinal: true)
                     saveKeyboardHandoff(requestID: request.id, phase: .resultReady, message: "Ready to insert")
@@ -1573,6 +1601,7 @@ final class DictationCoordinator {
                 session.engineIdentifier = engine.identifier
                 session.errorMessage = nil
                 try store.saveSession(session)
+                scheduleICloudSyncAfterLocalChange(reason: "meeting_completed")
                 cleanupMeetingChunks()
                 meetingStatusText = "Ready"
                 refreshHistory()
@@ -1656,6 +1685,7 @@ final class DictationCoordinator {
                 session.engineIdentifier = engine.identifier
                 session.errorMessage = nil
                 try store.saveSession(session)
+                scheduleICloudSyncAfterLocalChange(reason: "meeting_completed")
                 meetingStatusText = "Ready"
                 refreshHistory()
                 await liveActivityController.end(

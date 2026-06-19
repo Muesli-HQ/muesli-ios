@@ -19,6 +19,9 @@ struct DictationView: View {
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
+            .refreshable {
+                triggerHomeSync()
+            }
             .onAppear {
                 coordinator.refreshHistory()
             }
@@ -35,15 +38,6 @@ struct DictationView: View {
                 Text("muesli")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
-
-                Spacer(minLength: MuesliTheme.spacing12)
-
-                ICloudSyncHeaderButton(
-                    isEnabled: iCloudSyncEnabled,
-                    isSyncing: coordinator.isICloudSyncInProgress,
-                    hasError: syncStatusIsError,
-                    action: handleHeaderSyncTap
-                )
             }
 
             Text("Local-first dictation history for iOS")
@@ -138,7 +132,7 @@ struct DictationView: View {
     @ViewBuilder
     private var historySection: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                     Text("Recent Dictations")
                         .font(MuesliTheme.title3())
@@ -149,6 +143,13 @@ struct DictationView: View {
                 }
 
                 Spacer()
+
+                ICloudSyncStatusButton(
+                    isEnabled: iCloudSyncEnabled,
+                    isSyncing: coordinator.isICloudSyncInProgress,
+                    hasError: syncStatusIsError,
+                    action: triggerHomeSync
+                )
 
                 if let status = coordinator.clipboardStatusText {
                     Label(status, systemImage: "checkmark")
@@ -265,7 +266,7 @@ struct DictationView: View {
         }
     }
 
-    private func handleHeaderSyncTap() {
+    private func triggerHomeSync() {
         if !iCloudSyncEnabled {
             iCloudSyncEnabled = true
         }
@@ -273,7 +274,7 @@ struct DictationView: View {
     }
 }
 
-private struct ICloudSyncHeaderButton: View {
+private struct ICloudSyncStatusButton: View {
     let isEnabled: Bool
     let isSyncing: Bool
     let hasError: Bool
@@ -306,14 +307,14 @@ private struct ICloudSyncHeaderButton: View {
         Button(action: action) {
             ZStack {
                 Image(systemName: hasError ? "icloud.slash" : "icloud")
-                    .font(.system(size: 23, weight: .semibold))
+                    .font(.system(size: 22, weight: .semibold))
                 RotatingSyncGlyph(isAnimating: isSyncing)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 10, weight: .bold))
                     .offset(y: 1)
                     .opacity(hasError ? 0 : 1)
             }
             .foregroundStyle(tint)
-            .frame(width: 44, height: 44)
+            .frame(width: 38, height: 38)
             .background(tint.opacity(isEnabled || hasError ? 0.14 : 0.08))
             .clipShape(Circle())
             .overlay(

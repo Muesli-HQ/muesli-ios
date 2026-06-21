@@ -352,6 +352,15 @@ final class DictationCoordinator {
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let source = components?.queryItems?.first(where: { $0.name == MuesliAppConstants.sourceQueryItem })?.value
             ?? "deeplink"
+
+        if MuesliPreferences.iCloudSyncEnabled {
+            syncSetupSource = source
+            iCloudSyncStatusText = "Already syncing with your Mac through private iCloud."
+            AppTelemetry.signal("bridge_enable_completed", parameters: ["platform": "ios", "source": source, "already_enabled": "true"])
+            syncICloudTextIfEnabled(reason: "bridge_qr_existing")
+            return true
+        }
+
         syncSetupSource = source
         syncSetupRequestID = UUID()
         iCloudSyncStatusText = "Continue setup with private iCloud sync."

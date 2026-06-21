@@ -92,6 +92,7 @@ struct OnboardingView: View {
                 markBridgePromptSeen()
                 refreshAppleSyncStatus()
             }
+            routeToSyncStepIfRequested()
         }
         .onChange(of: currentStep) { _, step in
             UserDefaults.standard.set(step.rawValue, forKey: OnboardingPreferenceKeys.currentStep)
@@ -130,6 +131,9 @@ struct OnboardingView: View {
                 ? "Syncing through your private iCloud account. Audio stays local."
                 : "Sync is off. Dictations and meetings stay local on this iPhone."
             refreshAppleSyncStatus()
+        }
+        .onChange(of: coordinator.syncSetupRequestID) { _, _ in
+            routeToSyncStepIfRequested()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -1123,6 +1127,13 @@ struct OnboardingView: View {
         guard !bridgePromptSeen else { return }
         bridgePromptSeen = true
         AppTelemetry.signal("bridge_prompt_seen", parameters: ["platform": "ios"])
+    }
+
+    private func routeToSyncStepIfRequested() {
+        guard coordinator.syncSetupRequestID != nil else { return }
+        currentStep = .sync
+        appleSyncStatusText = "Continue setup from your Mac with private iCloud sync."
+        coordinator.syncSetupRequestID = nil
     }
 
     private func saveSummaryConfiguration() {

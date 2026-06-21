@@ -46,6 +46,8 @@ final class DictationCoordinator {
     var keyboardSessionStatusText = "Off"
     var iCloudSyncStatusText: String?
     var isICloudSyncInProgress = false
+    var syncSetupRequestID: UUID?
+    var syncSetupSource: String?
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
     var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
     var selectedUseCase = OnboardingUseCase(
@@ -141,6 +143,10 @@ final class DictationCoordinator {
         }
         #endif
 
+        if handleSyncBridgeURL(url) {
+            return
+        }
+
         guard url.scheme == MuesliAppConstants.urlScheme,
               url.host == MuesliAppConstants.dictateHost,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -174,6 +180,12 @@ final class DictationCoordinator {
         activeRequest = request
         startKeyboardRuntimePolling()
         startRecording(for: request, source: "keyboard")
+    }
+
+    func requestSyncSetup(source: String) {
+        syncSetupSource = source
+        syncSetupRequestID = UUID()
+        AppTelemetry.signal("bridge_prompt_seen", parameters: ["platform": "ios", "source": source])
     }
 
     private func refreshActiveKeyboardRequestIfNeeded(_ request: DictationRequest) -> Bool {
@@ -331,6 +343,21 @@ final class DictationCoordinator {
         )
     }
     #endif
+
+    private func handleSyncBridgeURL(_ url: URL) -> Bool {
+        guard url.scheme == MuesliAppConstants.urlScheme,
+              url.host == MuesliAppConstants.syncHost
+        else { return false }
+
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let source = components?.queryItems?.first(where: { $0.name == MuesliAppConstants.sourceQueryItem })?.value
+            ?? "deeplink"
+        syncSetupSource = source
+        syncSetupRequestID = UUID()
+        iCloudSyncStatusText = "Continue setup with private iCloud sync."
+        AppTelemetry.signal("ios_bridge_deeplink_opened", parameters: ["source": source])
+        return true
+    }
 
     func toggleRecording() {
         if isRecording {

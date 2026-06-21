@@ -25,6 +25,13 @@ struct RootView: View {
         .tint(MuesliTheme.accent)
         .preferredColorScheme(preferredColorScheme)
         .id("theme-\(appearanceMode)-\(accentTheme)")
+        .onChange(of: coordinator.syncSetupRequestID) { _, requestID in
+            guard requestID != nil else { return }
+            if coordinator.hasCompletedOnboarding {
+                selectedSection = .settings
+            }
+            isDrawerOpen = false
+        }
     }
 
     private var preferredColorScheme: ColorScheme? {
@@ -114,7 +121,10 @@ struct RootView: View {
         case .meetings:
             MeetingsView(coordinator: coordinator)
         case .settings:
-            SettingsView(coordinator: coordinator) { section in
+            SettingsView(
+                coordinator: coordinator,
+                openSyncPrivacyRequest: coordinator.syncSetupRequestID
+            ) { section in
                 selectedSection = section
             }
         }

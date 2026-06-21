@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
+    var openSyncPrivacyRequest: UUID?
     var onSelectSection: ((AppSection) -> Void)?
 
     @AppStorage(MuesliPreferences.appearanceModeKey) private var appearanceMode = MuesliAppearanceMode.system.rawValue
@@ -36,6 +37,10 @@ struct SettingsView: View {
                 refreshSummarySettings()
                 AppTelemetry.signal("settings_viewed")
                 refreshAppleSyncSettings()
+                openRequestedSyncPrivacySection()
+            }
+            .onChange(of: openSyncPrivacyRequest) { _, _ in
+                openRequestedSyncPrivacySection()
             }
             .onChange(of: liveActivitiesForDictations) { _, _ in
                 coordinator.applyLiveActivityPreferences()
@@ -601,6 +606,12 @@ struct SettingsView: View {
                 appleSyncStatusText = nil
             }
         }
+    }
+
+    private func openRequestedSyncPrivacySection() {
+        guard openSyncPrivacyRequest != nil else { return }
+        selectedSettingsSection = .syncPrivacy
+        coordinator.syncSetupRequestID = nil
     }
 
 }

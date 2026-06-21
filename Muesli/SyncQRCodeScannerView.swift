@@ -329,7 +329,7 @@ private final class QRCodeScannerViewController: UIViewController, @preconcurren
     private let previewLayer = AVCaptureVideoPreviewLayer()
     private let sessionQueue = DispatchQueue(label: "com.muesli.qr-scanner.session")
     private let onCodeScanned: (String) -> Bool
-    private var didScanCode = false
+    private var hasAcceptedCode = false
 
     init(onCodeScanned: @escaping (String) -> Bool) {
         self.onCodeScanned = onCodeScanned
@@ -391,11 +391,13 @@ private final class QRCodeScannerViewController: UIViewController, @preconcurren
         didOutput metadataObjects: [AVMetadataObject],
         from connection: AVCaptureConnection
     ) {
-        guard !didScanCode,
+        guard !hasAcceptedCode,
               let metadataObject = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
               let payload = metadataObject.stringValue
         else { return }
 
-        didScanCode = onCodeScanned(payload)
+        if onCodeScanned(payload) {
+            hasAcceptedCode = true
+        }
     }
 }

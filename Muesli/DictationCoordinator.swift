@@ -46,7 +46,13 @@ final class DictationCoordinator {
     var keyboardSessionStatusText = "Off"
     var iCloudSyncStatusText: String?
     var isICloudSyncInProgress = false
-    var syncSetupRequestID: UUID?
+    var syncSetupRequestID: UUID? {
+        didSet {
+            if syncSetupRequestID == nil {
+                syncSetupSource = nil
+            }
+        }
+    }
     var syncSetupSource: String?
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
     var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
@@ -185,7 +191,14 @@ final class DictationCoordinator {
     func requestSyncSetup(source: String) {
         syncSetupSource = source
         syncSetupRequestID = UUID()
-        AppTelemetry.signal("bridge_prompt_seen", parameters: ["platform": "ios", "source": source])
+    }
+
+    func consumeSyncSetupRequest() -> (id: UUID, source: String)? {
+        guard let requestID = syncSetupRequestID else { return nil }
+        let source = syncSetupSource ?? "unknown"
+        syncSetupRequestID = nil
+        syncSetupSource = nil
+        return (requestID, source)
     }
 
     private func refreshActiveKeyboardRequestIfNeeded(_ request: DictationRequest) -> Bool {

@@ -41,12 +41,19 @@ struct OnboardingView: View {
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
-    @State private var bridgePromptSeen = false
+    @State private var pinnedSyncSetupStatusText: String?
+    @State private var activeSyncSetupSource: String?
+    @State private var activeSyncSetupPromptID: UUID?
+    @State private var bridgePromptSeenTokens: Set<String> = []
     @State private var isSyncQRCodeScannerPresented = false
     private let permissionPoller = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
     private var orderedSteps: [OnboardingStep] {
         OnboardingStep.orderedSteps(for: useCaseDraft)
+    }
+
+    private var currentSyncSetupSource: String {
+        activeSyncSetupSource ?? "onboarding"
     }
 
     var body: some View {
@@ -89,17 +96,17 @@ struct OnboardingView: View {
             if currentStep == .model {
                 coordinator.prepareModelForOnboarding()
             }
+            routeToSyncStepIfRequested()
             if currentStep == .sync {
-                markBridgePromptSeen()
+                markBridgePromptSeen(source: currentSyncSetupSource, requestID: activeSyncSetupPromptID)
                 refreshAppleSyncStatus()
             }
-            routeToSyncStepIfRequested()
         }
         .onChange(of: currentStep) { _, step in
             UserDefaults.standard.set(step.rawValue, forKey: OnboardingPreferenceKeys.currentStep)
             AppTelemetry.signal("onboarding_step_viewed", parameters: ["step": step.telemetryName])
             if step == .sync {
-                markBridgePromptSeen()
+                markBridgePromptSeen(source: currentSyncSetupSource, requestID: activeSyncSetupPromptID)
                 refreshAppleSyncStatus()
             }
             if step == .model {
@@ -124,9 +131,10 @@ struct OnboardingView: View {
             }
         }
         .onChange(of: iCloudSyncEnabled) { _, enabled in
+            pinnedSyncSetupStatusText = nil
             AppTelemetry.signal(
                 "onboarding_icloud_sync_toggled",
-                parameters: ["enabled": enabled ? "true" : "false"]
+                parameters: ["enabled": enabled ? "true" : "false", "source": currentSyncSetupSource]
             )
             appleSyncStatusText = enabled
                 ? "Syncing through your private iCloud account. Audio stays local."
@@ -428,6 +436,7 @@ struct OnboardingView: View {
                     )
 
                     Button {
+                        pinnedSyncSetupStatusText = nil
                         isSyncQRCodeScannerPresented = true
                         AppTelemetry.signal("bridge_qr_scan_started", parameters: ["platform": "ios", "source": "onboarding"])
                     } label: {
@@ -1057,8 +1066,12 @@ struct OnboardingView: View {
         if currentStep == .sync {
             AppTelemetry.signal("onboarding_icloud_sync_configured", parameters: [
                 "enabled": iCloudSyncEnabled ? "true" : "false",
-                "icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"
+                "icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false",
+                "source": currentSyncSetupSource
             ])
+            pinnedSyncSetupStatusText = nil
+            activeSyncSetupSource = nil
+            activeSyncSetupPromptID = nil
         }
 
         if isLastStep {
@@ -1129,13 +1142,20 @@ struct OnboardingView: View {
                 parameters: ["icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"]
             )
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
+                pinnedSyncSetupStatusText = nil
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
             } else if iCloudSyncEnabled {
+                pinnedSyncSetupStatusText = nil
                 if let remoteDeviceName = MuesliBridgeDeviceIdentity.remoteDeviceDisplayName {
                     appleSyncStatusText = "Private iCloud sync is on with \(remoteDeviceName)."
                 } else {
                     appleSyncStatusText = "Private iCloud sync is on. Open Muesli on your Mac to see the same text history."
                 }
+            } else if !appleSyncSnapshot.isICloudAvailable {
+                pinnedSyncSetupStatusText = nil
+                appleSyncStatusText = "Sign in to iCloud on this iPhone, then return to Muesli."
+            } else if let pinnedSyncSetupStatusText {
+                appleSyncStatusText = pinnedSyncSetupStatusText
             } else {
                 appleSyncStatusText = nil
             }
@@ -1144,11 +1164,12 @@ struct OnboardingView: View {
 
     @discardableResult
     private func enablePrivateICloudBridge() -> Bool {
+        pinnedSyncSetupStatusText = nil
         guard appleSyncSnapshot.isICloudAvailable else {
             appleSyncStatusText = "Sign in to iCloud on this iPhone, then return to Muesli."
             return false
         }
-        AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "onboarding"])
+        AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": currentSyncSetupSource])
         iCloudSyncEnabled = true
         appleSyncStatusText = "Syncing your text history through private iCloud..."
         coordinator.syncICloudTextIfEnabled(reason: "onboarding_bridge")
@@ -1156,17 +1177,21 @@ struct OnboardingView: View {
         return true
     }
 
-    private func markBridgePromptSeen() {
-        guard !bridgePromptSeen else { return }
-        bridgePromptSeen = true
-        AppTelemetry.signal("bridge_prompt_seen", parameters: ["platform": "ios"])
+    private func markBridgePromptSeen(source: String, requestID: UUID?) {
+        let token = requestID?.uuidString ?? "manual:\(source)"
+        guard !bridgePromptSeenTokens.contains(token) else { return }
+        bridgePromptSeenTokens.insert(token)
+        AppTelemetry.signal("bridge_prompt_seen", parameters: ["platform": "ios", "source": source])
     }
 
     private func routeToSyncStepIfRequested() {
-        guard coordinator.syncSetupRequestID != nil else { return }
+        guard let syncSetupRequest = coordinator.consumeSyncSetupRequest() else { return }
+        activeSyncSetupSource = syncSetupRequest.source
+        activeSyncSetupPromptID = syncSetupRequest.id
         currentStep = .sync
-        appleSyncStatusText = "Continue setup from your Mac with private iCloud sync."
-        coordinator.syncSetupRequestID = nil
+        pinnedSyncSetupStatusText = "Continue setup from your Mac with private iCloud sync."
+        appleSyncStatusText = pinnedSyncSetupStatusText
+        markBridgePromptSeen(source: syncSetupRequest.source, requestID: syncSetupRequest.id)
     }
 
     private func saveSummaryConfiguration() {

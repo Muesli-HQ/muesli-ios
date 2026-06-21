@@ -61,4 +61,23 @@ final class MuesliBridgeDeviceIdentityTests: XCTestCase {
             forceRefresh: true
         ))
     }
+
+    func testFailedRefreshUsesShortRetryBackoffInsteadOfSuccessThrottle() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let now = Date(timeIntervalSince1970: 1_770_000_000)
+
+        defaults.set("remote-mac", forKey: DefaultsKey.remoteDeviceID)
+        MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults, at: now.addingTimeInterval(-10))
+        MuesliBridgeDeviceIdentity.markRefreshFailed(defaults: defaults, at: now)
+
+        XCTAssertFalse(MuesliBridgeDeviceIdentity.shouldRefresh(
+            defaults: defaults,
+            now: now.addingTimeInterval(14)
+        ))
+        XCTAssertTrue(MuesliBridgeDeviceIdentity.shouldRefresh(
+            defaults: defaults,
+            now: now.addingTimeInterval(15)
+        ))
+    }
 }

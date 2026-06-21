@@ -505,7 +505,10 @@ final class DictationCoordinator {
         iCloudSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let result = try await ICloudTextSyncEngine().sync(store: self.store)
+                let result = try await ICloudTextSyncEngine().sync(
+                    store: self.store,
+                    forceBridgeDeviceRefresh: self.shouldForceBridgeDeviceRefresh(for: reason)
+                )
                 self.iCloudSyncTask = nil
                 self.isICloudSyncInProgress = false
                 let remoteDeviceName = MuesliBridgeDeviceIdentity.remoteDeviceDisplayName
@@ -568,6 +571,20 @@ final class DictationCoordinator {
         guard let reason = pendingICloudSyncReason else { return }
         pendingICloudSyncReason = nil
         scheduleICloudSyncAfterLocalChange(reason: reason)
+    }
+
+    private func shouldForceBridgeDeviceRefresh(for reason: String) -> Bool {
+        switch reason {
+        case "bridge_qr_existing",
+             "home_manual",
+             "onboarding_bridge",
+             "settings_manual",
+             "settings_qr",
+             "settings_toggle":
+            return true
+        default:
+            return false
+        }
     }
 
     func setKeyboardSessionModeEnabled(_ enabled: Bool) {

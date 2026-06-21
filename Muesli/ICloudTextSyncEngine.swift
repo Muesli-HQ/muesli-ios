@@ -67,6 +67,9 @@ enum MuesliBridgeDeviceIdentity {
     private static let remoteDeviceNameKey = "muesli.sync.bridge.remoteDeviceName.v1"
     private static let remoteDevicePlatformKey = "muesli.sync.bridge.remoteDevicePlatform.v1"
     private static let remoteDeviceLastSeenAtKey = "muesli.sync.bridge.remoteDeviceLastSeenAt.v1"
+    private static let lastRefreshKey = "muesli.sync.bridge.lastDeviceRefreshAttemptAt.v1"
+    private static let linkedRefreshInterval: TimeInterval = 60 * 60
+    private static let unlinkedRefreshInterval: TimeInterval = 60
 
     static func local(defaults: UserDefaults = .standard) -> MuesliBridgeDeviceSnapshot {
         let deviceID: String
@@ -101,8 +104,27 @@ enum MuesliBridgeDeviceIdentity {
         return !deviceID.isEmpty
     }
 
+    static func shouldRefresh(
+        defaults: UserDefaults = .standard,
+        now: Date = Date(),
+        forceRefresh: Bool = false
+    ) -> Bool {
+        if forceRefresh {
+            return true
+        }
+        guard let lastRefresh = defaults.object(forKey: lastRefreshKey) as? Date else {
+            return true
+        }
+        let interval = hasKnownRemoteDevice(defaults: defaults) ? linkedRefreshInterval : unlinkedRefreshInterval
+        return now.timeIntervalSince(lastRefresh) >= interval
+    }
+
+    static func markRefreshed(defaults: UserDefaults = .standard, at date: Date = Date()) {
+        defaults.set(date, forKey: lastRefreshKey)
+    }
+
     static func updateRemoteDevices(from records: [CKRecord], defaults: UserDefaults = .standard) {
-        let localID = local(defaults: defaults).deviceID
+        let localID = defaults.string(forKey: localDeviceIDKey) ?? ""
         let latestRemote = records
             .compactMap(Self.snapshot(from:))
             .filter { $0.deviceID != localID }
@@ -158,8 +180,6 @@ final class ICloudTextSyncEngine {
         static let textRecordType = "MuesliTextRecord"
         static let bridgeDeviceRecordType = "MuesliBridgeDevice"
         static let migratedDefaultZoneKey = "muesli.icloud.textRecords.defaultToSyncZoneMigrated.v1"
-        static let lastBridgeDeviceRefreshAttemptAtKey = "muesli.sync.bridge.lastDeviceRefreshAttemptAt.v1"
-        static let bridgeDeviceRefreshThrottle: TimeInterval = 60 * 60
 
         static var syncZoneID: CKRecordZone.ID {
             CKRecordZone.ID(zoneName: syncZoneName, ownerName: CKCurrentUserDefaultName)
@@ -182,9 +202,12 @@ final class ICloudTextSyncEngine {
         self.defaults = defaults
     }
 
-    func sync(store: SharedStore = SharedStore()) async throws -> ICloudTextSyncResult {
+    func sync(
+        store: SharedStore = SharedStore(),
+        forceBridgeDeviceRefresh: Bool = false
+    ) async throws -> ICloudTextSyncResult {
         try await ensureSyncZone()
-        await refreshBridgeDeviceLink()
+        await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
         try await migrateDefaultZoneIfNeeded(store: store)
 
         let remoteRecords = try await fetchChangedTextRecords()
@@ -220,27 +243,21 @@ final class ICloudTextSyncEngine {
         }
     }
 
-    private func refreshBridgeDeviceLink() async {
-        guard shouldRefreshBridgeDeviceLink() else { return }
+    private func refreshBridgeDeviceLink(forceRefresh: Bool = false) async {
+        guard MuesliBridgeDeviceIdentity.shouldRefresh(
+            defaults: defaults,
+            forceRefresh: forceRefresh
+        ) else { return }
 
-        defaults.set(Date(), forKey: Schema.lastBridgeDeviceRefreshAttemptAtKey)
         do {
             try await upsertLocalBridgeDeviceRecord()
             let records = try await fetchBridgeDeviceRecords()
             MuesliBridgeDeviceIdentity.updateRemoteDevices(from: records, defaults: defaults)
+            MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults)
         } catch {
             print("Failed to refresh iCloud bridge device identity: \(error)")
+            MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults)
         }
-    }
-
-    private func shouldRefreshBridgeDeviceLink(now: Date = Date()) -> Bool {
-        guard MuesliBridgeDeviceIdentity.hasKnownRemoteDevice(defaults: defaults) else {
-            return true
-        }
-        guard let lastAttemptAt = defaults.object(forKey: Schema.lastBridgeDeviceRefreshAttemptAtKey) as? Date else {
-            return true
-        }
-        return now.timeIntervalSince(lastAttemptAt) >= Schema.bridgeDeviceRefreshThrottle
     }
 
     private func upsertLocalBridgeDeviceRecord() async throws {

@@ -26,6 +26,7 @@ final class DictationCoordinator {
     private var modelPreparationTask: Task<Void, Never>?
     private var modelPrewarmTask: Task<Void, Never>?
     private var meteringTask: Task<Void, Never>?
+    private var recordingTimerTask: Task<Void, Never>?
     private var commandPollingTask: Task<Void, Never>?
     private var keyboardRuntimePollingTask: Task<Void, Never>?
     private var keyboardSessionTimeoutTask: Task<Void, Never>?
@@ -90,6 +91,7 @@ final class DictationCoordinator {
     var onboardingTestError: String?
     var isRecording = false
     var inputLevel = 0.0
+    var recordingElapsedTime: TimeInterval = 0
     var statusText = "Ready"
     var meetingStatusText = "Ready"
     var lastTranscript = ""
@@ -420,6 +422,12 @@ final class DictationCoordinator {
 
     func deleteDictation(_ result: DictationResult) {
         do {
+            if let session = recordingSession(for: result) {
+                if let audioFileName = session.audioFileName {
+                    try? store.deleteAudioFile(fileName: audioFileName)
+                }
+                try? store.deleteRecordingSession(id: session.id)
+            }
             try store.deleteResult(result)
             dictationHistory.removeAll { $0.id == result.id || $0.requestID == result.requestID }
             if lastTranscript == result.text {
@@ -471,6 +479,22 @@ final class DictationCoordinator {
 
     func audioFileURL(for session: RecordingSession) -> URL? {
         guard let audioFileName = session.audioFileName else { return nil }
+        return try? store.audioFileURL(fileName: audioFileName)
+    }
+
+    func recordingSession(for result: DictationResult) -> RecordingSession? {
+        if let sessionID = result.sessionID,
+           let session = try? store.recordingSession(id: sessionID) {
+            return session
+        }
+        return nil
+    }
+
+    func audioFileURL(for result: DictationResult) -> URL? {
+        guard let session = recordingSession(for: result),
+              session.keepsAudioRecording,
+              let audioFileName = session.audioFileName
+        else { return nil }
         return try? store.audioFileURL(fileName: audioFileName)
     }
 
@@ -1028,7 +1052,11 @@ final class DictationCoordinator {
         realtimeDictationCommittedText = ""
         clearKeyboardLiveTranscript()
         let kind: RecordingSessionKind = source == "keyboard" ? .keyboardDictation : .quickDictation
-        var session = RecordingSession(requestID: request.id, kind: kind)
+        var session = RecordingSession(
+            requestID: request.id,
+            kind: kind,
+            keepsAudioRecording: MuesliPreferences.keepDictationAudioRecordingsEnabled
+        )
         if source == "keyboard" {
             saveKeyboardHandoff(
                 requestID: request.id,
@@ -1039,7 +1067,7 @@ final class DictationCoordinator {
 
         Task {
             do {
-                let audioURL = try store.newAudioFileURL(sessionID: session.id)
+                let audioURL = try store.newDictationAudioFileURL(startedAt: session.createdAt)
                 session.audioFileName = audioURL.lastPathComponent
                 session.startedAt = .now
                 try store.saveSession(session)
@@ -1055,6 +1083,7 @@ final class DictationCoordinator {
                 }
                 activeSession = session
                 isRecording = true
+                startRecordingTimer(startedAt: session.startedAt ?? .now)
                 if source == "keyboard" {
                     saveKeyboardHandoff(
                         requestID: request.id,
@@ -1091,9 +1120,11 @@ final class DictationCoordinator {
             } catch {
                 session.phase = .failed
                 session.errorMessage = error.localizedDescription
+                cleanupNonRetainedAudio(for: &session)
                 try? store.saveSession(session)
                 activeSession = nil
                 activeRequest = nil
+                stopRecordingTimer()
                 statusText = error.localizedDescription
                 clearKeyboardLiveTranscript()
                 stopMetering()
@@ -1146,12 +1177,15 @@ final class DictationCoordinator {
                 completedSession.transcriptID = savedTranscript.id
                 completedSession.engineIdentifier = engine.identifier
                 completedSession.errorMessage = nil
+                cleanupNonRetainedAudio(for: &completedSession)
                 try store.saveSession(completedSession)
+                exportRetainedAudioIfNeeded(for: completedSession)
 
                 let result = DictationResult(
                     requestID: request.id,
                     sessionID: savedTranscript.sessionID,
                     text: text,
+                    createdAt: completedSession.createdAt,
                     engineIdentifier: engine.identifier
                 )
                 try store.saveResult(result)
@@ -1183,6 +1217,7 @@ final class DictationCoordinator {
                 var failedSession = session
                 failedSession.phase = .failed
                 failedSession.errorMessage = error.localizedDescription
+                cleanupNonRetainedAudio(for: &failedSession)
                 try? store.saveSession(failedSession)
                 try? store.saveStatus(.init(
                     requestID: request.id,
@@ -1236,6 +1271,7 @@ final class DictationCoordinator {
 
         isRecording = false
         stopMetering()
+        stopRecordingTimer()
         stopCommandPolling()
         statusText = "Transcribing"
         try? store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: "Transcribing"))
@@ -1321,7 +1357,9 @@ final class DictationCoordinator {
                 }
                 let completedSession = activeSession ?? session
                 let transcript: Transcript?
+                let resultCreatedAt: Date
                 if var completedSession {
+                    resultCreatedAt = completedSession.createdAt
                     let savedTranscript = Transcript(
                         sessionID: completedSession.id,
                         text: text,
@@ -1333,15 +1371,19 @@ final class DictationCoordinator {
                     completedSession.transcriptID = savedTranscript.id
                     completedSession.engineIdentifier = engine.identifier
                     completedSession.errorMessage = nil
+                    cleanupNonRetainedAudio(for: &completedSession)
                     try store.saveSession(completedSession)
+                    exportRetainedAudioIfNeeded(for: completedSession)
                     transcript = savedTranscript
                 } else {
+                    resultCreatedAt = request.createdAt
                     transcript = nil
                 }
                 let result = DictationResult(
                     requestID: request.id,
                     sessionID: transcript?.sessionID,
                     text: text,
+                    createdAt: resultCreatedAt,
                     engineIdentifier: engine.identifier
                 )
                 try store.saveResult(result)
@@ -1390,6 +1432,7 @@ final class DictationCoordinator {
                 if var session = activeSession ?? session {
                     session.phase = .failed
                     session.errorMessage = error.localizedDescription
+                    cleanupNonRetainedAudio(for: &session)
                     try? store.saveSession(session)
                 }
                 activeRequest = nil
@@ -1919,6 +1962,41 @@ final class DictationCoordinator {
         }
     }
 
+    private func startRecordingTimer(startedAt: Date) {
+        recordingTimerTask?.cancel()
+        recordingElapsedTime = 0
+        recordingTimerTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.recordingElapsedTime = max(0, Date().timeIntervalSince(startedAt))
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    private func stopRecordingTimer() {
+        recordingTimerTask?.cancel()
+        recordingTimerTask = nil
+        recordingElapsedTime = 0
+    }
+
+    private func cleanupNonRetainedAudio(for session: inout RecordingSession) {
+        guard !session.keepsAudioRecording,
+              let audioFileName = session.audioFileName
+        else { return }
+
+        try? store.deleteAudioFile(fileName: audioFileName)
+        session.audioFileName = nil
+    }
+
+    private func exportRetainedAudioIfNeeded(for session: RecordingSession) {
+        guard session.keepsAudioRecording,
+              let audioFileName = session.audioFileName
+        else { return }
+
+        _ = try? store.exportAudioFileToDocuments(fileName: audioFileName)
+    }
+
     private func startMeetingMetering() {
         meteringTask?.cancel()
         meteringTask = Task { @MainActor [weak self] in
@@ -2169,12 +2247,14 @@ final class DictationCoordinator {
         guard activeRequest?.id == requestID else { return }
         isRecording = false
         stopMetering()
+        stopRecordingTimer()
         stopCommandPolling()
         _ = try? recorder.stop()
         cleanupRealtimeDictationRecorder()
         if var session = activeSession {
             session.phase = .cancelled
             session.endedAt = .now
+            cleanupNonRetainedAudio(for: &session)
             try? store.saveSession(session)
             Task {
                 await liveActivityController.end(

@@ -201,6 +201,11 @@ struct SharedStore: Sendable {
         return try audioFileURL(fileName: fileName)
     }
 
+    func newDictationAudioFileURL(startedAt: Date) throws -> URL {
+        let fileName = audioFileName(prefix: "dictation", date: startedAt)
+        return try uniqueAudioFileURL(fileName: fileName)
+    }
+
     func audioFileURL(fileName: String) throws -> URL {
         let directory = try recordingsDirectoryURL()
         return directory.appendingPathComponent(fileName)
@@ -208,12 +213,55 @@ struct SharedStore: Sendable {
 
     func deleteAudioFile(fileName: String) throws {
         let url = try audioFileURL(fileName: fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        try FileManager.default.removeItem(at: url)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        try? deleteExportedAudioFile(fileName: fileName)
+    }
+
+    @discardableResult
+    func exportAudioFileToDocuments(fileName: String) throws -> URL {
+        let sourceURL = try audioFileURL(fileName: fileName)
+        let destinationURL = try exportedRecordingsDirectoryURL().appendingPathComponent(fileName)
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        return destinationURL
     }
 
     func audioFileName(sessionID: UUID) -> String {
         "session-\(sessionID.uuidString).wav"
+    }
+
+    func audioFileName(prefix: String, date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return "\(prefix)-\(formatter.string(from: date)).wav"
+    }
+
+    private func uniqueAudioFileURL(fileName: String) throws -> URL {
+        let directory = try recordingsDirectoryURL()
+        let proposedURL = directory.appendingPathComponent(fileName)
+        guard FileManager.default.fileExists(atPath: proposedURL.path) else {
+            return proposedURL
+        }
+
+        let baseName = proposedURL.deletingPathExtension().lastPathComponent
+        let pathExtension = proposedURL.pathExtension
+        for suffix in 1...999 {
+            let candidateName = "\(baseName)-\(suffix).\(pathExtension)"
+            let candidateURL = directory.appendingPathComponent(candidateName)
+            if !FileManager.default.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+        }
+
+        return directory.appendingPathComponent("\(baseName)-\(UUID().uuidString).\(pathExtension)")
     }
 
     private func database() throws -> SharedStoreDatabase {
@@ -224,6 +272,22 @@ struct SharedStore: Sendable {
         let directory = try containerURL().appendingPathComponent("Recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    private func exportedRecordingsDirectoryURL() throws -> URL {
+        guard let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw SharedStoreError.appGroupUnavailable("Documents")
+        }
+
+        let directory = documentsURL.appendingPathComponent("Muesli Recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func deleteExportedAudioFile(fileName: String) throws {
+        let url = try exportedRecordingsDirectoryURL().appendingPathComponent(fileName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
     }
 
     private func containerURL() throws -> URL {
@@ -1378,12 +1442,26 @@ private struct SharedStoreDatabase {
             return
         }
 
-        let resultID = UUID(uuidString: record.id) ?? UUID()
-        let requestID = resultID
+        let existingLink = try queryRows(
+            "SELECT id, request_id, session_id FROM result_history WHERE cloud_record_name = ? LIMIT 1",
+            db: db
+        ) { statement in
+            try bind(record.id, to: statement, at: 1)
+        } read: { statement in
+            (
+                id: sqliteColumnString(statement, 0),
+                requestID: sqliteColumnString(statement, 1),
+                sessionID: sqliteColumnString(statement, 2)
+            )
+        }.first ?? nil
+
+        let resultID = existingLink?.id.flatMap(UUID.init(uuidString:)) ?? UUID(uuidString: record.id) ?? UUID()
+        let requestID = existingLink?.requestID.flatMap(UUID.init(uuidString:)) ?? resultID
+        let sessionID = existingLink?.sessionID.flatMap(UUID.init(uuidString:))
         let result = DictationResult(
             id: resultID,
             requestID: requestID,
-            sessionID: nil,
+            sessionID: sessionID,
             text: record.text,
             createdAt: record.createdAt,
             engineIdentifier: record.engineIdentifier ?? "icloud",
@@ -1395,10 +1473,11 @@ private struct SharedStoreDatabase {
                 id, request_id, session_id, text, engine_identifier, created_at, updated_at,
                 deleted_at, cloud_record_name, cloud_change_tag, last_synced_at, sync_dirty, payload
             )
-            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
             ON CONFLICT(cloud_record_name) DO UPDATE SET
                 id = excluded.id,
                 request_id = excluded.request_id,
+                session_id = COALESCE(result_history.session_id, excluded.session_id),
                 text = excluded.text,
                 engine_identifier = excluded.engine_identifier,
                 created_at = excluded.created_at,
@@ -1414,15 +1493,16 @@ private struct SharedStoreDatabase {
         ) { statement in
             try bind(resultID.uuidString, to: statement, at: 1)
             try bind(requestID.uuidString, to: statement, at: 2)
-            try bind(record.text, to: statement, at: 3)
-            try bind(record.engineIdentifier ?? "icloud", to: statement, at: 4)
-            try bind(record.createdAt.timeIntervalSince1970, to: statement, at: 5)
-            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 6)
-            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 7)
-            try bind(record.id, to: statement, at: 8)
-            try bind(record.cloudChangeTag, to: statement, at: 9)
-            try bind(Date().timeIntervalSince1970, to: statement, at: 10)
-            try bind(try encoder.encode(result), to: statement, at: 11)
+            try bind(sessionID?.uuidString, to: statement, at: 3)
+            try bind(record.text, to: statement, at: 4)
+            try bind(record.engineIdentifier ?? "icloud", to: statement, at: 5)
+            try bind(record.createdAt.timeIntervalSince1970, to: statement, at: 6)
+            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 7)
+            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 8)
+            try bind(record.id, to: statement, at: 9)
+            try bind(record.cloudChangeTag, to: statement, at: 10)
+            try bind(Date().timeIntervalSince1970, to: statement, at: 11)
+            try bind(try encoder.encode(result), to: statement, at: 12)
         }
     }
 

@@ -915,16 +915,17 @@ private struct MeetingTranscriptContent: View {
     }
 }
 
-private struct SavedAudioPlayerView: View {
+struct SavedAudioPlayerView: View {
     let audioURL: URL
 
     @State private var player: AVAudioPlayer?
     @State private var isPlaying = false
     @State private var currentTime: TimeInterval = 0
     @State private var duration: TimeInterval = 0
-    @State private var samples: [CGFloat] = AudioWaveformSampler.placeholderSamples(count: 36)
+    @State private var samples: [CGFloat] = AudioWaveformSampler.placeholderSamples(count: waveformSampleCount)
     @State private var playbackError: String?
 
+    private static let waveformSampleCount = 72
     private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -981,8 +982,13 @@ private struct SavedAudioPlayerView: View {
             }
         }
         .task(id: audioURL) {
-            samples = await AudioWaveformSampler.samples(from: audioURL, count: 36)
+            samples = await AudioWaveformSampler.samples(from: audioURL, count: Self.waveformSampleCount)
             preparePlayer()
+        }
+        .onAppear {
+            if player == nil {
+                preparePlayer()
+            }
         }
         .onReceive(timer) { _ in
             guard let player else { return }
@@ -990,20 +996,20 @@ private struct SavedAudioPlayerView: View {
             if !player.isPlaying, isPlaying {
                 isPlaying = false
                 if currentTime >= max(duration - 0.2, 0) {
-                    currentTime = duration
+                    resetPlayback()
                 }
             }
         }
         .onDisappear {
-            player?.stop()
-            isPlaying = false
+            resetPlayback()
+            player = nil
         }
     }
 
     private var waveform: some View {
         GeometryReader { geometry in
-            let spacing: CGFloat = 3
-            let barWidth = max(2, (geometry.size.width - spacing * CGFloat(samples.count - 1)) / CGFloat(samples.count))
+            let spacing: CGFloat = 2
+            let barWidth = max(1.2, (geometry.size.width - spacing * CGFloat(samples.count - 1)) / CGFloat(samples.count))
             let progress = duration > 0 ? min(max(currentTime / duration, 0), 1) : 0
 
             HStack(alignment: .center, spacing: spacing) {
@@ -1059,7 +1065,7 @@ private struct SavedAudioPlayerView: View {
             player.pause()
             isPlaying = false
         } else {
-            if currentTime >= duration {
+            if currentTime >= max(duration - 0.2, 0) {
                 player.currentTime = 0
                 currentTime = 0
             }
@@ -1072,6 +1078,13 @@ private struct SavedAudioPlayerView: View {
         guard let player else { return }
         player.stop()
         player.currentTime = 0
+        currentTime = 0
+        isPlaying = false
+    }
+
+    private func resetPlayback() {
+        player?.stop()
+        player?.currentTime = 0
         currentTime = 0
         isPlaying = false
     }
@@ -1098,14 +1111,16 @@ private struct SavedAudioPlayerView: View {
     }
 }
 
-private struct SavedAudioWaveformView: View {
+struct SavedAudioWaveformView: View {
     let audioURL: URL
-    @State private var samples: [CGFloat] = AudioWaveformSampler.placeholderSamples(count: 36)
+    @State private var samples: [CGFloat] = AudioWaveformSampler.placeholderSamples(count: waveformSampleCount)
+
+    private static let waveformSampleCount = 72
 
     var body: some View {
         GeometryReader { geometry in
-            let spacing: CGFloat = 3
-            let barWidth = max(2, (geometry.size.width - spacing * CGFloat(samples.count - 1)) / CGFloat(samples.count))
+            let spacing: CGFloat = 2
+            let barWidth = max(1.2, (geometry.size.width - spacing * CGFloat(samples.count - 1)) / CGFloat(samples.count))
             HStack(alignment: .center, spacing: spacing) {
                 ForEach(Array(samples.enumerated()), id: \.offset) { _, sample in
                     RoundedRectangle(cornerRadius: barWidth / 2, style: .continuous)
@@ -1119,12 +1134,12 @@ private struct SavedAudioWaveformView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task(id: audioURL) {
-            samples = await AudioWaveformSampler.samples(from: audioURL, count: 36)
+            samples = await AudioWaveformSampler.samples(from: audioURL, count: Self.waveformSampleCount)
         }
     }
 }
 
-private enum AudioWaveformSampler {
+enum AudioWaveformSampler {
     static func placeholderSamples(count: Int) -> [CGFloat] {
         let preset: [CGFloat] = [0.24, 0.38, 0.56, 0.78, 0.62, 0.34, 0.46, 0.84, 0.70, 0.42, 0.28, 0.52]
         return (0..<count).map { preset[$0 % preset.count] }

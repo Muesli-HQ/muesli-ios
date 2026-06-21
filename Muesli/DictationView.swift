@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct DictationView: View {
     @Bindable var coordinator: DictationCoordinator
@@ -40,6 +41,17 @@ struct DictationView: View {
             .onAppear {
                 coordinator.refreshHistory()
             }
+            .navigationDestination(for: UUID.self) { resultID in
+                if let result = coordinator.dictationHistory.first(where: { $0.id == resultID }),
+                   let session = coordinator.recordingSession(for: result),
+                   let audioURL = coordinator.audioFileURL(for: result) {
+                    DictationAudioDetailView(result: result, session: session, audioURL: audioURL) {
+                        coordinator.copyToClipboard(result)
+                    }
+                } else {
+                    DictationAudioMissingView()
+                }
+            }
         }
     }
 
@@ -75,6 +87,19 @@ struct DictationView: View {
                     }
 
                     Spacer()
+
+                    if coordinator.isRecording {
+                        Text(formatElapsedTime(coordinator.recordingElapsedTime))
+                            .font(MuesliTheme.captionMedium())
+                            .monospacedDigit()
+                            .foregroundStyle(statusColor)
+                            .padding(.horizontal, MuesliTheme.spacing8)
+                            .padding(.vertical, MuesliTheme.spacing4)
+                            .background(statusColor.opacity(0.13))
+                            .clipShape(Capsule())
+                            .accessibilityLabel("Recording elapsed time")
+                            .accessibilityValue(formatElapsedTime(coordinator.recordingElapsedTime))
+                    }
                 }
 
                 if isWaveformActive {
@@ -182,11 +207,26 @@ struct DictationView: View {
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
                     ForEach(filteredHistory) { result in
-                        DictationHistoryRow(
-                            result: result,
-                            onCopy: { coordinator.copyToClipboard(result) },
-                            onDelete: { coordinator.deleteDictation(result) }
-                        )
+                        let session = coordinator.recordingSession(for: result)
+                        let hasRetainedAudio = session?.keepsAudioRecording == true && coordinator.audioFileURL(for: result) != nil
+                        if hasRetainedAudio {
+                            NavigationLink(value: result.id) {
+                                DictationHistoryRow(
+                                    result: result,
+                                    hasRetainedAudio: true,
+                                    onCopy: { coordinator.copyToClipboard(result) },
+                                    onDelete: { coordinator.deleteDictation(result) }
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            DictationHistoryRow(
+                                result: result,
+                                hasRetainedAudio: false,
+                                onCopy: { coordinator.copyToClipboard(result) },
+                                onDelete: { coordinator.deleteDictation(result) }
+                            )
+                        }
                     }
                 }
             }
@@ -288,6 +328,14 @@ struct DictationView: View {
             return
         }
         coordinator.syncICloudTextIfEnabled(reason: "home_manual")
+    }
+
+    private func formatElapsedTime(_ time: TimeInterval) -> String {
+        guard time.isFinite, time > 0 else { return "0:00" }
+        let totalSeconds = Int(time.rounded(.down))
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
@@ -510,6 +558,7 @@ private struct DictationSourceFilterPicker: View {
 
 private struct DictationHistoryRow: View {
     let result: DictationResult
+    let hasRetainedAudio: Bool
     let onCopy: () -> Void
     let onDelete: () -> Void
     @State private var isConfirmingDelete = false
@@ -570,6 +619,13 @@ private struct DictationHistoryRow: View {
 
                 Spacer(minLength: MuesliTheme.spacing8)
 
+                if hasRetainedAudio {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .accessibilityHidden(true)
+                }
+
                 DictationOriginChip(origin: origin)
             }
 
@@ -592,6 +648,194 @@ private struct DictationHistoryRow: View {
         formatter.timeStyle = .short
         return formatter
     }()
+}
+
+private struct DictationAudioDetailView: View {
+    let result: DictationResult
+    let session: RecordingSession
+    let audioURL: URL
+    let onCopy: () -> Void
+
+    @State private var filesExportStatus: String?
+    @State private var isFilesExporterPresented = false
+    @State private var audioDocument: AudioFileDocument?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text(session.title ?? session.kind.title)
+                        .font(MuesliTheme.title1())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+
+                    Text(result.createdAt, formatter: Self.dateFormatter)
+                        .font(MuesliTheme.callout())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+
+                MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Recording")
+                                .font(MuesliTheme.title3())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+
+                            Spacer()
+
+                            if let duration = session.duration {
+                                Text(formatTime(duration))
+                                    .font(MuesliTheme.captionMedium())
+                                    .monospacedDigit()
+                                    .foregroundStyle(MuesliTheme.textTertiary)
+                            }
+                        }
+
+                        SavedAudioPlayerView(audioURL: audioURL)
+
+                        HStack(spacing: MuesliTheme.spacing12) {
+                            ShareLink(item: audioURL) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                                    .font(MuesliTheme.captionMedium())
+                            }
+                            .foregroundStyle(MuesliTheme.accent)
+
+                            Button(action: saveAudioToFiles) {
+                                Label("Save to Files", systemImage: "folder")
+                                    .font(MuesliTheme.captionMedium())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(MuesliTheme.accent)
+
+                            Spacer()
+                        }
+
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                            if let fileName = session.audioFileName {
+                                Label(fileName, systemImage: "iphone")
+                                    .font(MuesliTheme.caption())
+                                    .foregroundStyle(MuesliTheme.textTertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+
+                            if let filesExportStatus {
+                                Text(filesExportStatus)
+                                    .font(MuesliTheme.caption())
+                                    .foregroundStyle(MuesliTheme.textTertiary)
+                            }
+                        }
+                    }
+                    .padding(MuesliTheme.spacing16)
+                }
+
+                MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                        HStack {
+                            Text("Transcript")
+                                .font(MuesliTheme.title3())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                            Spacer()
+                            Button(action: onCopy) {
+                                Label("Copy", systemImage: "doc.on.doc")
+                                    .font(MuesliTheme.captionMedium())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(MuesliTheme.accent)
+                        }
+
+                        Text(result.text.isEmpty ? "No speech detected." : result.text)
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(result.text.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(MuesliTheme.spacing16)
+                }
+            }
+            .padding(.horizontal, MuesliTheme.spacing20)
+            .padding(.top, MuesliTheme.spacing24)
+            .padding(.bottom, MuesliTheme.spacing24)
+        }
+        .background(MuesliTheme.backgroundBase)
+        .navigationTitle("Dictation")
+        .navigationBarTitleDisplayMode(.inline)
+        .fileExporter(
+            isPresented: $isFilesExporterPresented,
+            document: audioDocument,
+            contentType: AudioFileDocument.contentType,
+            defaultFilename: audioURL.lastPathComponent
+        ) { result in
+            switch result {
+            case .success:
+                filesExportStatus = "Saved with Files"
+            case .failure:
+                filesExportStatus = "Files export failed"
+            }
+        }
+    }
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        guard time.isFinite, time > 0 else { return "0:00" }
+        let totalSeconds = Int(time.rounded())
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func saveAudioToFiles() {
+        do {
+            audioDocument = try AudioFileDocument(url: audioURL)
+            isFilesExporterPresented = true
+        } catch {
+            filesExportStatus = "Files export failed"
+        }
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+}
+
+private struct DictationAudioMissingView: View {
+    var body: some View {
+        VStack(spacing: MuesliTheme.spacing12) {
+            Image(systemName: "waveform.slash")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(MuesliTheme.textTertiary)
+            Text("Recording unavailable")
+                .font(MuesliTheme.title3())
+                .foregroundStyle(MuesliTheme.textPrimary)
+            Text("This dictation either was not saved with audio or its local audio file has been removed.")
+                .font(MuesliTheme.body())
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(MuesliTheme.spacing24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(MuesliTheme.backgroundBase)
+    }
+}
+
+private struct AudioFileDocument: FileDocument {
+    static let contentType = UTType(filenameExtension: "wav") ?? .audio
+    static var readableContentTypes: [UTType] { [contentType] }
+
+    private var data: Data
+
+    init(url: URL) throws {
+        data = try Data(contentsOf: url)
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
 }
 
 private struct DictationOriginChip: View {

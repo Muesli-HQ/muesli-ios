@@ -10,6 +10,7 @@ enum MuesliPreferences {
     static let fillerWordRemovalKey = "muesli.transcription.fillerWordRemoval"
     static let customDictionaryKey = "muesli.transcription.customDictionary"
     static let transcriptionModelKey = "muesli.transcription.localModel"
+    static let keepDictationAudioRecordingsKey = "muesli.dictations.keepAudioRecordings"
     static let keepMeetingAudioRecordingsKey = "muesli.meetings.keepAudioRecordings"
     static let meetingSummariesEnabledKey = "muesli.meetings.summaries.enabled"
     static let meetingSummaryBackendKey = "muesli.meetings.summary.backend"
@@ -60,6 +61,10 @@ enum MuesliPreferences {
         LocalTranscriptionModel(
             rawValue: UserDefaults.standard.string(forKey: transcriptionModelKey) ?? ""
         ) ?? .defaultModel
+    }
+
+    static var keepDictationAudioRecordingsEnabled: Bool {
+        bool(for: keepDictationAudioRecordingsKey, defaultValue: false)
     }
 
     static var keepMeetingAudioRecordingsEnabled: Bool {

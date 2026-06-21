@@ -421,6 +421,7 @@ final class DictationCoordinator {
                 if let audioFileName = session.audioFileName {
                     try? store.deleteAudioFile(fileName: audioFileName)
                 }
+                try? store.deleteTranscript(for: session.id)
                 try? store.deleteRecordingSession(id: session.id)
                 recordingSessions.removeAll { $0.id == session.id }
             }

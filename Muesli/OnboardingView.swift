@@ -42,6 +42,7 @@ struct OnboardingView: View {
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
     @State private var bridgePromptSeen = false
+    @State private var isSyncQRCodeScannerPresented = false
     private let permissionPoller = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
     private var orderedSteps: [OnboardingStep] {
@@ -134,6 +135,11 @@ struct OnboardingView: View {
         }
         .onChange(of: coordinator.syncSetupRequestID) { _, _ in
             routeToSyncStepIfRequested()
+        }
+        .sheet(isPresented: $isSyncQRCodeScannerPresented) {
+            SyncQRCodeScannerView { url in
+                coordinator.handleOpenURL(url)
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -414,6 +420,21 @@ struct OnboardingView: View {
                         value: appleSyncSnapshot.iCloudStatusLabel,
                         isComplete: appleSyncSnapshot.isICloudAvailable
                     )
+
+                    Button {
+                        isSyncQRCodeScannerPresented = true
+                        AppTelemetry.signal("bridge_qr_scan_started", parameters: ["platform": "ios", "source": "onboarding"])
+                    } label: {
+                        Label("Scan Mac QR", systemImage: "qrcode.viewfinder")
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .foregroundStyle(MuesliTheme.accent)
+                            .background(MuesliTheme.accentSubtle)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
 
                     Button {
                         enablePrivateICloudBridge()

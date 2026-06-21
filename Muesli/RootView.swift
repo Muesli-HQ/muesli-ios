@@ -589,7 +589,9 @@ private struct MeetingTemplatesView: View {
 }
 
 private struct SyncView: View {
+    @Bindable var coordinator: DictationCoordinator
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
+    @State private var isSyncQRCodeScannerPresented = false
     let onOpenSettings: () -> Void
 
     var body: some View {
@@ -630,6 +632,20 @@ private struct SyncView: View {
                                     .tint(MuesliTheme.accent)
                             }
 
+                            Button {
+                                isSyncQRCodeScannerPresented = true
+                                AppTelemetry.signal("bridge_qr_scan_started", parameters: ["platform": "ios", "source": "sync_tab"])
+                            } label: {
+                                Label("Scan Mac QR", systemImage: "qrcode.viewfinder")
+                                    .font(MuesliTheme.headline())
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 44)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(MuesliTheme.accent)
+                            .background(MuesliTheme.accentSubtle)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
                             Button(action: onOpenSettings) {
                                 Label("Open Sync Settings", systemImage: "gearshape")
                                     .font(MuesliTheme.headline())
@@ -650,6 +666,11 @@ private struct SyncView: View {
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $isSyncQRCodeScannerPresented) {
+                SyncQRCodeScannerView { url in
+                    coordinator.handleOpenURL(url)
+                }
+            }
         }
     }
 }

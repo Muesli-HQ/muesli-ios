@@ -26,6 +26,7 @@ struct SettingsView: View {
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
     @State private var selectedSettingsSection: SettingsSection?
+    @State private var isSyncQRCodeScannerPresented = false
 
     var body: some View {
         NavigationStack {
@@ -41,6 +42,11 @@ struct SettingsView: View {
             }
             .onChange(of: openSyncPrivacyRequest) { _, _ in
                 openRequestedSyncPrivacySection()
+            }
+            .sheet(isPresented: $isSyncQRCodeScannerPresented) {
+                SyncQRCodeScannerView { url in
+                    coordinator.handleOpenURL(url)
+                }
             }
             .onChange(of: liveActivitiesForDictations) { _, _ in
                 coordinator.applyLiveActivityPreferences()
@@ -380,6 +386,21 @@ struct SettingsView: View {
                     iconColor: appleSyncSnapshot.isICloudAvailable ? MuesliTheme.success : MuesliTheme.accent,
                     valueColor: appleSyncSnapshot.isICloudAvailable ? MuesliTheme.success : MuesliTheme.textTertiary
                 )
+
+                Button {
+                    isSyncQRCodeScannerPresented = true
+                    AppTelemetry.signal("bridge_qr_scan_started", parameters: ["platform": "ios", "source": "settings"])
+                } label: {
+                    Label("Scan Mac QR", systemImage: "qrcode.viewfinder")
+                        .font(MuesliTheme.headline())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .foregroundStyle(MuesliTheme.accent)
+                        .background(MuesliTheme.accentSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+                .buttonStyle(.plain)
 
                 Button {
                     coordinator.syncICloudTextIfEnabled(reason: "settings_manual")

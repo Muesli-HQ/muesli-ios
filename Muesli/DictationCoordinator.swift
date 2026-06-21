@@ -412,12 +412,7 @@ final class DictationCoordinator {
         clipboardStatusText = "Copied"
         AppTelemetry.signal("dictation_copied")
 
-        Task {
-            try? await Task.sleep(for: .seconds(1.2))
-            if clipboardStatusText == "Copied" {
-                clipboardStatusText = nil
-            }
-        }
+        clearClipboardStatusSoon()
     }
 
     func deleteDictation(_ result: DictationResult) {
@@ -427,6 +422,7 @@ final class DictationCoordinator {
                     try? store.deleteAudioFile(fileName: audioFileName)
                 }
                 try? store.deleteRecordingSession(id: session.id)
+                recordingSessions.removeAll { $0.id == session.id }
             }
             try store.deleteResult(result)
             dictationHistory.removeAll { $0.id == result.id || $0.requestID == result.requestID }
@@ -499,10 +495,11 @@ final class DictationCoordinator {
     }
 
     private func clearClipboardStatusSoon() {
-        Task {
+        let statusToClear = clipboardStatusText
+        Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.2))
-            if clipboardStatusText == "Copied" {
-                clipboardStatusText = nil
+            if self?.clipboardStatusText == statusToClear {
+                self?.clipboardStatusText = nil
             }
         }
     }

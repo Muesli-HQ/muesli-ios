@@ -27,6 +27,7 @@ struct SettingsView: View {
     @State private var appleSyncStatusText: String?
     @State private var selectedSettingsSection: SettingsSection?
     @State private var isSyncQRCodeScannerPresented = false
+    @State private var isApplyingQRCodeSyncEnable = false
 
     var body: some View {
         NavigationStack {
@@ -70,6 +71,10 @@ struct SettingsView: View {
                 saveOpenRouterAPIKey(newValue)
             }
             .onChange(of: iCloudSyncEnabled) { _, enabled in
+                if enabled && isApplyingQRCodeSyncEnable {
+                    isApplyingQRCodeSyncEnable = false
+                    return
+                }
                 AppTelemetry.signal(
                     "icloud_sync_toggled",
                     parameters: ["enabled": enabled ? "true" : "false"]
@@ -646,6 +651,9 @@ struct SettingsView: View {
             return false
         }
         AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "settings_qr"])
+        if !iCloudSyncEnabled {
+            isApplyingQRCodeSyncEnable = true
+        }
         iCloudSyncEnabled = true
         appleSyncStatusText = "Syncing your text history through private iCloud..."
         coordinator.syncICloudTextIfEnabled(reason: "settings_qr")

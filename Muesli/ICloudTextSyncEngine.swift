@@ -96,6 +96,11 @@ enum MuesliBridgeDeviceIdentity {
         UserDefaults.standard.string(forKey: remoteDevicePlatformKey)
     }
 
+    static func hasKnownRemoteDevice(defaults: UserDefaults = .standard) -> Bool {
+        guard let deviceID = defaults.string(forKey: remoteDeviceIDKey) else { return false }
+        return !deviceID.isEmpty
+    }
+
     static func updateRemoteDevices(from records: [CKRecord], defaults: UserDefaults = .standard) {
         let localID = local(defaults: defaults).deviceID
         let latestRemote = records
@@ -153,6 +158,8 @@ final class ICloudTextSyncEngine {
         static let textRecordType = "MuesliTextRecord"
         static let bridgeDeviceRecordType = "MuesliBridgeDevice"
         static let migratedDefaultZoneKey = "muesli.icloud.textRecords.defaultToSyncZoneMigrated.v1"
+        static let lastBridgeDeviceRefreshAttemptAtKey = "muesli.sync.bridge.lastDeviceRefreshAttemptAt.v1"
+        static let bridgeDeviceRefreshThrottle: TimeInterval = 60 * 60
 
         static var syncZoneID: CKRecordZone.ID {
             CKRecordZone.ID(zoneName: syncZoneName, ownerName: CKCurrentUserDefaultName)
@@ -214,6 +221,9 @@ final class ICloudTextSyncEngine {
     }
 
     private func refreshBridgeDeviceLink() async {
+        guard shouldRefreshBridgeDeviceLink() else { return }
+
+        defaults.set(Date(), forKey: Schema.lastBridgeDeviceRefreshAttemptAtKey)
         do {
             try await upsertLocalBridgeDeviceRecord()
             let records = try await fetchBridgeDeviceRecords()
@@ -221,6 +231,16 @@ final class ICloudTextSyncEngine {
         } catch {
             print("Failed to refresh iCloud bridge device identity: \(error)")
         }
+    }
+
+    private func shouldRefreshBridgeDeviceLink(now: Date = Date()) -> Bool {
+        guard MuesliBridgeDeviceIdentity.hasKnownRemoteDevice(defaults: defaults) else {
+            return true
+        }
+        guard let lastAttemptAt = defaults.object(forKey: Schema.lastBridgeDeviceRefreshAttemptAtKey) as? Date else {
+            return true
+        }
+        return now.timeIntervalSince(lastAttemptAt) >= Schema.bridgeDeviceRefreshThrottle
     }
 
     private func upsertLocalBridgeDeviceRecord() async throws {

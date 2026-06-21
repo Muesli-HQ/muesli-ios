@@ -46,6 +46,14 @@ final class DictationCoordinator {
     var keyboardSessionStatusText = "Off"
     var iCloudSyncStatusText: String?
     var isICloudSyncInProgress = false
+    var syncSetupRequestID: UUID? {
+        didSet {
+            if syncSetupRequestID == nil {
+                syncSetupSource = nil
+            }
+        }
+    }
+    var syncSetupSource: String?
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
     var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
     var selectedUseCase = OnboardingUseCase(
@@ -141,6 +149,10 @@ final class DictationCoordinator {
         }
         #endif
 
+        if handleSyncBridgeURL(url) {
+            return
+        }
+
         guard url.scheme == MuesliAppConstants.urlScheme,
               url.host == MuesliAppConstants.dictateHost,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -174,6 +186,19 @@ final class DictationCoordinator {
         activeRequest = request
         startKeyboardRuntimePolling()
         startRecording(for: request, source: "keyboard")
+    }
+
+    func requestSyncSetup(source: String) {
+        syncSetupSource = source
+        syncSetupRequestID = UUID()
+    }
+
+    func consumeSyncSetupRequest() -> (id: UUID, source: String)? {
+        guard let requestID = syncSetupRequestID else { return nil }
+        let source = syncSetupSource ?? "unknown"
+        syncSetupRequestID = nil
+        syncSetupSource = nil
+        return (requestID, source)
     }
 
     private func refreshActiveKeyboardRequestIfNeeded(_ request: DictationRequest) -> Bool {
@@ -332,6 +357,30 @@ final class DictationCoordinator {
     }
     #endif
 
+    private func handleSyncBridgeURL(_ url: URL) -> Bool {
+        guard url.scheme == MuesliAppConstants.urlScheme,
+              url.host == MuesliAppConstants.syncHost
+        else { return false }
+
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let source = components?.queryItems?.first(where: { $0.name == MuesliAppConstants.sourceQueryItem })?.value
+            ?? "deeplink"
+
+        if MuesliPreferences.iCloudSyncEnabled {
+            syncSetupSource = source
+            iCloudSyncStatusText = "Already syncing with your Mac through private iCloud."
+            AppTelemetry.signal("bridge_enable_completed", parameters: ["platform": "ios", "source": source, "already_enabled": "true"])
+            syncICloudTextIfEnabled(reason: "bridge_qr_existing")
+            return true
+        }
+
+        syncSetupSource = source
+        syncSetupRequestID = UUID()
+        iCloudSyncStatusText = "Continue setup with private iCloud sync."
+        AppTelemetry.signal("ios_bridge_deeplink_opened", parameters: ["source": source])
+        return true
+    }
+
     func toggleRecording() {
         if isRecording {
             MuesliHaptics.dictationStop()
@@ -456,19 +505,25 @@ final class DictationCoordinator {
         iCloudSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let result = try await ICloudTextSyncEngine().sync(store: self.store)
+                let result = try await ICloudTextSyncEngine().sync(
+                    store: self.store,
+                    forceBridgeDeviceRefresh: self.shouldForceBridgeDeviceRefresh(for: reason)
+                )
                 self.iCloudSyncTask = nil
                 self.isICloudSyncInProgress = false
+                let remoteDeviceName = MuesliBridgeDeviceIdentity.remoteDeviceDisplayName
                 if result.downloaded > 0 {
-                    self.iCloudSyncStatusText = "Synced with your Mac."
+                    self.iCloudSyncStatusText = "Synced with \(remoteDeviceName ?? "your Mac")."
                     AppTelemetry.signal(
                         "bridge_remote_records_seen",
                         parameters: ["platform": "ios", "count": "\(result.downloaded)"]
                     )
                 } else if result.uploaded > 0 {
-                    self.iCloudSyncStatusText = "Synced with private iCloud."
+                    self.iCloudSyncStatusText = remoteDeviceName.map { "Synced with \($0)." }
+                        ?? "Synced with private iCloud."
                 } else {
-                    self.iCloudSyncStatusText = "All text is up to date."
+                    self.iCloudSyncStatusText = remoteDeviceName.map { "All text is up to date with \($0)." }
+                        ?? "All text is up to date."
                 }
                 self.refreshHistory()
                 AppTelemetry.signal(
@@ -516,6 +571,20 @@ final class DictationCoordinator {
         guard let reason = pendingICloudSyncReason else { return }
         pendingICloudSyncReason = nil
         scheduleICloudSyncAfterLocalChange(reason: reason)
+    }
+
+    private func shouldForceBridgeDeviceRefresh(for reason: String) -> Bool {
+        switch reason {
+        case "bridge_qr_existing",
+             "home_manual",
+             "onboarding_bridge",
+             "settings_manual",
+             "settings_qr",
+             "settings_toggle":
+            return true
+        default:
+            return false
+        }
     }
 
     func setKeyboardSessionModeEnabled(_ enabled: Bool) {

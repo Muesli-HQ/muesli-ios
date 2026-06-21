@@ -4,6 +4,7 @@ struct DictationView: View {
     @Bindable var coordinator: DictationCoordinator
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var sourceFilter: DictationSourceFilter = .all
+    @State private var isSyncSetupPromptPresented = false
 
     var body: some View {
         NavigationStack {
@@ -21,6 +22,20 @@ struct DictationView: View {
             .toolbar(.hidden, for: .navigationBar)
             .refreshable {
                 triggerHomeSync()
+            }
+            .confirmationDialog(
+                "Turn on private iCloud sync?",
+                isPresented: $isSyncSetupPromptPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Open Sync Setup") {
+                    coordinator.requestSyncSetup(source: "home_sync")
+                }
+                Button("Not Now", role: .cancel) {
+                    coordinator.iCloudSyncStatusText = nil
+                }
+            } message: {
+                Text("Muesli will sync dictation text, meeting transcripts, notes, and summaries with your Mac through your private iCloud account. Audio stays local.")
             }
             .onAppear {
                 coordinator.refreshHistory()
@@ -268,7 +283,9 @@ struct DictationView: View {
 
     private func triggerHomeSync() {
         if !iCloudSyncEnabled {
-            iCloudSyncEnabled = true
+            coordinator.iCloudSyncStatusText = nil
+            isSyncSetupPromptPresented = true
+            return
         }
         coordinator.syncICloudTextIfEnabled(reason: "home_manual")
     }

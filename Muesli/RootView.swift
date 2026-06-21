@@ -25,6 +25,13 @@ struct RootView: View {
         .tint(MuesliTheme.accent)
         .preferredColorScheme(preferredColorScheme)
         .id("theme-\(appearanceMode)-\(accentTheme)")
+        .onChange(of: coordinator.syncSetupRequestID) { _, requestID in
+            guard requestID != nil else { return }
+            if coordinator.hasCompletedOnboarding {
+                selectedSection = .settings
+            }
+            isDrawerOpen = false
+        }
     }
 
     private var preferredColorScheme: ColorScheme? {
@@ -114,7 +121,10 @@ struct RootView: View {
         case .meetings:
             MeetingsView(coordinator: coordinator)
         case .settings:
-            SettingsView(coordinator: coordinator) { section in
+            SettingsView(
+                coordinator: coordinator,
+                openSyncPrivacyRequest: coordinator.syncSetupRequestID
+            ) { section in
                 selectedSection = section
             }
         }
@@ -566,72 +576,6 @@ private struct MeetingTemplatesView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                    }
-                }
-                .padding(.horizontal, MuesliTheme.spacing20)
-                .padding(.top, MuesliTheme.spacing24)
-                .padding(.bottom, MuesliTheme.spacing24)
-            }
-            .background(MuesliTheme.backgroundBase)
-            .toolbar(.hidden, for: .navigationBar)
-        }
-    }
-}
-
-private struct SyncView: View {
-    @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
-    let onOpenSettings: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Sync")
-                            .font(MuesliTheme.title1())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                        Text("Bridge your iPhone and Mac through private iCloud.")
-                            .font(MuesliTheme.callout())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                    }
-
-                    MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
-                                Image(systemName: "icloud")
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(MuesliTheme.accent)
-                                    .frame(width: 22)
-
-                                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                                    Text("Sync with Mac")
-                                        .font(MuesliTheme.headline())
-                                        .foregroundStyle(MuesliTheme.textPrimary)
-                                    Text("Sync dictation text, meeting transcripts, notes, and summaries through your private iCloud account. Audio stays local.")
-                                        .font(MuesliTheme.caption())
-                                        .foregroundStyle(MuesliTheme.textSecondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-
-                                Spacer(minLength: MuesliTheme.spacing12)
-
-                                Toggle("Sync with Mac", isOn: $iCloudSyncEnabled)
-                                    .labelsHidden()
-                                    .tint(MuesliTheme.accent)
-                            }
-
-                            Button(action: onOpenSettings) {
-                                Label("Open Sync Settings", systemImage: "gearshape")
-                                    .font(MuesliTheme.headline())
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 44)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(MuesliTheme.accent)
-                            .background(MuesliTheme.accentSubtle)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        }
-                        .padding(MuesliTheme.spacing16)
                     }
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)

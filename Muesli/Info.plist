@@ -39,6 +39,8 @@
 	<string>$(MUESLI_TELEMETRYDECK_APP_ID)</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Muesli records your voice so it can transcribe speech into text on device.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Muesli uses the camera to scan a Mac setup QR code for private iCloud sync.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>

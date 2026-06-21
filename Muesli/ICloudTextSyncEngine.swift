@@ -51,11 +51,146 @@ final class UserDefaultsICloudTextChangeTokenStore: ICloudTextChangeTokenStore {
     }
 }
 
+struct MuesliBridgeDeviceSnapshot: Equatable {
+    let deviceID: String
+    let platform: String
+    let deviceName: String
+    let appVersion: String
+    let lastSeenAt: Date
+}
+
+enum MuesliBridgeDeviceIdentity {
+    private static let localDeviceIDKey = "muesli.sync.bridge.localDeviceID.v1"
+    private static let localDeviceNameKey = "muesli.sync.bridge.localDeviceName.v1"
+    private static let remoteDeviceIDKey = "muesli.sync.bridge.remoteDeviceID.v1"
+    private static let remoteDeviceNameKey = "muesli.sync.bridge.remoteDeviceName.v1"
+    private static let remoteDevicePlatformKey = "muesli.sync.bridge.remoteDevicePlatform.v1"
+    private static let remoteDeviceLastSeenAtKey = "muesli.sync.bridge.remoteDeviceLastSeenAt.v1"
+    private static let lastRefreshKey = "muesli.sync.bridge.lastDeviceRefreshAttemptAt.v1"
+    private static let lastRefreshFailureKey = "muesli.sync.bridge.lastDeviceRefreshFailureAt.v1"
+    private static let linkedRefreshInterval: TimeInterval = 60 * 60
+    private static let unlinkedRefreshInterval: TimeInterval = 60
+    private static let failureRetryInterval: TimeInterval = 15
+
+    static func local(defaults: UserDefaults = .standard) -> MuesliBridgeDeviceSnapshot {
+        let deviceID: String
+        if let persisted = defaults.string(forKey: localDeviceIDKey), !persisted.isEmpty {
+            deviceID = persisted
+        } else {
+            deviceID = UUID().uuidString
+            defaults.set(deviceID, forKey: localDeviceIDKey)
+        }
+
+        let deviceName = currentDeviceName()
+        defaults.set(deviceName, forKey: localDeviceNameKey)
+        return MuesliBridgeDeviceSnapshot(
+            deviceID: deviceID,
+            platform: "iOS",
+            deviceName: deviceName,
+            appVersion: appVersion(),
+            lastSeenAt: Date()
+        )
+    }
+
+    static var remoteDeviceDisplayName: String? {
+        UserDefaults.standard.string(forKey: remoteDeviceNameKey)
+    }
+
+    static var remoteDevicePlatform: String? {
+        UserDefaults.standard.string(forKey: remoteDevicePlatformKey)
+    }
+
+    static func hasKnownRemoteDevice(defaults: UserDefaults = .standard) -> Bool {
+        guard let deviceID = defaults.string(forKey: remoteDeviceIDKey) else { return false }
+        return !deviceID.isEmpty
+    }
+
+    static func shouldRefresh(
+        defaults: UserDefaults = .standard,
+        now: Date = Date(),
+        forceRefresh: Bool = false
+    ) -> Bool {
+        if forceRefresh {
+            return true
+        }
+        if let lastFailure = defaults.object(forKey: lastRefreshFailureKey) as? Date {
+            let lastSuccess = defaults.object(forKey: lastRefreshKey) as? Date
+            if lastSuccess.map({ lastFailure > $0 }) ?? true {
+                return now.timeIntervalSince(lastFailure) >= failureRetryInterval
+            }
+        }
+        guard let lastRefresh = defaults.object(forKey: lastRefreshKey) as? Date else {
+            return true
+        }
+        let interval = hasKnownRemoteDevice(defaults: defaults) ? linkedRefreshInterval : unlinkedRefreshInterval
+        return now.timeIntervalSince(lastRefresh) >= interval
+    }
+
+    static func markRefreshed(defaults: UserDefaults = .standard, at date: Date = Date()) {
+        defaults.set(date, forKey: lastRefreshKey)
+        defaults.removeObject(forKey: lastRefreshFailureKey)
+    }
+
+    static func markRefreshFailed(defaults: UserDefaults = .standard, at date: Date = Date()) {
+        defaults.set(date, forKey: lastRefreshFailureKey)
+    }
+
+    static func updateRemoteDevices(from records: [CKRecord], defaults: UserDefaults = .standard) {
+        let localID = defaults.string(forKey: localDeviceIDKey) ?? ""
+        let latestRemote = records
+            .compactMap(Self.snapshot(from:))
+            .filter { $0.deviceID != localID }
+            .max { $0.lastSeenAt < $1.lastSeenAt }
+
+        guard let latestRemote else {
+            defaults.removeObject(forKey: remoteDeviceIDKey)
+            defaults.removeObject(forKey: remoteDeviceNameKey)
+            defaults.removeObject(forKey: remoteDevicePlatformKey)
+            defaults.removeObject(forKey: remoteDeviceLastSeenAtKey)
+            return
+        }
+
+        defaults.set(latestRemote.deviceID, forKey: remoteDeviceIDKey)
+        defaults.set(latestRemote.deviceName, forKey: remoteDeviceNameKey)
+        defaults.set(latestRemote.platform, forKey: remoteDevicePlatformKey)
+        defaults.set(latestRemote.lastSeenAt, forKey: remoteDeviceLastSeenAtKey)
+    }
+
+    static func snapshot(from record: CKRecord) -> MuesliBridgeDeviceSnapshot? {
+        guard let deviceID = record["deviceID"] as? String,
+              let platform = record["platform"] as? String,
+              let deviceName = record["deviceName"] as? String,
+              let lastSeenAt = record["lastSeenAt"] as? Date else {
+            return nil
+        }
+        return MuesliBridgeDeviceSnapshot(
+            deviceID: deviceID,
+            platform: platform,
+            deviceName: deviceName,
+            appVersion: record["appVersion"] as? String ?? "unknown",
+            lastSeenAt: lastSeenAt
+        )
+    }
+
+    private static func currentDeviceName() -> String {
+        let name = ProcessInfo.processInfo.hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "This iPhone" : name
+    }
+
+    private static func appVersion() -> String {
+        let info = Bundle.main.infoDictionary
+        return (info?["CFBundleShortVersionString"] as? String)
+            ?? (info?["CFBundleVersion"] as? String)
+            ?? "unknown"
+    }
+}
+
 final class ICloudTextSyncEngine {
     private enum Schema {
         static let containerIdentifier = "iCloud.com.mueslihq.muesli"
         static let syncZoneName = "MuesliSyncZone"
         static let textRecordType = "MuesliTextRecord"
+        static let bridgeDeviceRecordType = "MuesliBridgeDevice"
         static let migratedDefaultZoneKey = "muesli.icloud.textRecords.defaultToSyncZoneMigrated.v1"
 
         static var syncZoneID: CKRecordZone.ID {
@@ -79,8 +214,12 @@ final class ICloudTextSyncEngine {
         self.defaults = defaults
     }
 
-    func sync(store: SharedStore = SharedStore()) async throws -> ICloudTextSyncResult {
+    func sync(
+        store: SharedStore = SharedStore(),
+        forceBridgeDeviceRefresh: Bool = false
+    ) async throws -> ICloudTextSyncResult {
         try await ensureSyncZone()
+        await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
         try await migrateDefaultZoneIfNeeded(store: store)
 
         let remoteRecords = try await fetchChangedTextRecords()
@@ -114,6 +253,56 @@ final class ICloudTextSyncEngine {
             changeTokenStore.clearToken()
             defaults.set(false, forKey: Schema.migratedDefaultZoneKey)
         }
+    }
+
+    private func refreshBridgeDeviceLink(forceRefresh: Bool = false) async {
+        guard MuesliBridgeDeviceIdentity.shouldRefresh(
+            defaults: defaults,
+            forceRefresh: forceRefresh
+        ) else { return }
+
+        do {
+            try await upsertLocalBridgeDeviceRecord()
+            let records = try await fetchBridgeDeviceRecords()
+            MuesliBridgeDeviceIdentity.updateRemoteDevices(from: records, defaults: defaults)
+            MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults)
+        } catch {
+            print("Failed to refresh iCloud bridge device identity: \(error)")
+            MuesliBridgeDeviceIdentity.markRefreshFailed(defaults: defaults)
+        }
+    }
+
+    private func upsertLocalBridgeDeviceRecord() async throws {
+        let snapshot = MuesliBridgeDeviceIdentity.local(defaults: defaults)
+        let recordID = CKRecord.ID(
+            recordName: "bridge-device-\(snapshot.deviceID)",
+            zoneID: Schema.syncZoneID
+        )
+        let record = (try? await fetchRecord(id: recordID))
+            ?? CKRecord(recordType: Schema.bridgeDeviceRecordType, recordID: recordID)
+        if record["createdAt"] == nil {
+            record["createdAt"] = Date() as NSDate
+        }
+        record["deviceID"] = snapshot.deviceID as NSString
+        record["platform"] = snapshot.platform as NSString
+        record["deviceName"] = snapshot.deviceName as NSString
+        record["appVersion"] = snapshot.appVersion as NSString
+        record["lastSeenAt"] = snapshot.lastSeenAt as NSDate
+        _ = try await save(records: [record])
+    }
+
+    private func fetchBridgeDeviceRecords() async throws -> [CKRecord] {
+        let query = CKQuery(recordType: Schema.bridgeDeviceRecordType, predicate: NSPredicate(value: true))
+        var records: [CKRecord] = []
+        let firstPage = try await fetch(query: query, zoneID: Schema.syncZoneID)
+        records.append(contentsOf: firstPage.records)
+        var cursor = firstPage.cursor
+        while let nextCursor = cursor {
+            let page = try await fetch(cursor: nextCursor)
+            records.append(contentsOf: page.records)
+            cursor = page.cursor
+        }
+        return records
     }
 
     private func migrateDefaultZoneIfNeeded(store: SharedStore) async throws {
@@ -239,9 +428,13 @@ final class ICloudTextSyncEngine {
         }
     }
 
-    private func fetch(query: CKQuery) async throws -> (records: [CKRecord], cursor: CKQueryOperation.Cursor?) {
+    private func fetch(
+        query: CKQuery,
+        zoneID: CKRecordZone.ID? = nil
+    ) async throws -> (records: [CKRecord], cursor: CKQueryOperation.Cursor?) {
         try await withCheckedThrowingContinuation { continuation in
             let operation = CKQueryOperation(query: query)
+            operation.zoneID = zoneID
             collect(operation: operation, continuation: continuation)
             database.add(operation)
         }
@@ -286,6 +479,20 @@ final class ICloudTextSyncEngine {
             database.fetch(withRecordZoneID: id) { zone, error in
                 if let zone {
                     continuation.resume(returning: zone)
+                } else if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(throwing: CKError(.unknownItem))
+                }
+            }
+        }
+    }
+
+    private func fetchRecord(id: CKRecord.ID) async throws -> CKRecord {
+        try await withCheckedThrowingContinuation { continuation in
+            database.fetch(withRecordID: id) { record, error in
+                if let record {
+                    continuation.resume(returning: record)
                 } else if let error {
                     continuation.resume(throwing: error)
                 } else {

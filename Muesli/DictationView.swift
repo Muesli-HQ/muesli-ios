@@ -31,7 +31,9 @@ struct DictationView: View {
                 Button("Open Sync Setup") {
                     coordinator.requestSyncSetup(source: "home_sync")
                 }
-                Button("Not Now", role: .cancel) {}
+                Button("Not Now", role: .cancel) {
+                    coordinator.iCloudSyncStatusText = nil
+                }
             } message: {
                 Text("Muesli will sync dictation text, meeting transcripts, notes, and summaries with your Mac through your private iCloud account. Audio stays local.")
             }

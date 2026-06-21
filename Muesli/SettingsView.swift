@@ -44,9 +44,15 @@ struct SettingsView: View {
                 openRequestedSyncPrivacySection()
             }
             .sheet(isPresented: $isSyncQRCodeScannerPresented) {
-                SyncQRCodeScannerView { url in
-                    coordinator.handleOpenURL(url)
-                }
+                SyncQRCodeScannerView(
+                    isSyncAlreadyEnabled: iCloudSyncEnabled,
+                    onOpenSyncURL: { url in
+                        coordinator.handleOpenURL(url)
+                    },
+                    onEnableSyncURL: { _ in
+                        enablePrivateICloudSyncFromQR()
+                    }
+                )
             }
             .onChange(of: liveActivitiesForDictations) { _, _ in
                 coordinator.applyLiveActivityPreferences()
@@ -622,11 +628,29 @@ struct SettingsView: View {
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
             } else if iCloudSyncEnabled {
-                appleSyncStatusText = "Private iCloud sync is on. Your Muesli text history follows this iPhone and Mac."
+                if let remoteDeviceName = MuesliBridgeDeviceIdentity.remoteDeviceDisplayName {
+                    appleSyncStatusText = "Private iCloud sync is on with \(remoteDeviceName)."
+                } else {
+                    appleSyncStatusText = "Private iCloud sync is on. Your Muesli text history follows this iPhone and Mac."
+                }
             } else {
                 appleSyncStatusText = nil
             }
         }
+    }
+
+    @discardableResult
+    private func enablePrivateICloudSyncFromQR() -> Bool {
+        guard appleSyncSnapshot.isICloudAvailable else {
+            appleSyncStatusText = "Sign in to iCloud on this iPhone, then scan the Mac QR again."
+            return false
+        }
+        AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "settings_qr"])
+        iCloudSyncEnabled = true
+        appleSyncStatusText = "Syncing your text history through private iCloud..."
+        coordinator.syncICloudTextIfEnabled(reason: "settings_qr")
+        refreshAppleSyncSettings()
+        return true
     }
 
     private func openRequestedSyncPrivacySection() {

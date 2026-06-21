@@ -667,10 +667,32 @@ private struct SyncView: View {
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $isSyncQRCodeScannerPresented) {
-                SyncQRCodeScannerView { url in
-                    coordinator.handleOpenURL(url)
+                SyncQRCodeScannerView(
+                    isSyncAlreadyEnabled: iCloudSyncEnabled,
+                    onOpenSyncURL: { url in
+                        coordinator.handleOpenURL(url)
+                    },
+                    onEnableSyncURL: { _ in
+                        enablePrivateICloudSyncFromQR()
+                    }
+                )
+            }
+            .onChange(of: iCloudSyncEnabled) { _, enabled in
+                if enabled {
+                    AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "sync_tab"])
+                    coordinator.syncICloudTextIfEnabled(reason: "sync_tab_toggle")
+                } else {
+                    coordinator.iCloudSyncStatusText = "iCloud sync is off."
                 }
             }
         }
+    }
+
+    @discardableResult
+    private func enablePrivateICloudSyncFromQR() -> Bool {
+        AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "sync_tab_qr"])
+        iCloudSyncEnabled = true
+        coordinator.syncICloudTextIfEnabled(reason: "sync_tab_qr")
+        return true
     }
 }

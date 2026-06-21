@@ -137,9 +137,15 @@ struct OnboardingView: View {
             routeToSyncStepIfRequested()
         }
         .sheet(isPresented: $isSyncQRCodeScannerPresented) {
-            SyncQRCodeScannerView { url in
-                coordinator.handleOpenURL(url)
-            }
+            SyncQRCodeScannerView(
+                isSyncAlreadyEnabled: iCloudSyncEnabled,
+                onOpenSyncURL: { url in
+                    coordinator.handleOpenURL(url)
+                },
+                onEnableSyncURL: { _ in
+                    enablePrivateICloudBridge()
+                }
+            )
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -1125,23 +1131,29 @@ struct OnboardingView: View {
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
             } else if iCloudSyncEnabled {
-                appleSyncStatusText = "Private iCloud sync is on. Open Muesli on your Mac to see the same text history."
+                if let remoteDeviceName = MuesliBridgeDeviceIdentity.remoteDeviceDisplayName {
+                    appleSyncStatusText = "Private iCloud sync is on with \(remoteDeviceName)."
+                } else {
+                    appleSyncStatusText = "Private iCloud sync is on. Open Muesli on your Mac to see the same text history."
+                }
             } else {
                 appleSyncStatusText = nil
             }
         }
     }
 
-    private func enablePrivateICloudBridge() {
+    @discardableResult
+    private func enablePrivateICloudBridge() -> Bool {
         guard appleSyncSnapshot.isICloudAvailable else {
             appleSyncStatusText = "Sign in to iCloud on this iPhone, then return to Muesli."
-            return
+            return false
         }
         AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "onboarding"])
         iCloudSyncEnabled = true
         appleSyncStatusText = "Syncing your text history through private iCloud..."
         coordinator.syncICloudTextIfEnabled(reason: "onboarding_bridge")
         refreshAppleSyncStatus()
+        return true
     }
 
     private func markBridgePromptSeen() {

@@ -495,16 +495,19 @@ final class DictationCoordinator {
                 let result = try await ICloudTextSyncEngine().sync(store: self.store)
                 self.iCloudSyncTask = nil
                 self.isICloudSyncInProgress = false
+                let remoteDeviceName = MuesliBridgeDeviceIdentity.remoteDeviceDisplayName
                 if result.downloaded > 0 {
-                    self.iCloudSyncStatusText = "Synced with your Mac."
+                    self.iCloudSyncStatusText = "Synced with \(remoteDeviceName ?? "your Mac")."
                     AppTelemetry.signal(
                         "bridge_remote_records_seen",
                         parameters: ["platform": "ios", "count": "\(result.downloaded)"]
                     )
                 } else if result.uploaded > 0 {
-                    self.iCloudSyncStatusText = "Synced with private iCloud."
+                    self.iCloudSyncStatusText = remoteDeviceName.map { "Synced with \($0)." }
+                        ?? "Synced with private iCloud."
                 } else {
-                    self.iCloudSyncStatusText = "All text is up to date."
+                    self.iCloudSyncStatusText = remoteDeviceName.map { "All text is up to date with \($0)." }
+                        ?? "All text is up to date."
                 }
                 self.refreshHistory()
                 AppTelemetry.signal(

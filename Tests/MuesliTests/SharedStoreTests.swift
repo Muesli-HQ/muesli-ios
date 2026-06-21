@@ -316,6 +316,52 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertGreaterThan(try sqliteDouble("SELECT updated_at FROM result_history LIMIT 1", in: directory), 0)
     }
 
+    func testSyncedDictationPreservesLocalSessionLink() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let resultID = UUID()
+        let requestID = UUID()
+        let sessionID = UUID()
+        let result = DictationResult(
+            id: resultID,
+            requestID: requestID,
+            sessionID: sessionID,
+            text: "local text",
+            createdAt: Date(timeIntervalSince1970: 100),
+            engineIdentifier: "parakeet-v3"
+        )
+        try store.saveResult(result)
+
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: resultID.uuidString,
+            kind: .dictation,
+            title: nil,
+            text: "synced text",
+            speakerTranscript: nil,
+            summaryText: nil,
+            manualNotes: nil,
+            source: "ios",
+            engineIdentifier: "parakeet-v3",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSinceNow: 60),
+            startedAt: nil,
+            endedAt: nil,
+            durationSeconds: 0,
+            wordCount: 2,
+            isDeleted: false,
+            cloudChangeTag: "server-tag"
+        ))
+
+        let synced = try XCTUnwrap(store.resultsHistory().first)
+        XCTAssertEqual(synced.id, resultID)
+        XCTAssertEqual(synced.requestID, requestID)
+        XCTAssertEqual(synced.sessionID, sessionID)
+        XCTAssertEqual(synced.text, "synced text")
+        XCTAssertEqual(try sqliteString("SELECT session_id FROM result_history LIMIT 1", in: directory), sessionID.uuidString)
+    }
+
     func testPendingCommandRoundTripsAndClears() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
@@ -528,6 +574,27 @@ final class SharedStoreTests: XCTestCase {
         try store.deleteAudioFile(fileName: "session.wav")
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testDictationAudioFileNameUsesTimestamp() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = .current
+        components.year = 2026
+        components.month = 6
+        components.day = 21
+        components.hour = 9
+        components.minute = 7
+        components.second = 5
+        let date = try XCTUnwrap(components.date)
+
+        let url = try store.newDictationAudioFileURL(startedAt: date)
+
+        XCTAssertEqual(url.lastPathComponent, "dictation-20260621-090705.wav")
     }
 
     func testTranscriptReplacesExistingTranscriptForSession() throws {

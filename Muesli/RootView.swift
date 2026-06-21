@@ -104,7 +104,6 @@ struct RootView: View {
                     )
                 }
                 .contentShape(Rectangle())
-                .simultaneousGesture(drawerSwipeGesture)
             }
         }
     }
@@ -128,21 +127,6 @@ struct RootView: View {
                 selectedSection = section
             }
         }
-    }
-
-    private var drawerSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .local)
-            .onEnded { value in
-                let horizontalMovement = value.translation.width
-                let verticalMovement = abs(value.translation.height)
-                guard abs(horizontalMovement) > verticalMovement * 1.6 else { return }
-
-                if !isDrawerOpen, horizontalMovement > 78 {
-                    openDrawer()
-                } else if isDrawerOpen, horizontalMovement < -72 {
-                    closeDrawer()
-                }
-            }
     }
 
     private func openDrawer() {

@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
     @AppStorage(MuesliPreferences.keyboardSessionTimeoutMinutesKey) private var keyboardSessionTimeoutMinutes = 10
+    @AppStorage(MuesliPreferences.keepDictationAudioRecordingsKey) private var keepDictationAudioRecordings = false
     @AppStorage(MuesliPreferences.keepMeetingAudioRecordingsKey) private var keepMeetingAudioRecordings = false
     @AppStorage(MuesliPreferences.meetingSummariesEnabledKey) private var meetingSummariesEnabled = false
     @AppStorage(MuesliPreferences.meetingSummaryBackendKey) private var meetingSummaryBackend = MeetingSummaryBackend.openRouter.rawValue
@@ -245,10 +246,10 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
             MuesliSurface {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                    SettingsRow(icon: "keyboard", title: "Keyboard", value: keyboardStatusText)
+                    SettingsRow(icon: "keyboard", title: "Keyboard Extension", value: keyboardStatusText)
                     Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
                         HStack {
-                            Text("Open Keyboard Settings")
+                            Text("Open iOS Keyboard Settings")
                             Spacer()
                             Image(systemName: "arrow.up.right")
                         }
@@ -264,8 +265,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                     SettingsToggleRow(
                         icon: "keyboard.badge.ellipsis",
-                        title: "Keyboard Session Mode",
-                        detail: "Keep Muesli ready for keyboard dictation with a visible microphone session.",
+                        title: "Dictation Session Mode",
+                        detail: "Keep Muesli ready for longer dictations from the keyboard with a visible microphone session.",
                         isOn: $keyboardSessionMode
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
@@ -289,6 +290,13 @@ struct SettingsView: View {
                         title: "Dictation Live Activities",
                         detail: "Show keyboard and in-app dictation progress on the Dynamic Island and Lock Screen.",
                         isOn: $liveActivitiesForDictations
+                    )
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsToggleRow(
+                        icon: "waveform.circle",
+                        title: "Save Dictation Audio",
+                        detail: "Keep original dictation audio locally on this iPhone for playback and troubleshooting. Audio does not sync.",
+                        isOn: $keepDictationAudioRecordings
                     )
                 }
                 .padding(MuesliTheme.spacing16)
@@ -684,11 +692,11 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general:
-            "General"
+            "Status"
         case .appearance:
             "Appearance"
         case .input:
-            "Keyboard"
+            "Dictations"
         case .dictionary:
             "Dictionary"
         case .meetings:
@@ -705,11 +713,11 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .general:
-            "App-wide behavior and local data defaults."
+            "Current local processing and storage state."
         case .appearance:
             "Color theme, light and dark mode, and app accent."
         case .input:
-            "Keyboard setup, dictation sessions, and text-field input."
+            "Recording retention, live activities, keyboard setup, and dictation sessions."
         case .dictionary:
             "Filler word removal, custom phrases, names, and acronyms."
         case .meetings:

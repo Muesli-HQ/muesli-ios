@@ -35,6 +35,8 @@
 	<string>public.app-category.productivity</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>MuesliTelemetryDeckAppID</key>
 	<string>$(MUESLI_TELEMETRYDECK_APP_ID)</string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -49,6 +51,8 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -35,7 +35,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable {
         case .parakeetTdtCtc110m:
             "English-only CoreML model. Faster first setup and lighter on storage."
         case .parakeetRealtimeEou120m:
-            "English-only CoreML streaming model with end-of-utterance detection for low-latency dictation and meeting chunks."
+            "English-only CoreML streaming model with end-of-utterance detection for low-latency voice notes and meeting chunks."
         case .parakeetV3:
             "Larger multilingual CoreML model. Better coverage, slower first setup."
         }

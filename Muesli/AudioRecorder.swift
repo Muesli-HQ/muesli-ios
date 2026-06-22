@@ -93,7 +93,7 @@ final class AudioRecorder {
         var errorDescription: String? {
             switch self {
             case .microphonePermissionDenied:
-                "Microphone permission is required for dictation."
+                "Microphone permission is required for voice notes."
             case .noRecording:
                 "No recording is available."
             case .audioSessionFailed(let stage, let underlying):

@@ -19,7 +19,7 @@ final class KeyboardController {
     private var latestRuntimeStatus: KeyboardRuntimeStatus?
     private var insertedRequestIDs = Set<UUID>()
 
-    var statusText = "Record in Muesli first"
+    var statusText = "Record a voice note first"
     var hasLatestDictation = false
     var dictationPhase: DictationPhase = .idle
     var launchURL: URL?
@@ -46,15 +46,15 @@ final class KeyboardController {
 
         return switch dictationPhase {
         case .requested:
-            activeRequestID == nil ? "Open Muesli" : "Stop Dictation"
+            activeRequestID == nil ? "Open Muesli" : "Stop"
         case .recording:
-            "Stop Dictation"
+            "Stop"
         case .transcribing:
             "Transcribing"
         case .finished:
             "Inserted"
         default:
-            "Start Dictation"
+            "Record"
         }
     }
 
@@ -133,7 +133,7 @@ final class KeyboardController {
             guard let result = try store.resultsHistory().first else {
                 latestResultID = nil
                 hasLatestDictation = false
-                statusText = "Record in Muesli first"
+                statusText = "Record a voice note first"
                 return
             }
 
@@ -377,7 +377,7 @@ final class KeyboardController {
             activeRequestID = nil
             recoveryRequestID = nil
             liveTranscript = ""
-            statusText = handoffState.message ?? "Dictation failed"
+            statusText = handoffState.message ?? "Voice note failed"
         case .cancelled:
             dictationPhase = .idle
             activeRequestID = nil
@@ -449,7 +449,7 @@ final class KeyboardController {
             dictationPhase = .failed
             activeRequestID = nil
             liveTranscript = ""
-            statusText = status.message ?? "Dictation failed"
+            statusText = status.message ?? "Voice note failed"
         case .finished:
             recoveryRequestID = nil
             dictationPhase = .finished

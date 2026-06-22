@@ -12,7 +12,7 @@ enum OnboardingUseCase: String, CaseIterable, Codable {
         case .voiceNotes:
             "Voice Notes"
         case .dictation:
-            "Dictation"
+            "Transcribe & Copy"
         case .keyboardDictation:
             "Keyboard"
         case .meetings:
@@ -27,13 +27,13 @@ enum OnboardingUseCase: String, CaseIterable, Codable {
         case .voiceNotes:
             "Record inside Muesli"
         case .dictation:
-            "Transcribe and copy"
+            "Capture text quickly"
         case .keyboardDictation:
             "Use from text fields"
         case .meetings:
             "Notes and summaries"
         case .everything:
-            "Dictation + meetings"
+            "Voice notes + meetings"
         }
     }
 

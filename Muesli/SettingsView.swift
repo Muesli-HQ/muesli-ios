@@ -249,7 +249,7 @@ struct SettingsView: View {
                     SettingsRow(icon: "keyboard", title: "Keyboard Extension", value: keyboardStatusText)
                     Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
                         HStack {
-                            Text("Open iOS Keyboard Settings")
+                            Text("Open iOS Settings")
                             Spacer()
                             Image(systemName: "arrow.up.right")
                         }
@@ -265,8 +265,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                     SettingsToggleRow(
                         icon: "keyboard.badge.ellipsis",
-                        title: "Dictation Session Mode",
-                        detail: "Keep Muesli ready for longer dictations from the keyboard with a visible microphone session.",
+                        title: "Keyboard Session Mode",
+                        detail: "Keep Muesli ready for longer voice notes from the keyboard with a visible microphone session.",
                         isOn: $keyboardSessionMode
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
@@ -287,15 +287,15 @@ struct SettingsView: View {
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsToggleRow(
                         icon: "waveform.badge.mic",
-                        title: "Dictation Live Activities",
-                        detail: "Show keyboard and in-app dictation progress on the Dynamic Island and Lock Screen.",
+                        title: "Voice Note Live Activities",
+                        detail: "Show keyboard and in-app voice note progress on the Dynamic Island and Lock Screen.",
                         isOn: $liveActivitiesForDictations
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsToggleRow(
                         icon: "waveform.circle",
-                        title: "Save Dictation Audio",
-                        detail: "Keep original dictation audio locally on this iPhone for playback and troubleshooting. Audio does not sync.",
+                        title: "Save Voice Note Audio",
+                        detail: "Keep original voice note audio locally on this iPhone for playback and troubleshooting. Audio does not sync.",
                         isOn: $keepDictationAudioRecordings
                     )
                 }
@@ -394,7 +394,7 @@ struct SettingsView: View {
                 SettingsToggleRow(
                     icon: "icloud",
                     title: "Sync with Mac",
-                    detail: "Sync dictation text, meeting transcripts, notes, and summaries through your private iCloud account. Audio is never synced.",
+                    detail: "Sync voice note text, meeting transcripts, notes, and summaries through your private iCloud account. Audio is never synced.",
                     isOn: $iCloudSyncEnabled
                 )
                 Divider().overlay(MuesliTheme.surfaceBorder)
@@ -696,7 +696,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance:
             "Appearance"
         case .input:
-            "Dictations"
+            "Voice Notes"
         case .dictionary:
             "Dictionary"
         case .meetings:
@@ -717,7 +717,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance:
             "Color theme, light and dark mode, and app accent."
         case .input:
-            "Recording retention, live activities, keyboard setup, and dictation sessions."
+            "Recording retention, live activities, keyboard setup, and voice note sessions."
         case .dictionary:
             "Filler word removal, custom phrases, names, and acronyms."
         case .meetings:
@@ -1174,7 +1174,7 @@ final class AppleSyncAccountManager {
         if !cloud.isAvailable {
             detail = "Sign in to iCloud on this iPhone to sync text with your Mac."
         } else {
-            detail = "Ready for private iCloud text sync. Dictations, transcripts, notes, and summaries will sync through your iCloud account."
+            detail = "Ready for private iCloud text sync. Voice notes, transcripts, notes, and summaries will sync through your iCloud account."
         }
 
         return AppleSyncAccountSnapshot(

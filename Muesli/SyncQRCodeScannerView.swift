@@ -285,7 +285,7 @@ private enum ScanResult {
         case .alreadySynced:
             return "You are all set. This iPhone and your Mac are already sharing text history through private iCloud."
         case .readyToEnable:
-            return "This QR is valid. Turn on private iCloud sync to share dictations, meeting transcripts, notes, and summaries with your Mac."
+            return "This QR is valid. Turn on private iCloud sync to share voice notes, meeting transcripts, notes, and summaries with your Mac."
         case .syncStarted:
             return "Muesli is syncing your text history through private iCloud. Audio recordings stay local."
         case .needsICloud:

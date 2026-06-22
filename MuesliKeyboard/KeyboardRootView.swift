@@ -4,33 +4,8 @@ struct KeyboardRootView: View {
     @Bindable var controller: KeyboardController
 
     var body: some View {
-        VStack(spacing: MuesliTheme.spacing12) {
-            VStack(spacing: MuesliTheme.spacing12) {
-                HStack(spacing: MuesliTheme.spacing12) {
-                    MuesliWaveformView(
-                        isActive: false,
-                        color: .white,
-                        barCount: 9,
-                        spacing: 1.4
-                    )
-                        .frame(width: 22, height: 20)
-                        .frame(width: 44, height: 44)
-                        .background(buttonColor)
-                        .clipShape(Circle())
-
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("muesli")
-                            .font(MuesliTheme.headline())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                        Text(controller.statusText)
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer()
-                }
-
+        VStack(spacing: MuesliTheme.spacing8) {
+            VStack(spacing: MuesliTheme.spacing8) {
                 if controller.opensMuesliFromPrimaryButton, let launchURL = controller.launchURL {
                     Link(destination: launchURL) {
                         primaryButtonLabel
@@ -57,13 +32,7 @@ struct KeyboardRootView: View {
                     Button {
                         controller.insertLatestDictation()
                     } label: {
-                        Label("Insert Latest", systemImage: "text.insert")
-                            .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(MuesliTheme.accent)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 36)
-                            .background(MuesliTheme.accentSubtle)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        KeyboardActionChip(title: "Insert Latest", systemImage: "text.insert")
                     }
                     .buttonStyle(.plain)
                 }
@@ -93,16 +62,75 @@ struct KeyboardRootView: View {
     }
 
     private var primaryButtonLabel: some View {
-        Label(
-            controller.primaryButtonTitle,
-            systemImage: controller.primaryButtonIcon
-        )
-        .font(MuesliTheme.headline())
-        .foregroundStyle(.white)
+        HStack(spacing: MuesliTheme.spacing12) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                HStack(spacing: MuesliTheme.spacing4) {
+                    MuesliWaveformView(
+                        isActive: false,
+                        color: buttonColor,
+                        barCount: 9,
+                        spacing: 1.2
+                    )
+                    .frame(width: 24, height: 18)
+
+                    Text("muesli keyboard")
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                }
+
+                Text(keyboardHint)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: MuesliTheme.spacing8)
+
+            VStack(spacing: MuesliTheme.spacing4) {
+                ZStack {
+                    Circle()
+                        .fill(controller.isPrimaryButtonDisabled ? MuesliTheme.surfacePrimary : buttonColor)
+                        .frame(width: 62, height: 62)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: controller.isPrimaryButtonDisabled ? 1 : 0)
+                        )
+
+                    Image(systemName: controller.primaryButtonIcon)
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundStyle(controller.isPrimaryButtonDisabled ? MuesliTheme.textTertiary : .white)
+                }
+
+                Text(controller.primaryButtonTitle)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(controller.isPrimaryButtonDisabled ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(width: 82)
+        }
         .frame(maxWidth: .infinity)
-        .frame(height: 44)
-        .background(buttonColor)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .padding(MuesliTheme.spacing12)
+        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+    }
+
+    private var keyboardHint: String {
+        if controller.opensMuesliFromPrimaryButton {
+            return "Tap mic to open Muesli, then return here to stop and insert."
+        }
+
+        switch controller.dictationPhase {
+        case .requested, .recording:
+            return "Listening. Tap stop when you are ready to insert."
+        case .transcribing:
+            return "Preparing text for this field."
+        case .finished:
+            return "Inserted into the focused field."
+        case .failed:
+            return controller.statusText
+        default:
+            return controller.canInsertLatest ? "Record, or insert your latest voice note." : "Tap mic to record into this text field."
+        }
     }
 
     private var buttonColor: Color {
@@ -139,6 +167,22 @@ private struct KeyboardLiveTranscriptPreview: View {
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.surfacePrimary)
         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+    }
+}
+
+private struct KeyboardActionChip: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(MuesliTheme.captionMedium())
+            .foregroundStyle(MuesliTheme.accent)
+            .frame(maxWidth: .infinity)
+            .frame(height: 34)
+            .background(MuesliTheme.accentSubtle)
+            .clipShape(Capsule())
+            .contentShape(Capsule())
     }
 }
 

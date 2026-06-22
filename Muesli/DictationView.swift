@@ -7,9 +7,11 @@ import UIKit
 struct DictationView: View {
     @Bindable var coordinator: DictationCoordinator
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
+    @State private var shouldShowKeyboardSetupRow = false
 
     var body: some View {
         NavigationStack {
@@ -44,6 +46,11 @@ struct DictationView: View {
             }
             .onAppear {
                 coordinator.refreshHistory()
+                refreshKeyboardSetupPromptVisibility()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                refreshKeyboardSetupPromptVisibility()
             }
             .navigationDestination(for: UUID.self) { resultID in
                 if let result = coordinator.dictationHistory.first(where: { $0.id == resultID }),
@@ -163,7 +170,9 @@ struct DictationView: View {
                 .disabled(isDictationButtonDisabled)
                 .accessibilityIdentifier("dictation.primaryButton")
 
-                keyboardShortcutRow
+                if shouldShowKeyboardSetupRow {
+                    keyboardShortcutRow
+                }
             }
             .padding()
         }
@@ -368,6 +377,13 @@ struct DictationView: View {
             openURL(url)
         }
         #endif
+    }
+
+    private func refreshKeyboardSetupPromptVisibility() {
+        let extensionStatus = try? SharedStore().keyboardExtensionStatus()
+        let keyboardConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed)
+        let fullAccessConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.fullAccessConfirmed)
+        shouldShowKeyboardSetupRow = extensionStatus?.hasOpenAccess != true && !(keyboardConfirmed && fullAccessConfirmed)
     }
 
     private func formatElapsedTime(_ time: TimeInterval) -> String {

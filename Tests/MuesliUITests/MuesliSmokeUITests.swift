@@ -19,7 +19,7 @@ final class MuesliSmokeUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["muesli"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["Voice Note"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["dictation.primaryButton"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["dictation.primaryButton"].exists)
         XCTAssertTrue(app.staticTexts["Recent Voice Notes"].exists)
     }
 

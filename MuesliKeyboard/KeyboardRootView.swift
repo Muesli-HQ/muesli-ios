@@ -115,12 +115,18 @@ struct KeyboardRootView: View {
     }
 
     private var keyboardHint: String {
+        if controller.isRecoveryRequested {
+            return "Tap Open Muesli to resume your voice note."
+        }
+
         if controller.opensMuesliFromPrimaryButton {
             return "Tap mic to open Muesli, then return here to stop and insert."
         }
 
         switch controller.dictationPhase {
-        case .requested, .recording:
+        case .requested:
+            return "Starting. Muesli is preparing to record."
+        case .recording:
             return "Listening. Tap stop when you are ready to insert."
         case .transcribing:
             return "Preparing text for this field."

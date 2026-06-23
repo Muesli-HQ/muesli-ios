@@ -102,6 +102,10 @@ final class KeyboardController {
         hasLatestDictation && activeRequestID == nil
     }
 
+    var isRecoveryRequested: Bool {
+        recoveryRequestID != nil
+    }
+
     var opensMuesliFromPrimaryButton: Bool {
         recoveryRequestID != nil
             || !canUseRuntimeStart

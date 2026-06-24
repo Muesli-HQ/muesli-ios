@@ -168,6 +168,9 @@ struct DictationView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isDictationButtonDisabled)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(dictationButtonTitle)
+                .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier("dictation.primaryButton")
 
                 if shouldShowKeyboardSetupRow {

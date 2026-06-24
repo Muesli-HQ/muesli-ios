@@ -276,7 +276,7 @@ final class DictationCoordinator {
               let audioURL = try? store.audioFileURL(fileName: audioFileName),
               FileManager.default.fileExists(atPath: audioURL.path)
         else {
-            let message = "Recording was interrupted. Start a new dictation."
+            let message = "Recording was interrupted. Start a new voice note."
             try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
             saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
             statusText = message
@@ -657,7 +657,7 @@ final class DictationCoordinator {
                 session: session,
                 requestID: nil,
                 phase: "Ready",
-                detail: "Keyboard dictation session active"
+                detail: "Keyboard voice note session active"
             )
             saveKeyboardRuntimeStatus(
                 isActive: true,
@@ -1112,7 +1112,7 @@ final class DictationCoordinator {
                         session: session,
                         requestID: request.id,
                         phase: "Listening",
-                        detail: source == "keyboard" ? "Keyboard dictation active" : "Recording dictation"
+                        detail: source == "keyboard" ? "Keyboard voice note active" : "Recording voice note"
                     )
                 }
             } catch {
@@ -1260,7 +1260,7 @@ final class DictationCoordinator {
             activeRequest = pendingRequest
             session = try? store.recordingSession(requestID: requestID)
         } else {
-            let message = "No active recording found. Start a new dictation."
+            let message = "No active recording found. Start a new voice note."
             statusText = message
             try? store.saveStatus(.init(requestID: requestID, phase: .failed, message: message))
             saveKeyboardHandoff(requestID: requestID, phase: .failed, message: message)
@@ -2210,7 +2210,7 @@ final class DictationCoordinator {
                         session: session,
                         requestID: nil,
                         phase: "Ready",
-                        detail: "Keyboard dictation session active"
+                        detail: "Keyboard voice note session active"
                     )
                 }
             } catch {

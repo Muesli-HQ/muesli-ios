@@ -50,7 +50,7 @@ struct DictionarySettingsContent: View {
                 DictionaryToggleRow(
                     icon: "text.word.spacing",
                     title: "Remove Filler Words",
-                    detail: "Remove common speech fillers before dictations and meeting transcripts are saved.",
+                    detail: "Remove common speech fillers before voice notes and meeting transcripts are saved.",
                     isOn: $fillerWordRemoval
                 )
                 Divider().overlay(MuesliTheme.surfaceBorder)

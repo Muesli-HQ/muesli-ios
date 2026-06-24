@@ -73,7 +73,7 @@ struct RootView: View {
                         selectedSection: $selectedSection,
                         pinnedSections: pinnedSections
                     )
-                        .padding(.horizontal, MuesliTheme.spacing20)
+                        .padding(.horizontal, MuesliTheme.spacing12)
                         .padding(.bottom, MuesliTheme.spacing12)
                         .padding(.top, MuesliTheme.spacing8)
                         .background(MuesliTheme.backgroundBase)
@@ -191,7 +191,7 @@ private struct KeyboardHandoffOverlay: View {
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .multilineTextAlignment(.center)
 
-                    Text("Keep Muesli recording in the background, then tap Stop Dictation on the Muesli keyboard. The transcript will insert into the focused text box.")
+                    Text("Keep Muesli recording in the background, then tap Stop on the Muesli keyboard. The transcript will insert into the focused text box.")
                         .font(MuesliTheme.body())
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .multilineTextAlignment(.center)
@@ -225,7 +225,7 @@ enum AppSection: String, CaseIterable {
     var title: String {
         switch self {
         case .dictations:
-            "Dictations"
+            "Voice Notes"
         case .meetings:
             "Meetings"
         case .settings:
@@ -321,24 +321,22 @@ private struct MuesliTabSwitcher: View {
                 Button {
                     selectedSection = section
                 } label: {
-                    HStack(spacing: MuesliTheme.spacing8) {
-                        Image(systemName: section.icon)
-                            .font(.system(size: 15, weight: .semibold))
-                        Text(section.title)
-                            .font(MuesliTheme.headline())
-                    }
+                    Text(section.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
                     .foregroundStyle(selectedSection == section ? MuesliTheme.accent : MuesliTheme.textSecondary)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 48)
+                    .frame(height: 44)
                     .background(selectedSection == section ? MuesliTheme.surfaceSelected : Color.clear)
-                    .clipShape(Capsule())
-                    .contentShape(Capsule())
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("tab.\(section.rawValue)")
             }
         }
-        .padding(MuesliTheme.spacing8)
+        .padding(MuesliTheme.spacing4)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
         .overlay(

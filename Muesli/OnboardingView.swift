@@ -138,7 +138,7 @@ struct OnboardingView: View {
             )
             appleSyncStatusText = enabled
                 ? "Syncing through your private iCloud account. Audio stays local."
-                : "Sync is off. Dictations and meetings stay local on this iPhone."
+                : "Sync is off. Voice notes and meetings stay local on this iPhone."
             refreshAppleSyncStatus()
         }
         .onChange(of: coordinator.syncSetupRequestID) { _, _ in
@@ -278,7 +278,7 @@ struct OnboardingView: View {
                 Text("Permissions")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("Muesli needs microphone access. Keyboard setup is required only if you want dictation from text fields.")
+                Text("Muesli needs microphone access. Keyboard setup is required only if you want voice notes from text fields.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
@@ -297,7 +297,7 @@ struct OnboardingView: View {
                 Button {
                     openAppSettings()
                 } label: {
-                    Label("Open Keyboard Settings", systemImage: "arrow.up.right")
+                    Label("Open iOS Settings", systemImage: "arrow.up.right")
                         .font(MuesliTheme.headline())
                         .frame(maxWidth: .infinity)
                         .frame(height: 46)
@@ -408,7 +408,7 @@ struct OnboardingView: View {
                 Text("Sync with your Mac")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("Your Muesli history follows you through private iCloud. Dictations, meeting transcripts, notes, and summaries sync as text. Audio stays local.")
+                Text("Your Muesli history follows you through private iCloud. Voice notes, meeting transcripts, notes, and summaries sync as text. Audio stays local.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -702,12 +702,12 @@ struct OnboardingView: View {
                     .frame(height: 7)
                 RotatingPreparationHint(messages: [
                     "Compiling CoreML assets for this device.",
-                    "First launch takes longer; later dictation starts faster.",
+                    "First launch takes longer; later voice notes start faster.",
                     "Audio and transcripts stay on device."
                 ])
             }
         case .ready:
-            Label("Ready for dictation", systemImage: "checkmark.circle.fill")
+            Label("Ready for voice notes", systemImage: "checkmark.circle.fill")
                 .font(MuesliTheme.captionMedium())
                 .foregroundStyle(MuesliTheme.success)
         case .failed:
@@ -720,7 +720,7 @@ struct OnboardingView: View {
     private var testStep: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                Text(useCaseDraft == .voiceNotes ? "Test Voice Note" : "Test Dictation")
+                Text("Test Voice Note")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
                 Text("Try saying: \"testing this one out\"")
@@ -1349,7 +1349,7 @@ private enum OnboardingStep: Int, CaseIterable {
         case .model:
             "Download and compile local transcription."
         case .test:
-            "Confirm dictation works on this device."
+            "Confirm voice notes work on this device."
         case .summary:
             "Connect meeting summary providers."
         }

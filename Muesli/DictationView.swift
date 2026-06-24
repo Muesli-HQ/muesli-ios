@@ -1,11 +1,17 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct DictationView: View {
     @Bindable var coordinator: DictationCoordinator
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
+    @State private var shouldShowKeyboardSetupRow = false
 
     var body: some View {
         NavigationStack {
@@ -36,10 +42,15 @@ struct DictationView: View {
                     coordinator.iCloudSyncStatusText = nil
                 }
             } message: {
-                Text("Muesli will sync dictation text, meeting transcripts, notes, and summaries with your Mac through your private iCloud account. Audio stays local.")
+                Text("Muesli will sync voice note text, meeting transcripts, notes, and summaries with your Mac through your private iCloud account. Audio stays local.")
             }
             .onAppear {
                 coordinator.refreshHistory()
+                refreshKeyboardSetupPromptVisibility()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                refreshKeyboardSetupPromptVisibility()
             }
             .navigationDestination(for: UUID.self) { resultID in
                 if let result = coordinator.dictationHistory.first(where: { $0.id == resultID }),
@@ -67,7 +78,7 @@ struct DictationView: View {
                     .foregroundStyle(MuesliTheme.textPrimary)
             }
 
-            Text("Local-first dictation history for iOS")
+            Text("Local-first voice notes for iOS")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
         }
@@ -78,7 +89,7 @@ struct DictationView: View {
             VStack(spacing: MuesliTheme.spacing20) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Dictation")
+                        Text("Voice Note")
                             .font(MuesliTheme.title3())
                             .foregroundStyle(MuesliTheme.textPrimary)
                         Text(coordinator.statusText)
@@ -148,25 +159,58 @@ struct DictationView: View {
                 Button {
                     coordinator.toggleRecording()
                 } label: {
-                    HStack(spacing: MuesliTheme.spacing8) {
-                        Image(systemName: dictationButtonIcon)
-                        Text(dictationButtonTitle)
-                    }
-                    .font(MuesliTheme.headline())
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                    .foregroundStyle(isDictationButtonDisabled ? MuesliTheme.textTertiary : .white)
-                    .background(isDictationButtonDisabled ? MuesliTheme.surfacePrimary : statusColor)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    VoiceNoteRecordButtonLabel(
+                        title: dictationButtonTitle,
+                        systemImage: dictationButtonIcon,
+                        color: statusColor,
+                        isDisabled: isDictationButtonDisabled
+                    )
                 }
                 .buttonStyle(.plain)
                 .disabled(isDictationButtonDisabled)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(dictationButtonTitle)
+                .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier("dictation.primaryButton")
+
+                if shouldShowKeyboardSetupRow {
+                    keyboardShortcutRow
+                }
             }
             .padding()
         }
         .accessibilityIdentifier("dictation.recorderPanel")
+    }
+
+    private var keyboardShortcutRow: some View {
+        HStack(spacing: MuesliTheme.spacing12) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(MuesliTheme.accent)
+                .frame(width: 32, height: 32)
+                .background(MuesliTheme.accentSubtle)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Use from keyboard")
+                    .font(MuesliTheme.captionMedium())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text("Add Muesli Keyboard, enable Full Access, then tap mic in any text field.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: MuesliTheme.spacing8)
+
+            Button("Setup", action: openKeyboardSettings)
+                .font(MuesliTheme.captionMedium())
+                .buttonStyle(.plain)
+                .foregroundStyle(MuesliTheme.accent)
+        }
+        .padding(MuesliTheme.spacing12)
+        .background(MuesliTheme.surfacePrimary.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
     }
 
     @ViewBuilder
@@ -174,7 +218,7 @@ struct DictationView: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                    Text("Recent Dictations")
+                    Text("Recent Voice Notes")
                         .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text("\(coordinator.dictationHistory.count) saved")
@@ -259,14 +303,14 @@ struct DictationView: View {
     }
 
     private var emptyHistoryTitle: String {
-        coordinator.dictationHistory.isEmpty ? "No dictations yet" : "No \(sourceFilter.title.lowercased()) dictations"
+        coordinator.dictationHistory.isEmpty ? "No voice notes yet" : "No \(sourceFilter.title.lowercased()) voice notes"
     }
 
     private var emptyHistoryDetail: String {
         if coordinator.dictationHistory.isEmpty {
-            return "Recorded dictations from the app will appear here as a timeline."
+            return "Recorded voice notes from the app will appear here as a timeline."
         }
-        return "Switch filters to see the complete dictation history."
+        return "Switch filters to see the complete voice note history."
     }
 
     private var statusColor: Color {
@@ -307,7 +351,7 @@ struct DictationView: View {
         } else if isTranscribing {
             "Transcribing"
         } else {
-            "Start Dictation"
+            "Start Voice Note"
         }
     }
 
@@ -330,12 +374,58 @@ struct DictationView: View {
         coordinator.syncICloudTextIfEnabled(reason: "home_manual")
     }
 
+    private func openKeyboardSettings() {
+        #if canImport(UIKit)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            openURL(url)
+        }
+        #endif
+    }
+
+    private func refreshKeyboardSetupPromptVisibility() {
+        let extensionStatus = try? SharedStore().keyboardExtensionStatus()
+        let keyboardConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed)
+        let fullAccessConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.fullAccessConfirmed)
+        shouldShowKeyboardSetupRow = extensionStatus?.hasOpenAccess != true && !(keyboardConfirmed && fullAccessConfirmed)
+    }
+
     private func formatElapsedTime(_ time: TimeInterval) -> String {
         guard time.isFinite, time > 0 else { return "0:00" }
         let totalSeconds = Int(time.rounded(.down))
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+private struct VoiceNoteRecordButtonLabel: View {
+    let title: String
+    let systemImage: String
+    let color: Color
+    let isDisabled: Bool
+
+    var body: some View {
+        VStack(spacing: MuesliTheme.spacing8) {
+            ZStack {
+                Circle()
+                    .fill(isDisabled ? MuesliTheme.surfacePrimary : color)
+                    .frame(width: 86, height: 86)
+                    .overlay(
+                        Circle()
+                            .strokeBorder((isDisabled ? MuesliTheme.surfaceBorder : color.opacity(0.36)), lineWidth: 1)
+                    )
+
+                Image(systemName: systemImage)
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(isDisabled ? MuesliTheme.textTertiary : .white)
+            }
+
+            Text(title)
+                .font(MuesliTheme.headline())
+                .foregroundStyle(isDisabled ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
     }
 }
 
@@ -543,7 +633,7 @@ private struct DictationSourceFilterPicker: View {
                         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Show \(filter.title.lowercased()) dictations")
+                .accessibilityLabel("Show \(filter.title.lowercased()) voice notes")
             }
         }
         .padding(3)
@@ -593,14 +683,14 @@ private struct DictationHistoryRow: View {
             }
         }
         .confirmationDialog(
-            "Delete this dictation?",
+            "Delete this voice note?",
             isPresented: $isConfirmingDelete,
             titleVisibility: .visible
         ) {
-            Button("Delete Dictation", role: .destructive, action: onDelete)
+            Button("Delete Voice Note", role: .destructive, action: onDelete)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes the dictation from local history.")
+            Text("This removes the voice note from local history.")
         }
     }
 
@@ -757,7 +847,7 @@ private struct DictationAudioDetailView: View {
             .padding(.bottom, MuesliTheme.spacing24)
         }
         .background(MuesliTheme.backgroundBase)
-        .navigationTitle("Dictation")
+        .navigationTitle("Voice Note")
         .navigationBarTitleDisplayMode(.inline)
         .fileExporter(
             isPresented: $isFilesExporterPresented,
@@ -808,7 +898,7 @@ private struct DictationAudioMissingView: View {
             Text("Recording unavailable")
                 .font(MuesliTheme.title3())
                 .foregroundStyle(MuesliTheme.textPrimary)
-            Text("This dictation either was not saved with audio or its local audio file has been removed.")
+            Text("This voice note either was not saved with audio or its local audio file has been removed.")
                 .font(MuesliTheme.body())
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .multilineTextAlignment(.center)

@@ -14,13 +14,13 @@ final class MuesliSmokeUITests: XCTestCase {
         return app
     }
 
-    func testMainShellShowsDictationSmokeState() {
+    func testMainShellShowsVoiceNotesSmokeState() {
         let app = launchApp()
 
         XCTAssertTrue(app.staticTexts["muesli"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Dictation"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Start Dictation"].exists)
-        XCTAssertTrue(app.staticTexts["Recent Dictations"].exists)
+        XCTAssertTrue(app.staticTexts["Voice Note"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Start Voice Note"].exists)
+        XCTAssertTrue(app.staticTexts["Recent Voice Notes"].exists)
     }
 
     func testTabSwitcherNavigatesToMeetings() {

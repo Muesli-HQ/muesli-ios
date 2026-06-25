@@ -62,17 +62,10 @@ struct ModelsView: View {
                         .clipShape(Capsule())
                 }
 
-                Picker("Transcription Model", selection: $coordinator.selectedTranscriptionModel) {
-                    ForEach(LocalTranscriptionModel.allCases) { model in
-                        Text(model.displayName).tag(model)
-                    }
-                }
-                .pickerStyle(.menu)
-
-                Text(coordinator.selectedTranscriptionModel.detail)
-                    .font(MuesliTheme.callout())
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                TranscriptionModelSelector(
+                    selection: $coordinator.selectedTranscriptionModel,
+                    showsHeader: false
+                )
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                     Text(coordinator.modelPreparation.status)

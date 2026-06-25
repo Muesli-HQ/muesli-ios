@@ -24,7 +24,6 @@ struct RootView: View {
         .background(MuesliTheme.backgroundBase)
         .tint(MuesliTheme.accent)
         .preferredColorScheme(preferredColorScheme)
-        .id("theme-\(appearanceMode)-\(accentTheme)")
         .onChange(of: coordinator.syncSetupRequestID) { _, requestID in
             guard requestID != nil else { return }
             if coordinator.hasCompletedOnboarding {

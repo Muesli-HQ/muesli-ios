@@ -338,16 +338,7 @@ struct SettingsView: View {
                         valueColor: MuesliTheme.textSecondary
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
-                    Picker("Transcription Model", selection: $coordinator.selectedTranscriptionModel) {
-                        ForEach(LocalTranscriptionModel.allCases) { model in
-                            Text(model.displayName).tag(model)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    Text(coordinator.selectedTranscriptionModel.detail)
-                        .font(MuesliTheme.callout())
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    TranscriptionModelSelector(selection: $coordinator.selectedTranscriptionModel)
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsRow(icon: "cpu", title: "Runtime", value: "CoreML / ANE")
                     Divider().overlay(MuesliTheme.surfaceBorder)

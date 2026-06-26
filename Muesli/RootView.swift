@@ -22,9 +22,9 @@ struct RootView: View {
             }
         }
         .background(MuesliTheme.backgroundBase)
-        .tint(MuesliTheme.accent)
+        .tint(currentAccent)
+        .environment(\.muesliAccent, currentAccent)
         .preferredColorScheme(preferredColorScheme)
-        .id("theme-\(appearanceMode)-\(accentTheme)")
         .onChange(of: coordinator.syncSetupRequestID) { _, requestID in
             guard requestID != nil else { return }
             if coordinator.hasCompletedOnboarding {
@@ -32,6 +32,10 @@ struct RootView: View {
             }
             isDrawerOpen = false
         }
+    }
+
+    private var currentAccent: Color {
+        MuesliTheme.color(for: MuesliAccentTheme(rawValue: accentTheme) ?? .blue)
     }
 
     private var preferredColorScheme: ColorScheme? {
@@ -312,6 +316,7 @@ private struct MuesliSidebar: View {
 }
 
 private struct MuesliTabSwitcher: View {
+    @Environment(\.muesliAccent) private var accent
     @Binding var selectedSection: AppSection
     let pinnedSections: [AppSection]
 
@@ -325,7 +330,7 @@ private struct MuesliTabSwitcher: View {
                         .font(.system(size: 14, weight: .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
-                    .foregroundStyle(selectedSection == section ? MuesliTheme.accent : MuesliTheme.textSecondary)
+                    .foregroundStyle(selectedSection == section ? accent : MuesliTheme.textSecondary)
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
                     .background(selectedSection == section ? MuesliTheme.surfaceSelected : Color.clear)
@@ -450,6 +455,7 @@ private struct MuesliDrawer: View {
 }
 
 private struct SidebarSectionRow: View {
+    @Environment(\.muesliAccent) private var accent
     let section: AppSection
     let isSelected: Bool
     let isPinned: Bool
@@ -473,7 +479,7 @@ private struct SidebarSectionRow: View {
                         .font(.system(size: 15, weight: .semibold))
                         .frame(width: 22)
                 }
-                .foregroundStyle(isSelected ? MuesliTheme.accent : MuesliTheme.textSecondary)
+                .foregroundStyle(isSelected ? accent : MuesliTheme.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 52)
                 .padding(.leading, MuesliTheme.spacing12)
@@ -486,9 +492,9 @@ private struct SidebarSectionRow: View {
             Button(action: onTogglePin) {
                 Image(systemName: isPinned ? "pin.fill" : "pin")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isPinned ? MuesliTheme.accent : MuesliTheme.textTertiary)
+                    .foregroundStyle(isPinned ? accent : MuesliTheme.textTertiary)
                     .frame(width: 36, height: 36)
-                    .background(isPinned ? MuesliTheme.accentSubtle : Color.clear)
+                    .background(isPinned ? accent.opacity(0.15) : Color.clear)
                     .clipShape(Circle())
                     .contentShape(Circle())
             }

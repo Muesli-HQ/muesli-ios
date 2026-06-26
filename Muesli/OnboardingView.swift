@@ -21,7 +21,7 @@ struct OnboardingView: View {
     ) ?? .profile
     @State private var nameDraft = ""
     @State private var useCaseDraft: OnboardingUseCase = .keyboardDictation
-    @State private var microphoneGranted = false
+    @State private var microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var keyboardEnabledConfirmed = UserDefaults.standard.bool(
         forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed
     )
@@ -286,11 +286,15 @@ struct OnboardingView: View {
             permissionRow(
                 icon: "mic.fill",
                 title: "Microphone",
-                detail: "Record speech for local transcription",
+                detail: microphonePermissionDetail,
                 isComplete: microphoneGranted,
-                buttonTitle: microphoneGranted ? "Granted" : "Grant"
+                buttonTitle: microphonePermissionButtonTitle
             ) {
-                requestMicrophonePermission()
+                if microphonePermissionNeedsSettings {
+                    openAppSettings()
+                } else {
+                    requestMicrophonePermission()
+                }
             }
 
             if useCaseDraft.needsKeyboardSetup {
@@ -388,7 +392,8 @@ struct OnboardingView: View {
                     Text(detail)
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
-                        .lineLimit(2)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
@@ -577,49 +582,9 @@ struct OnboardingView: View {
 
     private var modelPicker: some View {
         MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                HStack(spacing: MuesliTheme.spacing12) {
-                    Image(systemName: "cpu")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(MuesliTheme.accent)
-                        .frame(width: 30)
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Transcription Model")
-                            .font(MuesliTheme.headline())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                        Text(coordinator.selectedTranscriptionModel.detail)
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                }
-
-                Picker("Transcription Model", selection: $coordinator.selectedTranscriptionModel) {
-                    ForEach(LocalTranscriptionModel.allCases) { model in
-                        Text(model.displayName).tag(model)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                HStack(spacing: MuesliTheme.spacing8) {
-                    modelBadge(coordinator.selectedTranscriptionModel.capabilityLabel, icon: "textformat")
-                    modelBadge(coordinator.selectedTranscriptionModel.estimatedSizeLabel, icon: "internaldrive")
-                }
-            }
+            TranscriptionModelSelector(selection: $coordinator.selectedTranscriptionModel)
             .padding(MuesliTheme.spacing16)
         }
-    }
-
-    private func modelBadge(_ text: String, icon: String) -> some View {
-        Label(text, systemImage: icon)
-            .font(MuesliTheme.captionMedium())
-            .foregroundStyle(MuesliTheme.accent)
-            .padding(.horizontal, MuesliTheme.spacing8)
-            .padding(.vertical, MuesliTheme.spacing4)
-            .background(MuesliTheme.accent.opacity(0.12))
-            .clipShape(Capsule())
     }
 
     private var modelPanel: some View {
@@ -1016,6 +981,49 @@ struct OnboardingView: View {
         }
     }
 
+    private var microphoneGranted: Bool {
+        microphoneAuthorizationStatus == .authorized
+    }
+
+    private var microphonePermissionNeedsSettings: Bool {
+        switch microphoneAuthorizationStatus {
+        case .denied, .restricted:
+            true
+        case .authorized, .notDetermined:
+            false
+        @unknown default:
+            false
+        }
+    }
+
+    private var microphonePermissionDetail: String {
+        switch microphoneAuthorizationStatus {
+        case .authorized:
+            "Microphone access is enabled."
+        case .denied:
+            "Microphone access was denied. Open iOS Settings to enable recording."
+        case .restricted:
+            "Microphone access is restricted on this iPhone. Check iOS Settings."
+        case .notDetermined:
+            "Record speech for local transcription."
+        @unknown default:
+            "Check microphone access before continuing."
+        }
+    }
+
+    private var microphonePermissionButtonTitle: String {
+        switch microphoneAuthorizationStatus {
+        case .authorized:
+            "Granted"
+        case .denied, .restricted:
+            "Open Settings"
+        case .notDetermined:
+            "Grant"
+        @unknown default:
+            "Check"
+        }
+    }
+
     private var isLastStep: Bool {
         currentStep.position(in: orderedSteps) == orderedSteps.count - 1
     }
@@ -1093,7 +1101,7 @@ struct OnboardingView: View {
     }
 
     private func refreshMicrophoneStatus() {
-        microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
     }
 
     private func refreshKeyboardPermissionStatus() {
@@ -1115,7 +1123,7 @@ struct OnboardingView: View {
     private func requestMicrophonePermission() {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             Task { @MainActor in
-                microphoneGranted = granted
+                microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
                 AppTelemetry.signal("onboarding_permission_result", parameters: [
                     "permission": "microphone",
                     "granted": granted ? "true" : "false"

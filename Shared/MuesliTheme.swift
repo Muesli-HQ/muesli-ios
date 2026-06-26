@@ -76,6 +76,17 @@ enum MuesliTheme {
     }
 }
 
+private struct MuesliAccentEnvironmentKey: EnvironmentKey {
+    static let defaultValue = MuesliTheme.accent
+}
+
+extension EnvironmentValues {
+    var muesliAccent: Color {
+        get { self[MuesliAccentEnvironmentKey.self] }
+        set { self[MuesliAccentEnvironmentKey.self] = newValue }
+    }
+}
+
 extension Color {
     init(hex: Int) {
         self.init(

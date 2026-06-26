@@ -18,6 +18,8 @@
 
 ---
 
+if you want early access - email me at pranav@muesli.works
+
 ## What is Muesli for iOS?
 
 Muesli for iOS is the mobile companion to [Muesli for macOS](https://github.com/Muesli-HQ/muesli). It brings the same local-first product philosophy to iPhone: record speech, transcribe it on device with CoreML/ANE models, and keep audio and transcripts local unless you explicitly choose a cloud-backed summary provider.

@@ -17,7 +17,10 @@ final class KeyboardSessionKeeper {
             throw AudioRecorder.RecordingError.microphonePermissionDenied
         }
 
-        _ = try AudioInputRouteManager.configureForRecording(stage: "keyboard session")
+        _ = try AudioInputRouteManager.configureForRecording(
+            stage: "keyboard session",
+            preference: .builtIn
+        )
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode

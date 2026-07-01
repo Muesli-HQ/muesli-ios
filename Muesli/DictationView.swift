@@ -20,6 +20,7 @@ struct DictationView: View {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     header
+                    homeStatsRow
                     recorderPanel
                     historyHeader
                 }
@@ -73,13 +74,43 @@ struct DictationView: View {
         }
     }
 
+    private var homeStatsRow: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            DictationHomeStatTile(
+                value: dashboardStats.streak,
+                label: "streak",
+                systemImage: "flame.fill",
+                tint: Color(hex: 0xFF9F2D)
+            )
+            DictationHomeStatTile(
+                value: dashboardStats.words,
+                label: "words",
+                systemImage: "waveform",
+                tint: MuesliTheme.accent
+            )
+            DictationHomeStatTile(
+                value: dashboardStats.wpm,
+                label: "WPM",
+                systemImage: "speedometer",
+                tint: MuesliTheme.success
+            )
+            DictationHomeStatTile(
+                value: dashboardStats.meetings,
+                label: "meetings",
+                systemImage: "person.2",
+                tint: MuesliTheme.accent
+            )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Stats: \(dashboardStats.streak) day streak, \(dashboardStats.words) words, \(dashboardStats.wpm) words per minute, \(dashboardStats.meetings) meetings"
+        )
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
             HStack(spacing: MuesliTheme.spacing12) {
-                Image("MuesliAppIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 42, height: 42)
+                MuesliHeaderWaveformMark()
                 Text("muesli")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
@@ -89,6 +120,90 @@ struct DictationView: View {
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
         }
+    }
+
+    private var dashboardStats: DictationDashboardStats {
+        #if DEBUG
+        if shouldUseMockDictations {
+            return DictationDashboardStats(words: "61.0k", wpm: "152", meetings: "135", streak: "3")
+        }
+        #endif
+
+        return DictationDashboardStats(
+            words: formattedCompactCount(totalDictationWords),
+            wpm: formattedAverageWPM,
+            meetings: formattedCompactCount(totalMeetingCount),
+            streak: "\(currentActivityStreak)"
+        )
+    }
+
+    private var totalDictationWords: Int {
+        displayHistory.reduce(0) { total, result in
+            total + result.text.split { $0.isWhitespace || $0.isNewline }.count
+        }
+    }
+
+    private var totalMeetingCount: Int {
+        coordinator.recordingSessions.filter { $0.kind == .meeting }.count
+    }
+
+    private var formattedAverageWPM: String {
+        let completedDictationSessions = displayHistory.compactMap { result -> (words: Int, duration: TimeInterval)? in
+            guard let session = coordinator.recordingSession(for: result),
+                  let duration = session.duration,
+                  duration >= 10 else {
+                return nil
+            }
+
+            let words = result.text.split { $0.isWhitespace || $0.isNewline }.count
+            guard words > 0 else { return nil }
+            return (words, duration)
+        }
+
+        let totalWords = completedDictationSessions.reduce(0) { $0 + $1.words }
+        let totalSeconds = completedDictationSessions.reduce(0) { $0 + $1.duration }
+        guard totalWords > 0, totalSeconds > 0 else { return "0" }
+
+        let wpm = Double(totalWords) / max(totalSeconds / 60, 1 / 60)
+        return "\(Int(wpm.rounded()))"
+    }
+
+    private var currentActivityStreak: Int {
+        let calendar = Calendar.current
+        let activeDays = Set(
+            displayHistory.map { calendar.startOfDay(for: $0.createdAt) }
+                + coordinator.recordingSessions.map { calendar.startOfDay(for: $0.createdAt) }
+        )
+
+        guard !activeDays.isEmpty else { return 0 }
+
+        var streak = 0
+        var day = calendar.startOfDay(for: .now)
+        if !activeDays.contains(day),
+           let yesterday = calendar.date(byAdding: .day, value: -1, to: day) {
+            day = yesterday
+        }
+
+        while activeDays.contains(day) {
+            streak += 1
+            guard let previousDay = calendar.date(byAdding: .day, value: -1, to: day) else { break }
+            day = previousDay
+        }
+
+        return streak
+    }
+
+    private func formattedCompactCount(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
+        if value >= 10_000 {
+            return String(format: "%.1fk", Double(value) / 1_000)
+        }
+        if value >= 1_000 {
+            return "\(value.formatted())"
+        }
+        return "\(value)"
     }
 
     private var recorderPanel: some View {
@@ -560,6 +675,91 @@ struct DictationView: View {
     #endif
 }
 
+private struct DictationDashboardStats {
+    let words: String
+    let wpm: String
+    let meetings: String
+    let streak: String
+}
+
+private struct MuesliHeaderWaveformMark: View {
+    private let bars: [CGFloat] = [0.34, 0.58, 0.82, 1.0, 0.74, 0.5, 0.68, 0.96, 0.78, 0.54]
+
+    var body: some View {
+        HStack(spacing: 2.2) {
+            ForEach(bars.indices, id: \.self) { index in
+                Capsule()
+                    .fill(MuesliTheme.accent)
+                    .frame(width: 3.2, height: 32 * bars[index])
+            }
+        }
+        .frame(width: 42, height: 42)
+        .shadow(color: MuesliTheme.accent.opacity(0.28), radius: 8, x: 0, y: 3)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct DictationHomeStatTile: View {
+    let value: String
+    let label: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: MuesliTheme.spacing8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(tint)
+                .frame(height: 20)
+
+            VStack(spacing: 1) {
+                Text(value)
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.76)
+                    .lineLimit(1)
+                    .foregroundStyle(MuesliTheme.textPrimary)
+
+                Text(label)
+                    .font(MuesliTheme.caption())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 76)
+        .padding(.horizontal, MuesliTheme.spacing8)
+        .background {
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            MuesliTheme.backgroundRaised.opacity(0.88),
+                            MuesliTheme.backgroundDeep.opacity(0.76)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        }
+        .overlay(alignment: .top) {
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
+                .strokeBorder(MuesliTheme.glassHighlight.opacity(0.72), lineWidth: 0.7)
+                .blendMode(.screen)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
+                .strokeBorder(MuesliTheme.accent.opacity(0.34), lineWidth: 1)
+        }
+        .shadow(color: MuesliTheme.accent.opacity(0.10), radius: 12, x: 0, y: 7)
+        .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(value) \(label)")
+    }
+}
+
 private struct VoiceNoteRecordButtonLabel: View {
     let title: String
     let systemImage: String
@@ -571,13 +771,48 @@ private struct VoiceNoteRecordButtonLabel: View {
         VStack(spacing: MuesliTheme.spacing8) {
             ZStack {
                 Circle()
-                    .fill(circleFill)
-                    .frame(width: 74, height: 74)
+                    .fill(color.opacity(isStopState ? 0.18 : 0.16))
+                    .frame(width: 96, height: 96)
+                    .blur(radius: 0.5)
+
+                Circle()
+                    .fill(outerRingFill)
+                    .frame(width: 88, height: 88)
                     .overlay(
                         Circle()
-                            .strokeBorder(circleBorder, lineWidth: 1)
+                            .strokeBorder(outerRingBorder, lineWidth: 1.2)
                     )
-                    .shadow(color: circleShadow, radius: isStopState ? 10 : 0, x: 0, y: 5)
+                    .shadow(color: outerShadow, radius: 14, x: 0, y: 9)
+                    .shadow(color: color.opacity(isStopState ? 0.10 : 0.22), radius: 18, x: 0, y: 7)
+
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: circleGradient,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 74, height: 74)
+                    .overlay(alignment: .topLeading) {
+                        Circle()
+                            .strokeBorder(.white.opacity(isDisabled ? 0.08 : 0.42), lineWidth: 2)
+                            .padding(4)
+                            .blur(radius: 0.2)
+                            .mask(
+                                LinearGradient(
+                                    colors: [.white, .clear],
+                                    startPoint: .topLeading,
+                                    endPoint: .center
+                                )
+                            )
+                    }
+                    .overlay {
+                        Circle()
+                            .strokeBorder(circleBorder, lineWidth: 1)
+                    }
+                    .shadow(color: .white.opacity(isDisabled ? 0 : 0.10), radius: 2, x: -1, y: -1)
+                    .shadow(color: .black.opacity(0.20), radius: 7, x: 0, y: 5)
 
                 Image(systemName: systemImage)
                     .font(.system(size: 26, weight: .semibold))
@@ -593,14 +828,43 @@ private struct VoiceNoteRecordButtonLabel: View {
         .contentShape(Rectangle())
     }
 
-    private var circleFill: Color {
+    private var outerRingFill: Color {
         if isDisabled {
-            MuesliTheme.surfacePrimary
-        } else if isStopState {
-            MuesliTheme.destructive.opacity(0.32)
-        } else {
-            color
+            return MuesliTheme.surfacePrimary.opacity(0.72)
         }
+        if isStopState {
+            return MuesliTheme.destructive.opacity(0.20)
+        }
+        return color.opacity(0.18)
+    }
+
+    private var outerRingBorder: Color {
+        if isDisabled {
+            return MuesliTheme.surfaceBorder
+        }
+        if isStopState {
+            return MuesliTheme.destructive.opacity(0.42)
+        }
+        return color.opacity(0.54)
+    }
+
+    private var circleGradient: [Color] {
+        if isDisabled {
+            return [
+                MuesliTheme.surfacePrimary.opacity(0.72),
+                MuesliTheme.surfacePrimary.opacity(0.52)
+            ]
+        }
+        if isStopState {
+            return [
+                MuesliTheme.destructive.opacity(0.88),
+                MuesliTheme.destructive.opacity(0.52)
+            ]
+        }
+        return [
+            color.opacity(0.96),
+            Color(hex: 0x1B56D8).opacity(0.95)
+        ]
     }
 
     private var circleBorder: Color {
@@ -613,8 +877,14 @@ private struct VoiceNoteRecordButtonLabel: View {
         }
     }
 
-    private var circleShadow: Color {
-        isStopState && !isDisabled ? MuesliTheme.destructive.opacity(0.16) : .clear
+    private var outerShadow: Color {
+        if isDisabled {
+            return .clear
+        }
+        if isStopState {
+            return MuesliTheme.destructive.opacity(0.16)
+        }
+        return MuesliTheme.accent.opacity(0.18)
     }
 
     private var iconColor: Color {

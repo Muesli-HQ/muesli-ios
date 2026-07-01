@@ -18,6 +18,7 @@ final class KeyboardController {
     private var latestHandoffState: KeyboardHandoffState?
     private var latestRuntimeStatus: KeyboardRuntimeStatus?
     private var insertedRequestIDs = Set<UUID>()
+    private var cancelledRequestIDs = Set<UUID>()
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -75,17 +76,6 @@ final class KeyboardController {
         }
     }
 
-    var primaryButtonColor: ColorToken {
-        return switch dictationPhase {
-        case .requested, .recording:
-            .recording
-        case .transcribing:
-            .transcribing
-        default:
-            .accent
-        }
-    }
-
     var stylesPrimaryButtonAsStop: Bool {
         primaryButtonRole == .stop
     }
@@ -127,6 +117,10 @@ final class KeyboardController {
 
     var showsActiveWaveform: Bool {
         [.requested, .recording, .transcribing].contains(dictationPhase)
+    }
+
+    var canCancelActiveDictation: Bool {
+        [.requested, .recording].contains(dictationPhase)
     }
 
     var settingsURL: URL? {
@@ -207,6 +201,7 @@ final class KeyboardController {
         activeRequestID = request.id
         liveTranscript = ""
         insertedRequestIDs.remove(request.id)
+        cancelledRequestIDs.remove(request.id)
         dictationPhase = .recording
         statusText = "Opening Muesli"
 
@@ -286,7 +281,18 @@ final class KeyboardController {
         statusText = deleteCount > 1 ? "Cleared" : "Deleted"
     }
 
+    func deleteBackward() {
+        textDeleter?(1)
+        lastInsertedCharacterCount = 0
+        statusText = "Deleted"
+    }
+
     func cancelActiveDictation() {
+        guard canCancelActiveDictation else {
+            statusText = dictationPhase == .transcribing ? "Transcribing" : statusText
+            return
+        }
+
         guard let activeRequestID else {
             dictationPhase = .idle
             liveTranscript = ""
@@ -304,6 +310,9 @@ final class KeyboardController {
                 message: "Cancelled"
             ))
             try store.saveStatus(.idle)
+            try store.clearPendingRequest()
+            try store.clearKeyboardLiveTranscript()
+            cancelledRequestIDs.insert(activeRequestID)
             self.activeRequestID = nil
             recoveryRequestID = nil
             liveTranscript = ""
@@ -387,6 +396,17 @@ final class KeyboardController {
 
     private func apply(handoffState: KeyboardHandoffState) {
         guard let requestID = handoffState.requestID else { return }
+
+        if cancelledRequestIDs.contains(requestID) {
+            if [.cancelled, .idle, .failed].contains(handoffState.phase) {
+                activeRequestID = nil
+                recoveryRequestID = nil
+                liveTranscript = ""
+                dictationPhase = .idle
+                statusText = hasLatestDictation ? "Latest ready" : "Ready"
+            }
+            return
+        }
 
         let resumablePhases: [KeyboardHandoffPhase] = [
             .startRequested,
@@ -490,6 +510,10 @@ final class KeyboardController {
         }
 
         if activeRequestID == nil, preparedRequest?.id == requestID, status.phase == .requested {
+            return
+        }
+
+        if cancelledRequestIDs.contains(requestID) {
             return
         }
 
@@ -682,12 +706,6 @@ final class KeyboardController {
         textInserter?(text)
         lastInsertedCharacterCount = text.count
     }
-}
-
-enum ColorToken {
-    case accent
-    case recording
-    case transcribing
 }
 
 enum KeyboardPrimaryButtonRole {

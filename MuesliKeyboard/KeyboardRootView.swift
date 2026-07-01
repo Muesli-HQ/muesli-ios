@@ -150,11 +150,19 @@ struct KeyboardRootView: View {
             }
 
             HStack(spacing: MuesliTheme.spacing12) {
-                KeyboardControlButton(
-                    title: "Cancel",
-                    tint: MuesliTheme.destructive,
-                    action: controller.cancelActiveDictation
-                )
+                Group {
+                    if controller.canCancelActiveDictation {
+                        KeyboardControlButton(
+                            title: "Cancel",
+                            tint: MuesliTheme.destructive,
+                            action: controller.cancelActiveDictation
+                        )
+                    } else {
+                        Color.clear
+                            .frame(height: 44)
+                    }
+                }
+                .frame(maxWidth: .infinity)
 
                 Spacer(minLength: MuesliTheme.spacing16)
 
@@ -172,11 +180,15 @@ struct KeyboardRootView: View {
                 KeyboardTextKey("?") { controller.insertTextKey("?") }
                 KeyboardTextKey("!") { controller.insertTextKey("!") }
                 KeyboardTextKey("'") { controller.insertTextKey("'") }
-                KeyboardTextKey(systemImage: "delete.left") { controller.clearInsertedText() }
+                KeyboardTextKey(systemImage: "delete.left", accessibilityLabel: "Delete") {
+                    controller.deleteBackward()
+                }
             }
 
             HStack(spacing: MuesliTheme.spacing8) {
-                KeyboardTextKey(systemImage: "globe") { controller.switchInputMode() }
+                KeyboardTextKey(systemImage: "globe", accessibilityLabel: "Next keyboard") {
+                    controller.switchInputMode()
+                }
                     .frame(maxWidth: 58)
 
                 KeyboardTextKey("ABC") { controller.switchInputMode() }
@@ -227,6 +239,7 @@ struct KeyboardRootView: View {
             .buttonStyle(.plain)
             .muesliKeyboardKeySurface(tint: MuesliTheme.recording)
             .disabled(controller.isPrimaryButtonDisabled)
+            .accessibilityLabel(primaryActionTitle)
         } else {
             Button {
                 controller.primaryAction()
@@ -236,6 +249,7 @@ struct KeyboardRootView: View {
             .buttonStyle(.plain)
             .muesliKeyboardKeySurface(tint: MuesliTheme.recording)
             .disabled(controller.isPrimaryButtonDisabled)
+            .accessibilityLabel(primaryActionTitle)
         }
     }
 
@@ -400,17 +414,20 @@ private struct KeyboardIconLabel: View {
 private struct KeyboardTextKey: View {
     let title: String?
     let systemImage: String?
+    let accessibilityLabel: String?
     let action: () -> Void
 
     init(_ title: String, action: @escaping () -> Void) {
         self.title = title
         self.systemImage = nil
+        self.accessibilityLabel = title
         self.action = action
     }
 
-    init(systemImage: String, action: @escaping () -> Void) {
+    init(systemImage: String, accessibilityLabel: String, action: @escaping () -> Void) {
         self.title = nil
         self.systemImage = systemImage
+        self.accessibilityLabel = accessibilityLabel
         self.action = action
     }
 
@@ -420,6 +437,7 @@ private struct KeyboardTextKey: View {
         }
         .buttonStyle(.plain)
         .muesliKeyboardKeySurface()
+        .accessibilityLabel(accessibilityLabel ?? title ?? systemImage ?? "")
     }
 }
 

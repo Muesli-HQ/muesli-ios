@@ -26,18 +26,10 @@ struct RootView: View {
         .environment(\.muesliAccent, currentAccent)
         .preferredColorScheme(preferredColorScheme)
         .onChange(of: coordinator.syncSetupRequestID) { _, requestID in
-            guard requestID != nil else { return }
-            if coordinator.hasCompletedOnboarding {
-                selectedSection = .settings
-            }
-            isDrawerOpen = false
+            navigateToSettingsIfNeeded(requestID)
         }
         .onChange(of: coordinator.settingsNavigationRequestID) { _, requestID in
-            guard requestID != nil else { return }
-            if coordinator.hasCompletedOnboarding {
-                selectedSection = .settings
-            }
-            isDrawerOpen = false
+            navigateToSettingsIfNeeded(requestID)
         }
     }
 
@@ -148,6 +140,14 @@ struct RootView: View {
         withAnimation(.snappy(duration: 0.24)) {
             isDrawerOpen = false
         }
+    }
+
+    private func navigateToSettingsIfNeeded(_ requestID: UUID?) {
+        guard requestID != nil else { return }
+        if coordinator.hasCompletedOnboarding {
+            selectedSection = .settings
+        }
+        isDrawerOpen = false
     }
 
     private func togglePinnedSection(_ section: AppSection) {

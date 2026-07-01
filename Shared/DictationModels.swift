@@ -547,6 +547,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
     let phase: DictationPhase
     let message: String?
     let supportsBackgroundStart: Bool
+    let inputLevel: Double
     let updatedAt: Date
 
     init(
@@ -555,6 +556,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         phase: DictationPhase = .idle,
         message: String? = nil,
         supportsBackgroundStart: Bool = false,
+        inputLevel: Double = 0,
         updatedAt: Date = .now
     ) {
         self.isActive = isActive
@@ -562,6 +564,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         self.phase = phase
         self.message = message
         self.supportsBackgroundStart = supportsBackgroundStart
+        self.inputLevel = min(max(inputLevel, 0), 1)
         self.updatedAt = updatedAt
     }
 
@@ -571,6 +574,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         case phase
         case message
         case supportsBackgroundStart
+        case inputLevel
         case updatedAt
     }
 
@@ -581,6 +585,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         phase = try container.decode(DictationPhase.self, forKey: .phase)
         message = try container.decodeIfPresent(String.self, forKey: .message)
         supportsBackgroundStart = try container.decodeIfPresent(Bool.self, forKey: .supportsBackgroundStart) ?? false
+        inputLevel = try container.decodeIfPresent(Double.self, forKey: .inputLevel) ?? 0
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
 }

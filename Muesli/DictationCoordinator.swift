@@ -32,6 +32,7 @@ final class DictationCoordinator {
     private var keyboardSessionTimeoutTask: Task<Void, Never>?
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
+    private var lastKeyboardRuntimeLevelWriteAt = Date.distantPast
     private var pendingICloudSyncReason: String?
     private var onboardingModelReadyCueModel: LocalTranscriptionModel?
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
@@ -49,6 +50,7 @@ final class DictationCoordinator {
     var keyboardSessionStatusText = "Off"
     var iCloudSyncStatusText: String?
     var isICloudSyncInProgress = false
+    var settingsNavigationRequestID: UUID?
     var syncSetupRequestID: UUID? {
         didSet {
             if syncSetupRequestID == nil {
@@ -178,6 +180,10 @@ final class DictationCoordinator {
         #endif
 
         if handleSyncBridgeURL(url) {
+            return
+        }
+
+        if handleSettingsURL(url) {
             return
         }
 
@@ -406,6 +412,15 @@ final class DictationCoordinator {
         syncSetupRequestID = UUID()
         iCloudSyncStatusText = "Continue setup with private iCloud sync."
         AppTelemetry.signal("ios_bridge_deeplink_opened", parameters: ["source": source])
+        return true
+    }
+
+    private func handleSettingsURL(_ url: URL) -> Bool {
+        guard url.scheme == MuesliAppConstants.urlScheme,
+              url.host == MuesliAppConstants.settingsHost
+        else { return false }
+
+        settingsNavigationRequestID = UUID()
         return true
     }
 
@@ -1232,7 +1247,11 @@ final class DictationCoordinator {
                     )
                 }
                 startMetering { [weak self] level in
-                    self?.inputLevel = level
+                    guard let self else { return }
+                    self.inputLevel = level
+                    if source == "keyboard" {
+                        self.publishKeyboardRuntimeLevel(level, requestID: request.id)
+                    }
                 }
                 if source == "keyboard" {
                     startCommandPolling(for: request.id)
@@ -1482,6 +1501,21 @@ final class DictationCoordinator {
                         )
                     }
                     text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                }
+                guard !isRecordingSessionCancelled(requestID: request.id) else {
+                    if startedFromKeyboard {
+                        saveKeyboardHandoff(requestID: request.id, phase: .cancelled, message: "Cancelled")
+                        saveKeyboardRuntimeStatus(
+                            isActive: isKeyboardSessionArmed,
+                            activeRequestID: nil,
+                            phase: .idle,
+                            message: isKeyboardSessionArmed ? "Keyboard session ready" : "Ready",
+                            supportsBackgroundStart: isKeyboardSessionArmed
+                        )
+                    }
+                    try? store.clearPendingRequest()
+                    try? store.saveStatus(.idle)
+                    return
                 }
                 if isKeyboardSessionArmed {
                     try? await keyboardSessionKeeper.start()
@@ -2203,8 +2237,31 @@ final class DictationCoordinator {
                 guard let self else { return }
                 self.refreshKeyboardRuntimeHeartbeat()
 
-                if let command = try? self.store.pendingCommand(), command.action == .start {
+                if let command = try? self.store.pendingCommand() {
                     try? self.store.clearPendingCommand()
+                    switch command.action {
+                    case .start:
+                        break
+                    case .stop:
+                        self.saveKeyboardHandoff(
+                            requestID: command.requestID,
+                            phase: .stopAcknowledged,
+                            message: "Stopping"
+                        )
+                        self.stopRecording(requestID: command.requestID)
+                        try? await Task.sleep(for: .milliseconds(500))
+                        continue
+                    case .cancel:
+                        self.saveKeyboardHandoff(
+                            requestID: command.requestID,
+                            phase: .cancelled,
+                            message: "Cancelled"
+                        )
+                        self.cancelRecording(requestID: command.requestID)
+                        try? await Task.sleep(for: .milliseconds(500))
+                        continue
+                    }
+
                     let pendingRequest = try? self.store.pendingRequest()
                     let request = pendingRequest?.id == command.requestID
                         ? pendingRequest!
@@ -2272,15 +2329,34 @@ final class DictationCoordinator {
         activeRequestID: UUID?,
         phase: DictationPhase,
         message: String?,
-        supportsBackgroundStart: Bool = false
+        supportsBackgroundStart: Bool = false,
+        inputLevel: Double? = nil
     ) {
+        let runtimeInputLevel = inputLevel ?? (phase == .recording ? self.inputLevel : 0)
         try? store.saveKeyboardRuntimeStatus(.init(
             isActive: isActive,
             activeRequestID: activeRequestID,
             phase: phase,
             message: message,
-            supportsBackgroundStart: supportsBackgroundStart
+            supportsBackgroundStart: supportsBackgroundStart,
+            inputLevel: runtimeInputLevel
         ))
+    }
+
+    private func publishKeyboardRuntimeLevel(_ level: Double, requestID: UUID) {
+        guard activeRequest?.id == requestID, isRecording else { return }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastKeyboardRuntimeLevelWriteAt) >= 0.08 else { return }
+        lastKeyboardRuntimeLevelWriteAt = now
+        saveKeyboardRuntimeStatus(
+            isActive: true,
+            activeRequestID: requestID,
+            phase: .recording,
+            message: "Listening",
+            supportsBackgroundStart: isKeyboardSessionArmed,
+            inputLevel: level
+        )
     }
 
     private func saveKeyboardHandoff(
@@ -2381,7 +2457,23 @@ final class DictationCoordinator {
     }
 
     private func cancelRecording(requestID: UUID) {
-        guard activeRequest?.id == requestID else { return }
+        guard activeRequest?.id == requestID else {
+            if let pendingRequest = try? store.pendingRequest(), pendingRequest.id == requestID {
+                try? store.clearPendingRequest()
+            }
+            if activeRequest == nil {
+                try? store.saveStatus(.idle)
+                saveKeyboardRuntimeStatus(
+                    isActive: isKeyboardSessionArmed,
+                    activeRequestID: nil,
+                    phase: .idle,
+                    message: isKeyboardSessionArmed ? "Keyboard session ready" : "Ready",
+                    supportsBackgroundStart: isKeyboardSessionArmed
+                )
+            }
+            saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
+            return
+        }
         isRecording = false
         stopMetering()
         stopRecordingTimer()
@@ -2418,6 +2510,19 @@ final class DictationCoordinator {
         try? store.saveStatus(.idle)
         saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
         clearKeyboardLiveTranscript()
+    }
+
+    private func isRecordingSessionCancelled(requestID: UUID) -> Bool {
+        if activeSession?.requestID == requestID, activeSession?.phase == .cancelled {
+            return true
+        }
+
+        do {
+            guard let session = try store.recordingSession(requestID: requestID) else { return false }
+            return session.phase == .cancelled
+        } catch {
+            return false
+        }
     }
 
     private func cleanupRealtimeDictationRecorder() {

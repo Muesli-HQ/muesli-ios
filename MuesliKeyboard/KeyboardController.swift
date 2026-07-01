@@ -18,6 +18,7 @@ final class KeyboardController {
     private var latestHandoffState: KeyboardHandoffState?
     private var latestRuntimeStatus: KeyboardRuntimeStatus?
     private var insertedRequestIDs = Set<UUID>()
+    private var cancelledRequestIDs = Set<UUID>()
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -25,7 +26,10 @@ final class KeyboardController {
     var launchURL: URL?
     var textInserter: (@MainActor (String) -> Void)?
     var textDeleter: (@MainActor (Int) -> Void)?
+    var inputModeSwitcher: (@MainActor () -> Void)?
+    var keyboardDismisser: (@MainActor () -> Void)?
     var liveTranscript = ""
+    var inputLevel = 0.0
     private var lastInsertedCharacterCount = 0
     private var canUseRuntimeStart = false
 
@@ -73,17 +77,6 @@ final class KeyboardController {
         }
     }
 
-    var primaryButtonColor: ColorToken {
-        return switch dictationPhase {
-        case .requested, .recording:
-            .recording
-        case .transcribing:
-            .transcribing
-        default:
-            .accent
-        }
-    }
-
     var stylesPrimaryButtonAsStop: Bool {
         primaryButtonRole == .stop
     }
@@ -121,6 +114,29 @@ final class KeyboardController {
 
     var canInsertLatest: Bool {
         hasLatestDictation && activeRequestID == nil
+    }
+
+    var showsActiveWaveform: Bool {
+        [.requested, .recording, .transcribing].contains(dictationPhase)
+    }
+
+    var waveformMode: MuesliFloatingWaveformMode {
+        dictationPhase == .recording ? .level : .waiting
+    }
+
+    var waveformLevel: Double? {
+        dictationPhase == .recording ? inputLevel : nil
+    }
+
+    var canCancelActiveDictation: Bool {
+        [.requested, .recording].contains(dictationPhase)
+    }
+
+    var settingsURL: URL? {
+        var components = URLComponents()
+        components.scheme = MuesliAppConstants.urlScheme
+        components.host = MuesliAppConstants.settingsHost
+        return components.url
     }
 
     var isRecoveryRequested: Bool {
@@ -171,14 +187,16 @@ final class KeyboardController {
         }
     }
 
-    func prepareLaunchRequestIfNeeded() {
+    func prepareLaunchRequestIfNeeded(clearsPendingCommand: Bool = true) {
         guard preparedRequest == nil, activeRequestID == nil else { return }
         let request = DictationRequest()
         preparedRequest = request
         launchURL = makeLaunchURL(for: request)
 
         do {
-            try store.clearPendingCommand()
+            if clearsPendingCommand, !hasPendingCancelCommand() {
+                try store.clearPendingCommand()
+            }
             try store.saveRequest(request)
         } catch {
             statusText = "Enable Full Access"
@@ -186,6 +204,10 @@ final class KeyboardController {
     }
 
     func startDictation() {
+        if hasPendingCancelCommand() {
+            try? store.clearPendingCommand()
+        }
+
         MuesliHaptics.dictationStart()
         let request = preparedRequest ?? DictationRequest()
         preparedRequest = nil
@@ -194,6 +216,7 @@ final class KeyboardController {
         activeRequestID = request.id
         liveTranscript = ""
         insertedRequestIDs.remove(request.id)
+        cancelledRequestIDs.remove(request.id)
         dictationPhase = .recording
         statusText = "Opening Muesli"
 
@@ -250,8 +273,20 @@ final class KeyboardController {
         insertText(" ")
     }
 
+    func insertTextKey(_ text: String) {
+        insertText(text)
+    }
+
     func insertReturn() {
         insertText("\n")
+    }
+
+    func switchInputMode() {
+        inputModeSwitcher?()
+    }
+
+    func dismissKeyboard() {
+        keyboardDismisser?()
     }
 
     func clearInsertedText() {
@@ -259,6 +294,54 @@ final class KeyboardController {
         textDeleter?(deleteCount)
         lastInsertedCharacterCount = 0
         statusText = deleteCount > 1 ? "Cleared" : "Deleted"
+    }
+
+    func deleteBackward() {
+        textDeleter?(1)
+        lastInsertedCharacterCount = 0
+        statusText = "Deleted"
+    }
+
+    func cancelActiveDictation() {
+        guard canCancelActiveDictation else {
+            statusText = dictationPhase == .transcribing ? "Transcribing" : statusText
+            return
+        }
+
+        guard let activeRequestID else {
+            dictationPhase = .idle
+            liveTranscript = ""
+            statusText = hasLatestDictation ? "Latest ready" : "Ready"
+            prepareLaunchRequestIfNeeded()
+            return
+        }
+
+        MuesliHaptics.dictationStop()
+        do {
+            try store.saveCommand(.init(requestID: activeRequestID, action: .cancel))
+            try store.saveKeyboardHandoffState(.init(
+                requestID: activeRequestID,
+                phase: .cancelled,
+                message: "Cancelled"
+            ))
+            try store.saveStatus(.idle)
+            try store.clearPendingRequest()
+            try store.clearKeyboardLiveTranscript()
+            cancelledRequestIDs.insert(activeRequestID)
+            self.activeRequestID = nil
+            recoveryRequestID = nil
+            liveTranscript = ""
+            dictationPhase = .idle
+            statusText = hasLatestDictation ? "Latest ready" : "Ready"
+            prepareLaunchRequestIfNeeded(clearsPendingCommand: false)
+        } catch {
+            statusText = "Enable Full Access"
+        }
+    }
+
+    private func hasPendingCancelCommand() -> Bool {
+        guard let command = try? store.pendingCommand(), command.action == .cancel else { return false }
+        return cancelledRequestIDs.contains(command.requestID)
     }
 
     func startPolling() {
@@ -334,6 +417,20 @@ final class KeyboardController {
     private func apply(handoffState: KeyboardHandoffState) {
         guard let requestID = handoffState.requestID else { return }
 
+        if cancelledRequestIDs.contains(requestID) {
+            if [.cancelled, .idle, .failed].contains(handoffState.phase),
+               activeRequestID == nil || activeRequestID == requestID
+            {
+                activeRequestID = nil
+                recoveryRequestID = nil
+                liveTranscript = ""
+                dictationPhase = .idle
+                inputLevel = 0
+                statusText = hasLatestDictation ? "Latest ready" : "Ready"
+            }
+            return
+        }
+
         let resumablePhases: [KeyboardHandoffPhase] = [
             .startRequested,
             .startAcknowledged,
@@ -362,6 +459,7 @@ final class KeyboardController {
             dictationPhase = .idle
             activeRequestID = nil
             liveTranscript = ""
+            inputLevel = 0
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         case .startRequested:
             dictationPhase = .requested
@@ -377,20 +475,25 @@ final class KeyboardController {
             statusText = handoffState.message ?? "Stopping"
         case .stopAcknowledged:
             dictationPhase = .transcribing
+            inputLevel = 0
             statusText = handoffState.message ?? "Finalizing audio"
         case .audioSaved:
             dictationPhase = .transcribing
+            inputLevel = 0
             statusText = handoffState.message ?? "Audio saved"
         case .transcribingStarted:
             dictationPhase = .transcribing
+            inputLevel = 0
             statusText = handoffState.message ?? "Transcribing"
         case .resultReady:
             dictationPhase = .transcribing
+            inputLevel = 0
             statusText = handoffState.message ?? "Inserting"
         case .inserted:
             dictationPhase = .finished
             activeRequestID = nil
             liveTranscript = ""
+            inputLevel = 0
             statusText = "Inserted"
         case .recoveryRequested:
             dictationPhase = .failed
@@ -402,24 +505,33 @@ final class KeyboardController {
             activeRequestID = nil
             recoveryRequestID = nil
             liveTranscript = ""
+            inputLevel = 0
             statusText = handoffState.message ?? "Voice note failed"
         case .cancelled:
             dictationPhase = .idle
             activeRequestID = nil
             recoveryRequestID = nil
             liveTranscript = ""
+            inputLevel = 0
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         }
     }
 
     private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
         let isRecent = runtimeStatus.map { Date().timeIntervalSince($0.updatedAt) < 8 } ?? false
+        inputLevel = isRecent ? (runtimeStatus?.inputLevel ?? 0) : 0
         canUseRuntimeStart = runtimeStatus?.isActive == true
             && isRecent
             && runtimeStatus?.supportsBackgroundStart == true
 
         guard activeRequestID == nil, canUseRuntimeStart else { return }
-        activeRequestID = runtimeStatus?.activeRequestID
+        guard let runtimeRequestID = runtimeStatus?.activeRequestID,
+              !cancelledRequestIDs.contains(runtimeRequestID)
+        else {
+            return
+        }
+
+        activeRequestID = runtimeRequestID
         if runtimeStatus?.phase == .idle {
             statusText = runtimeStatus?.message ?? "Session ready"
         }
@@ -436,6 +548,10 @@ final class KeyboardController {
         }
 
         if activeRequestID == nil, preparedRequest?.id == requestID, status.phase == .requested {
+            return
+        }
+
+        if cancelledRequestIDs.contains(requestID) {
             return
         }
 
@@ -578,6 +694,7 @@ final class KeyboardController {
 
     private func insertCompletedResult(_ result: DictationResult) {
         guard !insertedRequestIDs.contains(result.requestID) else { return }
+        guard !cancelledRequestIDs.contains(result.requestID) else { return }
         insertText(result.text)
         insertedRequestIDs.insert(result.requestID)
         latestResultID = result.id
@@ -628,12 +745,6 @@ final class KeyboardController {
         textInserter?(text)
         lastInsertedCharacterCount = text.count
     }
-}
-
-enum ColorToken {
-    case accent
-    case recording
-    case transcribing
 }
 
 enum KeyboardPrimaryButtonRole {

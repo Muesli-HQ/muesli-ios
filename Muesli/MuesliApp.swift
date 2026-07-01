@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct MuesliApp: App {
+    @UIApplicationDelegateAdaptor(MuesliAppDelegate.self) private var appDelegate
     @State private var coordinator = DictationCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 

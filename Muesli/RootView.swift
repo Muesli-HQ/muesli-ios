@@ -88,9 +88,7 @@ struct RootView: View {
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .frame(width: 44, height: 44)
-                            .background(.regularMaterial)
-                            .clipShape(Circle())
-                            .overlay(Circle().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
+                            .muesliGlassButton(cornerRadius: 22, tint: currentAccent)
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -209,8 +207,10 @@ private struct KeyboardHandoffOverlay: View {
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
-                    .background(MuesliTheme.backgroundRaised)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .muesliGlassSurface(
+                        cornerRadius: MuesliTheme.cornerMedium,
+                        tint: coordinator.isRecording ? MuesliTheme.recording : MuesliTheme.transcribing
+                    )
             }
             .padding(MuesliTheme.spacing24)
         }
@@ -321,33 +321,33 @@ private struct MuesliTabSwitcher: View {
     let pinnedSections: [AppSection]
 
     var body: some View {
-        HStack(spacing: MuesliTheme.spacing4) {
-            ForEach(pinnedSections, id: \.self) { section in
-                Button {
-                    selectedSection = section
-                } label: {
-                    Text(section.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                    .foregroundStyle(selectedSection == section ? accent : MuesliTheme.textSecondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(selectedSection == section ? MuesliTheme.surfaceSelected : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
-                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        MuesliGlassGroup(spacing: MuesliTheme.spacing8) {
+            HStack(spacing: MuesliTheme.spacing4) {
+                ForEach(pinnedSections, id: \.self) { section in
+                    Button {
+                        withAnimation(.snappy(duration: 0.18)) {
+                            selectedSection = section
+                        }
+                    } label: {
+                        Label(section.title, systemImage: section.icon)
+                            .labelStyle(.titleAndIcon)
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                            .foregroundStyle(selectedSection == section ? accent : MuesliTheme.textSecondary)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(selectedSection == section ? accent.opacity(0.13) : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("tab.\(section.rawValue)")
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("tab.\(section.rawValue)")
             }
+            .padding(MuesliTheme.spacing4)
+            .muesliGlassSurface(cornerRadius: MuesliTheme.cornerLarge, tint: accent, isInteractive: true)
         }
-        .padding(MuesliTheme.spacing4)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-        )
     }
 }
 
@@ -416,8 +416,7 @@ private struct MuesliDrawer: View {
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .frame(width: 34, height: 34)
-                        .background(MuesliTheme.surfacePrimary)
-                        .clipShape(Circle())
+                        .muesliGlassButton(cornerRadius: 17)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -483,9 +482,9 @@ private struct SidebarSectionRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 52)
                 .padding(.leading, MuesliTheme.spacing12)
-                .background(isSelected ? MuesliTheme.surfaceSelected : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .background(isSelected ? accent.opacity(0.12) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             }
             .buttonStyle(.plain)
 

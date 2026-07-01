@@ -89,7 +89,11 @@ struct MeetingsView: View {
     }
 
     private var recorderPanel: some View {
-        MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+        MuesliSurface(
+            cornerRadius: MuesliTheme.cornerLarge,
+            tint: statusColor,
+            isInteractive: true
+        ) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                 HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -113,8 +117,7 @@ struct MeetingsView: View {
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .frame(height: 44)
-                    .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium)
                     .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)
 
                 meetingTemplatePicker
@@ -137,8 +140,7 @@ struct MeetingsView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, MuesliTheme.spacing16)
-                    .background(statusColor.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: statusColor)
                 }
 
                 Button {
@@ -162,6 +164,7 @@ struct MeetingsView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(coordinator.isMeetingTranscribing)
+                .sensoryFeedback(.impact, trigger: coordinator.hasMeetingRecordingInProgress)
                 .accessibilityIdentifier("meetings.primaryButton")
             }
             .padding(MuesliTheme.spacing16)
@@ -206,9 +209,8 @@ struct MeetingsView: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
             .padding(MuesliTheme.spacing12)
-            .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
+            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)

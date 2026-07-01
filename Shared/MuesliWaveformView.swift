@@ -68,7 +68,10 @@ struct MuesliInlineWaveformView: View {
     var color: Color
     var level: Double? = nil
     var barCount: Int = 24
-    var spacing: CGFloat = 5
+    var spacing: CGFloat = 3
+
+    @State private var liveSamples: [CGFloat] = []
+    @State private var sampleSequence = 0
 
     private let basePattern: [CGFloat] = [
         0.18, 0.26, 0.42, 0.58, 0.76, 0.92,
@@ -82,22 +85,32 @@ struct MuesliInlineWaveformView: View {
             let elapsed = timeline.date.timeIntervalSinceReferenceDate
             waveformBars(elapsed: elapsed)
         }
+        .onAppear {
+            seedLiveSamplesIfNeeded()
+        }
+        .onChange(of: level ?? 0) { _, newValue in
+            appendLiveSample(newValue)
+        }
+        .onChange(of: mode) { _, _ in
+            seedLiveSamplesIfNeeded(force: true)
+        }
     }
 
     private func waveformBars(elapsed: TimeInterval) -> some View {
         GeometryReader { geometry in
-            let count = max(12, barCount)
+            let count = max(48, barCount * 2)
             let totalSpacing = spacing * CGFloat(count - 1)
-            let barWidth = max(3, min(8, (geometry.size.width - totalSpacing) / CGFloat(count)))
+            let barWidth = max(2, min(5, (geometry.size.width - totalSpacing) / CGFloat(count)))
+            let samples = samplesForRender(count: count, elapsed: elapsed)
             HStack(alignment: .center, spacing: spacing) {
                 ForEach(0..<count, id: \.self) { index in
+                    let sample = samples[index]
                     RoundedRectangle(cornerRadius: barWidth / 2, style: .continuous)
-                        .fill(color.opacity(mode == .waiting ? waitingOpacity(index: index, elapsed: elapsed) : 0.92))
+                        .fill(color.opacity(mode == .waiting ? waitingOpacity(index: index, elapsed: elapsed) : 0.94))
                         .frame(
                             width: barWidth,
                             height: barHeight(
-                                index: index,
-                                elapsed: elapsed,
+                                sample: sample,
                                 maxHeight: geometry.size.height
                             )
                         )
@@ -107,30 +120,71 @@ struct MuesliInlineWaveformView: View {
         }
     }
 
-    private func barHeight(
-        index: Int,
-        elapsed: TimeInterval,
-        maxHeight: CGFloat
-    ) -> CGFloat {
+    private func barHeight(sample: CGFloat, maxHeight: CGFloat) -> CGFloat {
         let minHeight: CGFloat = 4
         let maxBarHeight = max(minHeight, maxHeight)
-        let base = basePattern[index % basePattern.count]
-        let amplitude: CGFloat
+        return min(maxBarHeight, max(minHeight, minHeight + (maxBarHeight - minHeight) * sample))
+    }
 
+    private func samplesForRender(count: Int, elapsed: TimeInterval) -> [CGFloat] {
         switch mode {
         case .level:
-            let normalized = CGFloat(min(max(level ?? 0.28, 0), 1))
-            amplitude = max(0.12, base * (0.24 + normalized * 0.88))
+            let samples = paddedLiveSamples(count: count)
+            return samples
         case .waiting:
-            let phase = CGFloat(elapsed) * 5.8 + CGFloat(index) * 0.72
-            amplitude = 0.18 + (sin(phase) + 1) * 0.18 + base * 0.48
+            return waitingSamples(count: count, elapsed: elapsed)
+        }
+    }
+
+    private func paddedLiveSamples(count: Int) -> [CGFloat] {
+        guard !liveSamples.isEmpty else {
+            return Array(repeating: 0.08, count: count)
         }
 
-        return min(maxBarHeight, max(minHeight, minHeight + (maxBarHeight - minHeight) * amplitude))
+        let suffix = liveSamples.suffix(count)
+        if suffix.count == count {
+            return Array(suffix)
+        }
+
+        return Array(repeating: 0.08, count: count - suffix.count) + suffix
+    }
+
+    private func waitingSamples(count: Int, elapsed: TimeInterval) -> [CGFloat] {
+        (0..<count).map { index in
+            let base = basePattern[index % basePattern.count]
+            let phase = CGFloat(elapsed) * 5.8 + CGFloat(index) * 0.72
+            return min(0.86, 0.12 + (sin(phase) + 1) * 0.13 + base * 0.34)
+        }
     }
 
     private func waitingOpacity(index: Int, elapsed: TimeInterval) -> Double {
         let phase = CGFloat(elapsed) * 5.8 + CGFloat(index) * 0.72
         return Double(0.48 + (sin(phase) + 1) * 0.16)
+    }
+
+    private func seedLiveSamplesIfNeeded(force: Bool = false) {
+        guard force || liveSamples.isEmpty else { return }
+
+        let count = max(48, barCount * 2)
+        liveSamples = (0..<count).map { index in
+            let base = basePattern[index % basePattern.count]
+            return 0.07 + base * 0.08
+        }
+    }
+
+    private func appendLiveSample(_ rawLevel: Double) {
+        guard mode == .level else { return }
+
+        let normalized = CGFloat(min(max(rawLevel, 0), 1))
+        let shaped = pow(normalized, 0.72)
+        let texture = CGFloat(0.90 + 0.16 * sin(Double(sampleSequence) * 1.73))
+        let sample = min(0.98, max(0.06, (0.07 + shaped * 0.88) * texture))
+        let maxSamples = max(48, barCount * 2) * 3
+
+        sampleSequence += 1
+        liveSamples.append(sample)
+        if liveSamples.count > maxSamples {
+            liveSamples.removeFirst(liveSamples.count - maxSamples)
+        }
     }
 }

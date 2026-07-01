@@ -38,11 +38,10 @@ struct KeyboardRootView: View {
                 }
             }
             .padding(MuesliTheme.spacing12)
-            .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
-            .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
-                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            .muesliGlassSurface(
+                cornerRadius: MuesliTheme.cornerLarge,
+                tint: buttonColor,
+                isInteractive: true
             )
 
             HStack(spacing: MuesliTheme.spacing8) {
@@ -171,8 +170,7 @@ private struct KeyboardLiveTranscriptPreview: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(MuesliTheme.spacing12)
-        .background(MuesliTheme.surfacePrimary)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
     }
 }
 
@@ -210,12 +208,7 @@ private struct KeyboardKey: View {
                 .frame(height: 44)
         }
         .buttonStyle(.plain)
-        .background(MuesliTheme.surfacePrimary)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-        )
+        .muesliGlassButton(cornerRadius: MuesliTheme.cornerMedium)
     }
 
     @ViewBuilder

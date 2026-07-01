@@ -90,11 +90,12 @@ struct ModelsView: View {
                         .font(MuesliTheme.headline())
                         .frame(maxWidth: .infinity)
                         .frame(height: 48)
+                        .foregroundStyle(modelButtonDisabled ? MuesliTheme.textTertiary : .white)
+                        .background(modelButtonDisabled ? MuesliTheme.surfacePrimary : MuesliTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(modelButtonDisabled ? MuesliTheme.textTertiary : .white)
-                .background(modelButtonDisabled ? MuesliTheme.surfacePrimary : MuesliTheme.accent)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 .disabled(modelButtonDisabled)
             }
             .padding(MuesliTheme.spacing16)

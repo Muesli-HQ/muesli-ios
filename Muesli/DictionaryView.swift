@@ -97,15 +97,16 @@ struct DictionarySettingsContent: View {
                             .font(MuesliTheme.headline())
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
+                            .foregroundStyle(.white)
+                            .background(
+                                newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? MuesliTheme.surfacePrimary
+                                    : MuesliTheme.accent
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .background(
-                        newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? MuesliTheme.surfacePrimary
-                            : MuesliTheme.accent
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     .disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
@@ -242,11 +243,12 @@ private struct CustomWordRow: View {
                 Image(systemName: "trash")
                     .font(.system(size: 15, weight: .semibold))
                     .frame(width: 36, height: 36)
+                    .foregroundStyle(MuesliTheme.recording)
+                    .background(MuesliTheme.recording.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(MuesliTheme.recording)
-            .background(MuesliTheme.recording.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .accessibilityLabel("Delete dictionary entry")
         }
         .padding(MuesliTheme.spacing12)

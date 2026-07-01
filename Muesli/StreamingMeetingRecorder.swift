@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 
 struct MeetingAudioChunk: Sendable, Equatable {
     let index: Int
@@ -35,62 +36,62 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
     private static let sampleRate: Double = 16_000
     private static let bufferSize: AVAudioFrameCount = 4_096
 
-    func start(chunksDirectory: URL, retainedAudioURL: URL?) throws {
+    func start(
+        chunksDirectory: URL,
+        retainedAudioURL: URL?,
+        routeStage: String = "streaming recorder"
+    ) throws {
         guard !isRunning else { return }
         self.chunksDirectory = chunksDirectory
         try FileManager.default.createDirectory(at: chunksDirectory, withIntermediateDirectories: true)
 
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.mixWithOthers])
-            try session.setActive(true)
-        } catch {
-            throw AudioRecorder.RecordingError.audioSessionFailed(stage: "streaming meeting", underlying: error)
-        }
-
-        guard let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: Self.sampleRate,
-            channels: 1,
-            interleaved: false
-        ) else {
-            throw AudioRecorder.RecordingError.startFailed(stage: "streaming format")
-        }
-
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        converter = inputFormat.sampleRate != targetFormat.sampleRate || inputFormat.channelCount != targetFormat.channelCount
-            ? AVAudioConverter(from: inputFormat, to: targetFormat)
-            : nil
-
-        let firstChunkURL = chunkURL(directory: chunksDirectory, index: 0)
-        let firstChunkFile = try AVAudioFile(forWriting: firstChunkURL, settings: targetFormat.settings)
-        let retainedFile = try retainedAudioURL.map { url in
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            return try AVAudioFile(forWriting: url, settings: targetFormat.settings)
-        }
-
-        lock.lock()
-        state = FileState(
-            chunkFile: firstChunkFile,
-            chunkURL: firstChunkURL,
-            retainedFile: retainedFile,
-            retainedURL: retainedAudioURL
-        )
-        lock.unlock()
-
-        inputNode.installTap(onBus: 0, bufferSize: Self.bufferSize, format: nil) { [weak self] buffer, _ in
-            self?.handle(buffer: buffer, targetFormat: targetFormat)
-        }
-        tapInstalled = true
-        engine.prepare()
+        _ = try AudioInputRouteManager.configureForRecording(stage: routeStage)
 
         do {
+            guard let targetFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: Self.sampleRate,
+                channels: 1,
+                interleaved: false
+            ) else {
+                throw AudioRecorder.RecordingError.startFailed(stage: "streaming format")
+            }
+
+            let inputNode = engine.inputNode
+            let inputFormat = inputNode.outputFormat(forBus: 0)
+            converter = inputFormat.sampleRate != targetFormat.sampleRate || inputFormat.channelCount != targetFormat.channelCount
+                ? AVAudioConverter(from: inputFormat, to: targetFormat)
+                : nil
+
+            let firstChunkURL = chunkURL(directory: chunksDirectory, index: 0)
+            let firstChunkFile = try AVAudioFile(forWriting: firstChunkURL, settings: targetFormat.settings)
+            let retainedFile = try retainedAudioURL.map { url in
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                return try AVAudioFile(forWriting: url, settings: targetFormat.settings)
+            }
+
+            lock.lock()
+            state = FileState(
+                chunkFile: firstChunkFile,
+                chunkURL: firstChunkURL,
+                retainedFile: retainedFile,
+                retainedURL: retainedAudioURL
+            )
+            lock.unlock()
+
+            inputNode.installTap(onBus: 0, bufferSize: Self.bufferSize, format: nil) { [weak self] buffer, _ in
+                self?.handle(buffer: buffer, targetFormat: targetFormat)
+            }
+            tapInstalled = true
+            engine.prepare()
             try engine.start()
             isRunning = true
         } catch {
             cleanupAfterFailedStart()
-            throw AudioRecorder.RecordingError.startFailed(stage: "streaming meeting")
+            if error is AudioRecorder.RecordingError {
+                throw error
+            }
+            throw AudioRecorder.RecordingError.startFailed(stage: routeStage)
         }
     }
 
@@ -213,14 +214,18 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
             let ratio = targetFormat.sampleRate / buffer.format.sampleRate
             let frameCapacity = max(1, AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1)
             guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: frameCapacity) else { return }
-            var didProvideInput = false
+            let didProvideInput = OSAllocatedUnfairLock(initialState: false)
             var error: NSError?
             converter.convert(to: converted, error: &error) { _, outStatus in
-                guard !didProvideInput else {
+                let shouldProvideInput = didProvideInput.withLock { hasProvidedInput in
+                    guard !hasProvidedInput else { return false }
+                    hasProvidedInput = true
+                    return true
+                }
+                guard shouldProvideInput else {
                     outStatus.pointee = .noDataNow
                     return nil
                 }
-                didProvideInput = true
                 outStatus.pointee = .haveData
                 return buffer
             }
@@ -293,6 +298,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         state = FileState()
         lock.unlock()
         isRunning = false
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     private func chunkURL(directory: URL, index: Int) -> URL {

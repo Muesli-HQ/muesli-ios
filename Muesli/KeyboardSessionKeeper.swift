@@ -17,13 +17,7 @@ final class KeyboardSessionKeeper {
             throw AudioRecorder.RecordingError.microphonePermissionDenied
         }
 
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.mixWithOthers])
-            try session.setActive(true)
-        } catch {
-            throw AudioRecorder.RecordingError.audioSessionFailed(stage: "keyboard session", underlying: error)
-        }
+        _ = try AudioInputRouteManager.configureForKeyboardKeepAlive(stage: "keyboard session")
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
@@ -35,7 +29,7 @@ final class KeyboardSessionKeeper {
             try engine.start()
         } catch {
             inputNode.removeTap(onBus: 0)
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             throw AudioRecorder.RecordingError.startFailed(stage: "keyboard session")
         }
 

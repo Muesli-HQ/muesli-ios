@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
     @AppStorage(MuesliPreferences.keyboardSessionTimeoutMinutesKey) private var keyboardSessionTimeoutMinutes = 10
+    @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @AppStorage(MuesliPreferences.keepDictationAudioRecordingsKey) private var keepDictationAudioRecordings = false
     @AppStorage(MuesliPreferences.keepMeetingAudioRecordingsKey) private var keepMeetingAudioRecordings = false
     @AppStorage(MuesliPreferences.meetingSummariesEnabledKey) private var meetingSummariesEnabled = false
@@ -67,6 +68,10 @@ struct SettingsView: View {
             }
             .onChange(of: keyboardSessionTimeoutMinutes) { _, _ in
                 coordinator.refreshKeyboardSessionTimeout()
+            }
+            .onChange(of: microphonePreference) { _, newValue in
+                coordinator.refreshAudioInputRoute()
+                AppTelemetry.signal("recording_microphone_preference_changed", parameters: ["preference": newValue])
             }
             .onChange(of: openRouterAPIKey) { _, newValue in
                 saveOpenRouterAPIKey(newValue)
@@ -275,6 +280,8 @@ struct SettingsView: View {
                         title: "Session",
                         value: coordinator.keyboardSessionStatusText
                     )
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsMicrophonePicker(selection: $microphonePreference)
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     Stepper(value: $keyboardSessionTimeoutMinutes, in: 1...30, step: 1) {
                         SettingsRow(
@@ -875,6 +882,50 @@ private struct SettingsToggleRow: View {
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .tint(MuesliTheme.accent)
+        }
+    }
+}
+
+private struct SettingsMicrophonePicker: View {
+    @Binding var selection: String
+
+    private var availableOptions: [RecordingMicrophonePreference] {
+        let options = AudioInputRouteManager.availablePreferenceOptions()
+        guard !options.contains(preference) else { return options }
+        return options + [preference]
+    }
+
+    private var preference: RecordingMicrophonePreference {
+        RecordingMicrophonePreference(rawValue: selection) ?? .automatic
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+            Image(systemName: "mic")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(MuesliTheme.accent)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                Text("Microphone")
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(preference.detail)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: MuesliTheme.spacing12)
+
+            Picker("Microphone", selection: $selection) {
+                ForEach(availableOptions) { option in
+                    Text(option.label).tag(option.rawValue)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .tint(MuesliTheme.accent)
         }
     }
 }

@@ -40,6 +40,7 @@ final class DictationCoordinator {
     private var meetingChunksDirectory: URL?
     private let meetingVadQueue = DispatchQueue(label: "com.phequals7.muesli.meeting-vad")
     private var transcriptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    nonisolated(unsafe) private var audioRouteObserver: NSObjectProtocol?
 
     private var activeRequest: DictationRequest?
     private var activeSession: RecordingSession?
@@ -96,6 +97,7 @@ final class DictationCoordinator {
     var inputLevel = 0.0
     var recordingElapsedTime: TimeInterval = 0
     var statusText = "Ready"
+    var audioInputRouteText = AudioInputRouteManager.currentSnapshot().displayText
     var meetingStatusText = "Ready"
     var lastTranscript = ""
     var liveDictationTranscript = ""
@@ -135,6 +137,17 @@ final class DictationCoordinator {
         }
         #endif
 
+        audioRouteObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAudioInputRoute()
+            }
+        }
+
+        refreshAudioInputRoute()
         refreshHistory()
         Task {
             await liveActivityController.endAllActivities(
@@ -147,6 +160,16 @@ final class DictationCoordinator {
                 await startKeyboardSessionMode()
             }
         }
+    }
+
+    deinit {
+        if let audioRouteObserver {
+            NotificationCenter.default.removeObserver(audioRouteObserver)
+        }
+    }
+
+    func refreshAudioInputRoute() {
+        audioInputRouteText = AudioInputRouteManager.currentSnapshot().displayText
     }
 
     func handleOpenURL(_ url: URL) {
@@ -1110,7 +1133,11 @@ final class DictationCoordinator {
             }
         }
 
-        try streamingRecorder.start(chunksDirectory: chunksDirectory, retainedAudioURL: audioURL)
+        try streamingRecorder.start(
+            chunksDirectory: chunksDirectory,
+            retainedAudioURL: audioURL,
+            routeStage: "realtime dictation"
+        )
         realtimeDictationRecorder = streamingRecorder
         realtimeDictationBufferPipe = pipe
         realtimeDictationChunksDirectory = chunksDirectory
@@ -1200,6 +1227,7 @@ final class DictationCoordinator {
                 } else {
                     try recorder.start(outputURL: audioURL)
                 }
+                refreshAudioInputRoute()
                 activeSession = session
                 isRecording = true
                 startRecordingTimer(startedAt: session.startedAt ?? .now)
@@ -1652,7 +1680,12 @@ final class DictationCoordinator {
                     }
                 }
 
-                try streamingRecorder.start(chunksDirectory: chunksDirectory, retainedAudioURL: audioURL)
+                try streamingRecorder.start(
+                    chunksDirectory: chunksDirectory,
+                    retainedAudioURL: audioURL,
+                    routeStage: "meeting recording"
+                )
+                refreshAudioInputRoute()
                 vadController.start()
 
                 meetingRecorder = streamingRecorder

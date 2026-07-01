@@ -103,6 +103,10 @@ enum AudioInputRouteManager {
         return options
     }
 
+    static func normalizedPreference(_ preference: RecordingMicrophonePreference) -> RecordingMicrophonePreference {
+        availablePreferenceOptions().contains(preference) ? preference : .automatic
+    }
+
     private static func preferredInput(
         for preference: RecordingMicrophonePreference,
         in inputs: [AVAudioSessionPortDescription]

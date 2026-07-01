@@ -73,9 +73,14 @@ enum MuesliPreferences {
     }
 
     static var recordingMicrophonePreference: RecordingMicrophonePreference {
-        RecordingMicrophonePreference(
+        let storedPreference = RecordingMicrophonePreference(
             rawValue: UserDefaults.standard.string(forKey: recordingMicrophonePreferenceKey) ?? ""
         ) ?? .automatic
+        let normalizedPreference = AudioInputRouteManager.normalizedPreference(storedPreference)
+        if normalizedPreference != storedPreference {
+            UserDefaults.standard.set(normalizedPreference.rawValue, forKey: recordingMicrophonePreferenceKey)
+        }
+        return normalizedPreference
     }
 
     static var meetingSummariesEnabled: Bool {

@@ -889,8 +889,31 @@ private struct SettingsToggleRow: View {
 private struct SettingsMicrophonePicker: View {
     @Binding var selection: String
 
+    private var availableOptions: [RecordingMicrophonePreference] {
+        AudioInputRouteManager.availablePreferenceOptions()
+    }
+
+    private var normalizedSelection: Binding<String> {
+        Binding(
+            get: {
+                let selectedPreference = RecordingMicrophonePreference(rawValue: selection) ?? .automatic
+                let normalizedPreference = AudioInputRouteManager.normalizedPreference(selectedPreference)
+                return normalizedPreference.rawValue
+            },
+            set: { selection = $0 }
+        )
+    }
+
     private var preference: RecordingMicrophonePreference {
-        RecordingMicrophonePreference(rawValue: selection) ?? .automatic
+        RecordingMicrophonePreference(rawValue: normalizedSelection.wrappedValue) ?? .automatic
+    }
+
+    private func normalizeStoredSelection() {
+        let selectedPreference = RecordingMicrophonePreference(rawValue: selection) ?? .automatic
+        let normalizedPreference = AudioInputRouteManager.normalizedPreference(selectedPreference)
+        if normalizedPreference.rawValue != selection {
+            selection = normalizedPreference.rawValue
+        }
     }
 
     var body: some View {
@@ -912,14 +935,18 @@ private struct SettingsMicrophonePicker: View {
 
             Spacer(minLength: MuesliTheme.spacing12)
 
-            Picker("Microphone", selection: $selection) {
-                ForEach(AudioInputRouteManager.availablePreferenceOptions()) { option in
+            Picker("Microphone", selection: normalizedSelection) {
+                ForEach(availableOptions) { option in
                     Text(option.label).tag(option.rawValue)
                 }
             }
             .labelsHidden()
             .pickerStyle(.menu)
             .tint(MuesliTheme.accent)
+        }
+        .onAppear(perform: normalizeStoredSelection)
+        .onChange(of: selection) { _, _ in
+            normalizeStoredSelection()
         }
     }
 }

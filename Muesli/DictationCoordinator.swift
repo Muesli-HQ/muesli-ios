@@ -434,6 +434,13 @@ final class DictationCoordinator {
         }
     }
 
+    func cancelActiveRecording() {
+        guard let request = activeRequest else { return }
+        MuesliHaptics.dictationStop()
+        cancelRecording(requestID: request.id)
+        AppTelemetry.signal("dictation_cancelled", parameters: ["source": isKeyboardHandoffActive ? "keyboard" : "app"])
+    }
+
     func refreshHistory() {
         do {
             dictationHistory = try store.resultsHistory()
@@ -2164,6 +2171,13 @@ final class DictationCoordinator {
         session.audioFileName = nil
     }
 
+    private func discardAudio(for session: inout RecordingSession) {
+        guard let audioFileName = session.audioFileName else { return }
+        try? store.deleteAudioFile(fileName: audioFileName)
+        session.audioFileName = nil
+        session.keepsAudioRecording = false
+    }
+
     private func exportRetainedAudioIfNeeded(for session: RecordingSession) {
         guard session.keepsAudioRecording,
               let audioFileName = session.audioFileName
@@ -2487,8 +2501,11 @@ final class DictationCoordinator {
         if var session = activeSession {
             session.phase = .cancelled
             session.endedAt = .now
-            cleanupNonRetainedAudio(for: &session)
+            discardAudio(for: &session)
             try? store.saveSession(session)
+            if let index = recordingSessions.firstIndex(where: { $0.id == session.id }) {
+                recordingSessions[index] = session
+            }
             Task {
                 await liveActivityController.end(
                     phase: "Cancelled",

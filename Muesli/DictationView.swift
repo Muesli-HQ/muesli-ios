@@ -189,9 +189,10 @@ struct DictationView: View {
 
     private func currentActivityStreak(history: [DictationResult], sessions: [RecordingSession]) -> Int {
         let calendar = Calendar.current
+        let countedSessions = sessions.filter { $0.phase != .cancelled && $0.phase != .failed }
         let activeDays = Set(
             history.map { calendar.startOfDay(for: $0.createdAt) }
-                + sessions.map { calendar.startOfDay(for: $0.createdAt) }
+                + countedSessions.map { calendar.startOfDay(for: $0.createdAt) }
         )
 
         guard !activeDays.isEmpty else { return 0 }
@@ -304,24 +305,43 @@ struct DictationView: View {
                     .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
                 }
 
-                Button {
-                    coordinator.toggleRecording()
-                } label: {
-                    VoiceNoteRecordButtonLabel(
-                        title: dictationButtonTitle,
-                        systemImage: dictationButtonIcon,
-                        color: statusColor,
-                        isStopState: coordinator.isRecording,
-                        isDisabled: isDictationButtonDisabled
-                    )
+                VStack(spacing: MuesliTheme.spacing8) {
+                    Button {
+                        coordinator.toggleRecording()
+                    } label: {
+                        VoiceNoteRecordButtonLabel(
+                            title: dictationButtonTitle,
+                            systemImage: dictationButtonIcon,
+                            color: statusColor,
+                            isStopState: coordinator.isRecording,
+                            isDisabled: isDictationButtonDisabled
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isDictationButtonDisabled)
+                    .sensoryFeedback(.impact, trigger: coordinator.isRecording)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(dictationButtonTitle)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityIdentifier("dictation.primaryButton")
+
+                    if coordinator.isRecording {
+                        Button(role: .destructive) {
+                            coordinator.cancelActiveRecording()
+                        } label: {
+                            Label("Cancel Recording", systemImage: "xmark")
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(MuesliTheme.destructive)
+                                .frame(maxWidth: .infinity)
+                                .frame(minHeight: 44)
+                                .background(MuesliTheme.destructiveSubtle)
+                                .clipShape(Capsule())
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("dictation.cancelButton")
+                    }
                 }
-                .buttonStyle(.plain)
-                .disabled(isDictationButtonDisabled)
-                .sensoryFeedback(.impact, trigger: coordinator.isRecording)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(dictationButtonTitle)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("dictation.primaryButton")
                 .padding(.top, isWaveformActive || shouldShowRealtimeTranscript ? 0 : MuesliTheme.spacing4)
 
                 if shouldShowKeyboardSetupRow && !shouldHideKeyboardSetupRowForMockPreview {

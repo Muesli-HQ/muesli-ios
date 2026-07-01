@@ -537,6 +537,30 @@ final class DictationCoordinator {
         }
     }
 
+    func updateMeetingTitle(sessionID: UUID, title: String) {
+        do {
+            guard var session = try store.recordingSession(id: sessionID),
+                  session.kind == .meeting
+            else { return }
+
+            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            session.title = trimmedTitle.isEmpty ? session.kind.title : trimmedTitle
+            try store.saveSession(session)
+            if let index = recordingSessions.firstIndex(where: { $0.id == session.id }) {
+                recordingSessions[index] = session
+            } else {
+                refreshHistory()
+            }
+            clipboardStatusText = "Title updated"
+            clearClipboardStatusSoon()
+            scheduleICloudSyncAfterLocalChange(reason: "meeting_title_updated")
+            AppTelemetry.signal("meeting_title_updated")
+        } catch {
+            clipboardStatusText = "Title update failed"
+            clearClipboardStatusSoon()
+        }
+    }
+
     func copyTranscript(_ transcript: Transcript) {
         UIPasteboard.general.string = transcript.text
         clipboardStatusText = "Copied"
@@ -1761,6 +1785,40 @@ final class DictationCoordinator {
         transcribeSession(session)
     }
 
+    func cancelCurrentMeetingRecording() {
+        guard isMeetingRecording || meetingRecorder != nil || persistedRecordingMeetingSession != nil else { return }
+        guard let session = activeSession ?? persistedRecordingMeetingSession, session.kind == .meeting else { return }
+
+        MuesliHaptics.dictationStop()
+        isMeetingRecording = false
+        isMeetingTranscribing = false
+        stopMetering()
+        meetingStatusText = "Ready"
+
+        meetingVadController?.stop()
+        meetingRecorder?.cancel()
+        meetingRecorder = nil
+        meetingVadController = nil
+        activeSession = nil
+        cleanupMeetingChunks(cancelTasks: true)
+
+        if let audioFileName = session.audioFileName {
+            try? store.deleteAudioFile(fileName: audioFileName)
+        }
+        try? store.deleteTranscript(for: session.id)
+        try? store.deleteRecordingSession(id: session.id)
+        recordingSessions.removeAll { $0.id == session.id }
+        refreshHistory()
+        Task {
+            await liveActivityController.end(
+                phase: "Discarded",
+                detail: "Meeting recording discarded",
+                session: session
+            )
+        }
+        AppTelemetry.signal("meeting_recording_discarded")
+    }
+
     func stopMeetingRecording(queueForTranscription _: Bool = false) {
         guard isMeetingRecording || meetingRecorder != nil else { return }
         guard var session = activeSession ?? persistedRecordingMeetingSession, session.kind == .meeting else { return }
@@ -1843,6 +1901,10 @@ final class DictationCoordinator {
         let merged = MeetingChunkTranscriptMerger.merge(meetingChunkTranscriptions)
         let text = postProcessTranscript(merged.text)
         guard !text.isEmpty else { return }
+        guard var session = try? store.recordingSession(id: sessionID),
+              session.kind == .meeting,
+              session.phase != .cancelled
+        else { return }
 
         let transcript = Transcript(
             sessionID: sessionID,
@@ -1854,11 +1916,9 @@ final class DictationCoordinator {
             summaryState: MuesliPreferences.meetingSummariesEnabled ? .processing : .notStarted
         )
         try? store.saveTranscript(transcript)
-        if var session = try? store.recordingSession(id: sessionID) {
-            session.transcriptID = transcript.id
-            session.engineIdentifier = engine.identifier
-            try? store.saveSession(session)
-        }
+        session.transcriptID = transcript.id
+        session.engineIdentifier = engine.identifier
+        try? store.saveSession(session)
         refreshHistory()
     }
 
@@ -2119,7 +2179,10 @@ final class DictationCoordinator {
         return directory
     }
 
-    private func cleanupMeetingChunks() {
+    private func cleanupMeetingChunks(cancelTasks: Bool = false) {
+        if cancelTasks {
+            meetingChunkTasks.forEach { $0.cancel() }
+        }
         if let meetingChunksDirectory {
             try? FileManager.default.removeItem(at: meetingChunksDirectory)
         }

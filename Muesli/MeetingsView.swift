@@ -48,6 +48,9 @@ struct MeetingsView: View {
                         },
                         onDelete: {
                             coordinator.deleteMeeting(session)
+                        },
+                        onRename: { title in
+                            coordinator.updateMeetingTitle(sessionID: session.id, title: title)
                         }
                     )
                 } else {
@@ -143,30 +146,49 @@ struct MeetingsView: View {
                     .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: statusColor)
                 }
 
-                Button {
-                    if coordinator.hasMeetingRecordingInProgress {
-                        coordinator.stopCurrentMeetingRecording()
-                    } else {
-                        coordinator.startMeetingRecording(title: meetingTitle)
+                VStack(spacing: MuesliTheme.spacing8) {
+                    Button {
+                        if coordinator.hasMeetingRecordingInProgress {
+                            coordinator.stopCurrentMeetingRecording()
+                        } else {
+                            coordinator.startMeetingRecording(title: meetingTitle)
+                        }
+                    } label: {
+                        Label(
+                            coordinator.hasMeetingRecordingInProgress ? "Stop Meeting" : "Start Meeting",
+                            systemImage: coordinator.hasMeetingRecordingInProgress ? "stop.fill" : "mic.fill"
+                        )
+                        .font(MuesliTheme.headline())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .foregroundStyle(meetingPrimaryButtonTextColor)
+                        .background(meetingPrimaryButtonBackground)
+                        .overlay(meetingPrimaryButtonBorder)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     }
-                } label: {
-                    Label(
-                        coordinator.hasMeetingRecordingInProgress ? "Stop Meeting" : "Start Meeting",
-                        systemImage: coordinator.hasMeetingRecordingInProgress ? "stop.fill" : "mic.fill"
-                    )
-                    .font(MuesliTheme.headline())
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                    .foregroundStyle(meetingPrimaryButtonTextColor)
-                    .background(meetingPrimaryButtonBackground)
-                    .overlay(meetingPrimaryButtonBorder)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .buttonStyle(.plain)
+                    .disabled(coordinator.isMeetingTranscribing)
+                    .sensoryFeedback(.impact, trigger: coordinator.hasMeetingRecordingInProgress)
+                    .accessibilityIdentifier("meetings.primaryButton")
+
+                    if coordinator.hasMeetingRecordingInProgress {
+                        Button(role: .destructive) {
+                            coordinator.cancelCurrentMeetingRecording()
+                        } label: {
+                            Label("Discard Meeting", systemImage: "xmark")
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(MuesliTheme.destructive)
+                                .frame(maxWidth: .infinity)
+                                .frame(minHeight: 44)
+                                .background(MuesliTheme.destructiveSubtle)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("meetings.discardButton")
+                    }
                 }
-                .buttonStyle(.plain)
-                .disabled(coordinator.isMeetingTranscribing)
-                .sensoryFeedback(.impact, trigger: coordinator.hasMeetingRecordingInProgress)
-                .accessibilityIdentifier("meetings.primaryButton")
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -424,10 +446,14 @@ private struct MeetingSessionDetailView: View {
     let onTranscribe: () -> Void
     let onCopy: (String, MeetingContentTab) -> Void
     let onDelete: () -> Void
+    let onRename: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selectedContent: MeetingContentTab = .notes
     @State private var sharePayload: MeetingSharePayload?
     @State private var isConfirmingDelete = false
+    @State private var editedTitle: String?
+    @State private var titleDraft = ""
+    @State private var isEditingTitle = false
 
     var body: some View {
         ScrollView {
@@ -446,6 +472,17 @@ private struct MeetingSessionDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sharePayload) { payload in
             MeetingShareSheet(items: payload.items)
+        }
+        .alert("Edit Meeting Title", isPresented: $isEditingTitle) {
+            TextField("Meeting title", text: $titleDraft)
+            Button("Save") {
+                let title = resolvedTitle(titleDraft)
+                editedTitle = title
+                onRename(title)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This updates the saved meeting title without changing the transcript or notes.")
         }
         .confirmationDialog(
             "Delete this meeting?",
@@ -472,10 +509,27 @@ private struct MeetingSessionDetailView: View {
                         .frame(width: 28)
 
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text(session.title ?? session.kind.title)
-                            .font(MuesliTheme.title3())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(alignment: .firstTextBaseline, spacing: MuesliTheme.spacing8) {
+                            Text(displayTitle)
+                                .font(MuesliTheme.title3())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Button {
+                                titleDraft = displayTitle
+                                isEditingTitle = true
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(MuesliTheme.accent)
+                                    .frame(width: 32, height: 32)
+                                    .background(MuesliTheme.accentSubtle)
+                                    .clipShape(Circle())
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Edit meeting title")
+                        }
                         Text(session.createdAt, formatter: MeetingSessionRow.dateFormatter)
                             .font(MuesliTheme.captionMedium())
                             .foregroundStyle(MuesliTheme.textSecondary)
@@ -676,9 +730,23 @@ private struct MeetingSessionDetailView: View {
 
     private func share(_ kind: MeetingShareKind, transcript: Transcript) {
         sharePayload = MeetingSharePayload(
-            items: [MeetingExportFormatter.text(for: kind, session: session, transcript: transcript)]
+            items: [MeetingExportFormatter.text(
+                for: kind,
+                session: session,
+                transcript: transcript,
+                titleOverride: displayTitle
+            )]
         )
         AppTelemetry.signal("meeting_\(kind.telemetryName)_shared")
+    }
+
+    private var displayTitle: String {
+        resolvedTitle(editedTitle ?? session.title ?? session.kind.title)
+    }
+
+    private func resolvedTitle(_ title: String) -> String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTitle.isEmpty ? session.kind.title : trimmedTitle
     }
 }
 
@@ -793,20 +861,25 @@ private struct MeetingShareSheet: UIViewControllerRepresentable {
 }
 
 private enum MeetingExportFormatter {
-    static func text(for kind: MeetingShareKind, session: RecordingSession, transcript: Transcript) -> String {
+    static func text(
+        for kind: MeetingShareKind,
+        session: RecordingSession,
+        transcript: Transcript,
+        titleOverride: String? = nil
+    ) -> String {
         switch kind {
         case .notes:
-            notes(session: session, transcript: transcript)
+            notes(session: session, transcript: transcript, titleOverride: titleOverride)
         case .transcript:
-            transcriptText(session: session, transcript: transcript)
+            transcriptText(session: session, transcript: transcript, titleOverride: titleOverride)
         case .full:
-            fullMeeting(session: session, transcript: transcript)
+            fullMeeting(session: session, transcript: transcript, titleOverride: titleOverride)
         }
     }
 
-    private static func notes(session: RecordingSession, transcript: Transcript) -> String {
+    private static func notes(session: RecordingSession, transcript: Transcript, titleOverride: String?) -> String {
         """
-        # \(title(for: session))
+        # \(titleOverride ?? title(for: session))
 
         \(dateString(for: session))
 
@@ -814,12 +887,12 @@ private enum MeetingExportFormatter {
         """
     }
 
-    private static func transcriptText(session: RecordingSession, transcript: Transcript) -> String {
+    private static func transcriptText(session: RecordingSession, transcript: Transcript, titleOverride: String?) -> String {
         let body = transcript.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? transcript.speakerTranscript!
             : transcript.text
         return """
-        # \(title(for: session)) Transcript
+        # \(titleOverride ?? title(for: session)) Transcript
 
         \(dateString(for: session))
 
@@ -827,11 +900,11 @@ private enum MeetingExportFormatter {
         """
     }
 
-    private static func fullMeeting(session: RecordingSession, transcript: Transcript) -> String {
+    private static func fullMeeting(session: RecordingSession, transcript: Transcript, titleOverride: String?) -> String {
         let notes = transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines)
         let speakers = transcript.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines)
         return """
-        # \(title(for: session))
+        # \(titleOverride ?? title(for: session))
 
         \(dateString(for: session))
 

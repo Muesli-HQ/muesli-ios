@@ -178,14 +178,16 @@ final class KeyboardController {
         }
     }
 
-    func prepareLaunchRequestIfNeeded() {
+    func prepareLaunchRequestIfNeeded(clearsPendingCommand: Bool = true) {
         guard preparedRequest == nil, activeRequestID == nil else { return }
         let request = DictationRequest()
         preparedRequest = request
         launchURL = makeLaunchURL(for: request)
 
         do {
-            try store.clearPendingCommand()
+            if clearsPendingCommand {
+                try store.clearPendingCommand()
+            }
             try store.saveRequest(request)
         } catch {
             statusText = "Enable Full Access"
@@ -318,7 +320,7 @@ final class KeyboardController {
             liveTranscript = ""
             dictationPhase = .idle
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
-            prepareLaunchRequestIfNeeded()
+            prepareLaunchRequestIfNeeded(clearsPendingCommand: false)
         } catch {
             statusText = "Enable Full Access"
         }

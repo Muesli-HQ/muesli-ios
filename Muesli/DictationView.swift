@@ -125,6 +125,7 @@ struct DictationView: View {
                         }
 
                         microphoneMenu
+                            .disabled(coordinator.isRecording)
                     }
                 }
 
@@ -232,6 +233,7 @@ struct DictationView: View {
         }
         .buttonStyle(.plain)
         .menuOrder(.fixed)
+        .disabled(coordinator.isRecording)
         .accessibilityLabel("Recording microphone")
         .accessibilityValue(coordinator.audioInputRouteText)
     }

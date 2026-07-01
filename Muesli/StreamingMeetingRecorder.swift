@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 
 struct MeetingAudioChunk: Sendable, Equatable {
     let index: Int
@@ -35,12 +36,16 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
     private static let sampleRate: Double = 16_000
     private static let bufferSize: AVAudioFrameCount = 4_096
 
-    func start(chunksDirectory: URL, retainedAudioURL: URL?) throws {
+    func start(
+        chunksDirectory: URL,
+        retainedAudioURL: URL?,
+        routeStage: String = "streaming recorder"
+    ) throws {
         guard !isRunning else { return }
         self.chunksDirectory = chunksDirectory
         try FileManager.default.createDirectory(at: chunksDirectory, withIntermediateDirectories: true)
 
-        _ = try AudioInputRouteManager.configureForRecording(stage: "streaming recorder")
+        _ = try AudioInputRouteManager.configureForRecording(stage: routeStage)
 
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -207,14 +212,18 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
             let ratio = targetFormat.sampleRate / buffer.format.sampleRate
             let frameCapacity = max(1, AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1)
             guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: frameCapacity) else { return }
-            var didProvideInput = false
+            let didProvideInput = OSAllocatedUnfairLock(initialState: false)
             var error: NSError?
             converter.convert(to: converted, error: &error) { _, outStatus in
-                guard !didProvideInput else {
+                let shouldProvideInput = didProvideInput.withLock { hasProvidedInput in
+                    guard !hasProvidedInput else { return false }
+                    hasProvidedInput = true
+                    return true
+                }
+                guard shouldProvideInput else {
                     outStatus.pointee = .noDataNow
                     return nil
                 }
-                didProvideInput = true
                 outStatus.pointee = .haveData
                 return buffer
             }

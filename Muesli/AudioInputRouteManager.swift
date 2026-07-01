@@ -43,15 +43,7 @@ struct AudioInputRouteSnapshot: Equatable {
     let outputName: String
 
     var displayText: String {
-        if inputName.isEmpty {
-            preference.label
-        } else if preference == .bluetooth, inputDetail == "Built-in" {
-            preference.label
-        } else if preference == .external, inputDetail == "Built-in" {
-            preference.label
-        } else {
-            inputName
-        }
+        inputName.isEmpty ? preference.label : inputName
     }
 }
 
@@ -65,19 +57,26 @@ enum AudioInputRouteManager {
             try session.setCategory(
                 .playAndRecord,
                 mode: .spokenAudio,
-                options: [.mixWithOthers, .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
+                options: recordingCategoryOptions
             )
             try session.setActive(true)
-            let preferredInput = preferredInput(for: preference, in: session.availableInputs ?? [])
-            try session.setPreferredInput(preferredInput)
         } catch {
             throw AudioRecorder.RecordingError.audioSessionFailed(stage: stage, underlying: error)
         }
 
+        let preferredInput = preferredInput(for: preference, in: session.availableInputs ?? [])
+        do {
+            try session.setPreferredInput(preferredInput)
+        } catch {
+            #if DEBUG
+            print("Muesli audio route preference was ignored [\(stage)]: \(preference.rawValue)")
+            #endif
+        }
+
         let snapshot = currentSnapshot(preference: preference)
-        print(
-            "Muesli audio route [\(stage)]: preference=\(preference.rawValue), input=\(snapshot.inputName), output=\(snapshot.outputName)"
-        )
+        #if DEBUG
+        print("Muesli audio route configured [\(stage)]: preference=\(preference.rawValue)")
+        #endif
         return snapshot
     }
 
@@ -121,6 +120,18 @@ enum AudioInputRouteManager {
         case .external:
             return inputs.first(where: isExternalInput)
         }
+    }
+
+    private static var recordingCategoryOptions: AVAudioSession.CategoryOptions {
+        [.mixWithOthers, bluetoothRecordingOption, .allowBluetoothA2DP, .defaultToSpeaker]
+    }
+
+    private static var bluetoothRecordingOption: AVAudioSession.CategoryOptions {
+        #if compiler(>=6.2)
+        .allowBluetoothHFP
+        #else
+        .allowBluetooth
+        #endif
     }
 
     private static func fallbackInputName(

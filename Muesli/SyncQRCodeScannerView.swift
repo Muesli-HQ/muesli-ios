@@ -144,11 +144,12 @@ struct SyncQRCodeScannerView: View {
                         .font(MuesliTheme.headline())
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
+                        .foregroundStyle(.white)
+                        .background(MuesliTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(MuesliTheme.accent)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -300,7 +301,7 @@ private enum ScanResult {
         case .readyToEnable:
             return MuesliTheme.accent
         case .needsICloud:
-            return MuesliTheme.recording
+            return MuesliTheme.destructive
         }
     }
 

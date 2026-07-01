@@ -71,13 +71,13 @@ struct TranscriptionModelSelector: View {
                 }
                 .padding(MuesliTheme.spacing12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(MuesliTheme.surfaceSelected.opacity(0.72))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .background(MuesliTheme.accent.opacity(0.10))
+                .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent, isInteractive: true)
                 .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                         .strokeBorder(MuesliTheme.accent.opacity(0.34), lineWidth: 1)
                 )
-                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             }
             .menuOrder(.fixed)
 
@@ -115,12 +115,7 @@ private struct SelectedTranscriptionModelDetails: View {
         }
         .padding(MuesliTheme.spacing12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MuesliTheme.surfacePrimary.opacity(0.34))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-        )
+        .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium)
     }
 }
 
@@ -135,12 +130,7 @@ private struct TranscriptionModelBadge: View {
             .labelStyle(.titleAndIcon)
             .padding(.horizontal, MuesliTheme.spacing8)
             .padding(.vertical, MuesliTheme.spacing4)
-            .background(MuesliTheme.backgroundRaised)
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-            )
+            .muesliGlassSurface(cornerRadius: 14)
     }
 }
 

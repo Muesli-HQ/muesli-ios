@@ -89,7 +89,11 @@ struct MeetingsView: View {
     }
 
     private var recorderPanel: some View {
-        MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+        MuesliSurface(
+            cornerRadius: MuesliTheme.cornerLarge,
+            tint: statusColor,
+            isInteractive: true
+        ) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                 HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -113,8 +117,7 @@ struct MeetingsView: View {
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .frame(height: 44)
-                    .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium)
                     .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)
 
                 meetingTemplatePicker
@@ -137,8 +140,7 @@ struct MeetingsView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, MuesliTheme.spacing16)
-                    .background(statusColor.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: statusColor)
                 }
 
                 Button {
@@ -155,13 +157,15 @@ struct MeetingsView: View {
                     .font(MuesliTheme.headline())
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
-                    .foregroundStyle(.white)
-                    .background(statusColor)
+                    .foregroundStyle(meetingPrimaryButtonTextColor)
+                    .background(meetingPrimaryButtonBackground)
+                    .overlay(meetingPrimaryButtonBorder)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
                 .disabled(coordinator.isMeetingTranscribing)
+                .sensoryFeedback(.impact, trigger: coordinator.hasMeetingRecordingInProgress)
                 .accessibilityIdentifier("meetings.primaryButton")
             }
             .padding(MuesliTheme.spacing16)
@@ -206,9 +210,8 @@ struct MeetingsView: View {
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
             .padding(MuesliTheme.spacing12)
-            .background(MuesliTheme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
+            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)
@@ -245,7 +248,7 @@ struct MeetingsView: View {
                             leadingAction: .init(
                                 title: "Delete",
                                 systemImage: "trash",
-                                tint: MuesliTheme.recording,
+                                tint: MuesliTheme.destructive,
                                 perform: { sessionPendingDelete = session }
                             ),
                             trailingAction: .init(
@@ -304,6 +307,20 @@ struct MeetingsView: View {
         } else {
             MuesliTheme.accent
         }
+    }
+
+    private var meetingPrimaryButtonTextColor: Color {
+        .white
+    }
+
+    private var meetingPrimaryButtonBackground: some View {
+        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+            .fill(coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructive : statusColor)
+    }
+
+    private var meetingPrimaryButtonBorder: some View {
+        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+            .strokeBorder(.clear, lineWidth: 1)
     }
 
     private func copyText(for session: RecordingSession) -> String {
@@ -389,7 +406,7 @@ private struct MeetingSessionRow: View {
     }
 
     private var previewColor: Color {
-        session.errorMessage == nil ? MuesliTheme.textSecondary : MuesliTheme.recording
+        session.errorMessage == nil ? MuesliTheme.textSecondary : MuesliTheme.destructive
     }
 
     fileprivate static let dateFormatter: DateFormatter = {
@@ -600,8 +617,8 @@ private struct MeetingSessionDetailView: View {
             .font(MuesliTheme.headline())
             .frame(maxWidth: .infinity)
             .frame(height: 44)
-            .foregroundStyle(MuesliTheme.recording)
-            .background(MuesliTheme.recording.opacity(0.12))
+            .foregroundStyle(MuesliTheme.destructive)
+            .background(MuesliTheme.destructive.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
@@ -624,7 +641,7 @@ private struct MeetingSessionDetailView: View {
                 } else if let error = session.errorMessage {
                     Text(error)
                         .font(MuesliTheme.body())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.destructive)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text(session.phase.description)
@@ -977,7 +994,7 @@ struct SavedAudioPlayerView: View {
             if let playbackError {
                 Text(playbackError)
                     .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.recording)
+                    .foregroundStyle(MuesliTheme.destructive)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -1355,8 +1372,10 @@ private extension RecordingSessionPhase {
 
     var tint: Color {
         switch self {
-        case .recording, .failed, .cancelled:
+        case .recording:
             MuesliTheme.recording
+        case .failed, .cancelled:
+            MuesliTheme.destructive
         case .transcriptionQueued, .transcribing:
             MuesliTheme.transcribing
         case .completed:

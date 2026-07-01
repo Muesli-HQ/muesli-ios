@@ -27,9 +27,9 @@ enum MuesliPreferences {
     }
 
     static var accentTheme: MuesliAccentTheme {
-        MuesliAccentTheme(
+        MuesliAccentTheme.resolved(
             rawValue: UserDefaults.standard.string(forKey: accentThemeKey) ?? ""
-        ) ?? .blue
+        )
     }
 
     static var liveActivitiesForDictationsEnabled: Bool {

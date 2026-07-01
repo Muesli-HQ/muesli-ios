@@ -38,11 +38,10 @@ struct KeyboardRootView: View {
                 }
             }
             .padding(MuesliTheme.spacing12)
-            .background(MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
-            .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
-                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            .muesliGlassSurface(
+                cornerRadius: MuesliTheme.cornerLarge,
+                tint: buttonColor,
+                isInteractive: true
             )
 
             HStack(spacing: MuesliTheme.spacing8) {
@@ -89,21 +88,21 @@ struct KeyboardRootView: View {
             VStack(spacing: MuesliTheme.spacing4) {
                 ZStack {
                     Circle()
-                        .fill(controller.isPrimaryButtonDisabled ? MuesliTheme.surfacePrimary : buttonColor)
+                        .fill(primaryButtonCircleFill)
                         .frame(width: 62, height: 62)
                         .overlay(
                             Circle()
-                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: controller.isPrimaryButtonDisabled ? 1 : 0)
+                                .strokeBorder(primaryButtonCircleBorder, lineWidth: 1)
                         )
 
                     Image(systemName: controller.primaryButtonIcon)
                         .font(.system(size: 23, weight: .semibold))
-                        .foregroundStyle(controller.isPrimaryButtonDisabled ? MuesliTheme.textTertiary : .white)
+                        .foregroundStyle(primaryButtonIconColor)
                 }
 
                 Text(controller.primaryButtonTitle)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(controller.isPrimaryButtonDisabled ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                    .foregroundStyle(primaryButtonTitleColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
@@ -112,6 +111,50 @@ struct KeyboardRootView: View {
         .frame(maxWidth: .infinity)
         .padding(MuesliTheme.spacing12)
         .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+    }
+
+    private var isPrimaryStopButton: Bool {
+        controller.stylesPrimaryButtonAsStop
+    }
+
+    private var primaryButtonCircleFill: Color {
+        if controller.isPrimaryButtonDisabled {
+            MuesliTheme.surfacePrimary
+        } else if isPrimaryStopButton {
+            MuesliTheme.destructive.opacity(0.32)
+        } else {
+            buttonColor
+        }
+    }
+
+    private var primaryButtonCircleBorder: Color {
+        if controller.isPrimaryButtonDisabled {
+            MuesliTheme.surfaceBorder
+        } else if isPrimaryStopButton {
+            MuesliTheme.destructive.opacity(0.38)
+        } else {
+            .clear
+        }
+    }
+
+    private var primaryButtonIconColor: Color {
+        if controller.isPrimaryButtonDisabled {
+            MuesliTheme.textTertiary
+        } else if isPrimaryStopButton {
+            .white
+        } else {
+            .white
+        }
+    }
+
+    private var primaryButtonTitleColor: Color {
+        if controller.isPrimaryButtonDisabled {
+            MuesliTheme.textTertiary
+        } else if isPrimaryStopButton {
+            MuesliTheme.destructive
+        } else {
+            MuesliTheme.textPrimary
+        }
     }
 
     private var keyboardHint: String {
@@ -171,8 +214,7 @@ private struct KeyboardLiveTranscriptPreview: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(MuesliTheme.spacing12)
-        .background(MuesliTheme.surfacePrimary)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
     }
 }
 
@@ -210,12 +252,7 @@ private struct KeyboardKey: View {
                 .frame(height: 44)
         }
         .buttonStyle(.plain)
-        .background(MuesliTheme.surfacePrimary)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-        )
+        .muesliGlassButton(cornerRadius: MuesliTheme.cornerMedium)
     }
 
     @ViewBuilder

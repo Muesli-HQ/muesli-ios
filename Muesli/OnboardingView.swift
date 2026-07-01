@@ -79,7 +79,7 @@ struct OnboardingView: View {
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)
                 .padding(.top, MuesliTheme.spacing24)
-                .padding(.bottom, MuesliTheme.spacing24)
+                .padding(.bottom, MuesliTheme.spacing32 + 64)
             }
 
             footer
@@ -181,6 +181,12 @@ struct OnboardingView: View {
                         .font(MuesliTheme.callout())
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
+
+                Spacer(minLength: MuesliTheme.spacing12)
+
+                if shouldShowCompactModelPreparation {
+                    CompactModelPreparationIndicator(state: coordinator.modelPreparation)
+                }
             }
 
             HStack(spacing: MuesliTheme.spacing8) {
@@ -262,10 +268,14 @@ struct OnboardingView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
             .padding(MuesliTheme.spacing12)
-            .background(selected ? MuesliTheme.surfaceSelected : MuesliTheme.backgroundRaised)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .background(selected ? MuesliTheme.accent.opacity(0.10) : Color.clear)
+            .muesliGlassSurface(
+                cornerRadius: MuesliTheme.cornerMedium,
+                tint: selected ? MuesliTheme.accent : nil,
+                isInteractive: true
+            )
             .overlay(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                     .strokeBorder(selected ? MuesliTheme.accent : MuesliTheme.surfaceBorder, lineWidth: selected ? 1.5 : 1)
             )
         }
@@ -308,12 +318,7 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(MuesliTheme.accent)
-                .background(MuesliTheme.backgroundRaised)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                )
+                .muesliGlassButton(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
 
                 permissionRow(
                     icon: "keyboard.fill",
@@ -398,10 +403,28 @@ struct OnboardingView: View {
 
                 Spacer()
 
-                Button(buttonTitle, action: action)
-                    .font(MuesliTheme.captionMedium())
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isComplete)
+                Button(action: action) {
+                    Text(buttonTitle)
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(isComplete ? MuesliTheme.success : .white)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .frame(height: 34)
+                        .background(
+                            Capsule()
+                                .fill(isComplete ? MuesliTheme.success.opacity(0.13) : MuesliTheme.accent)
+                        )
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(
+                                    isComplete ? MuesliTheme.success.opacity(0.45) : MuesliTheme.accent.opacity(0.55),
+                                    lineWidth: 1
+                                )
+                        )
+                        .padding(.vertical, 5)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isComplete)
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -573,6 +596,9 @@ struct OnboardingView: View {
                 Text("\(coordinator.selectedTranscriptionModel.shortName) runs on CoreML / ANE. First setup downloads and compiles the model for this iPhone.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
+                Text("You can continue setup while this runs in the background. Muesli will keep preparing the model as long as the app stays open.")
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textTertiary)
             }
 
             modelPicker
@@ -608,7 +634,7 @@ struct OnboardingView: View {
                     Spacer()
                 }
 
-                modelProgress
+                modelBackgroundHint
 
                 if coordinator.modelPreparation.phase == .failed || coordinator.modelPreparation.phase == .idle {
                     Button {
@@ -618,14 +644,18 @@ struct OnboardingView: View {
                             .font(MuesliTheme.headline())
                             .frame(maxWidth: .infinity)
                             .frame(height: 48)
+                            .foregroundStyle(.white)
+                            .background(modelButtonColor)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .background(modelButtonColor)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
             }
             .padding(MuesliTheme.spacing16)
+        }
+        .onAppear {
+            coordinator.prepareModelForOnboarding()
         }
     }
 
@@ -678,7 +708,24 @@ struct OnboardingView: View {
         case .failed:
             Label("Model setup needs another try", systemImage: "exclamationmark.triangle.fill")
                 .font(MuesliTheme.captionMedium())
-                .foregroundStyle(MuesliTheme.recording)
+                .foregroundStyle(MuesliTheme.destructive)
+        }
+    }
+
+    @ViewBuilder
+    private var modelBackgroundHint: some View {
+        switch coordinator.modelPreparation.phase {
+        case .downloading, .preparing:
+            Label("Model setup will continue after you leave this step.", systemImage: "arrow.down.circle")
+                .font(MuesliTheme.captionMedium())
+                .foregroundStyle(MuesliTheme.accent)
+        case .ready:
+            EmptyView()
+        case .idle, .failed:
+            Text("If your connection is slow, you can retry here or finish onboarding and prepare the model later from Settings.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -688,7 +735,7 @@ struct OnboardingView: View {
                 Text("Test Voice Note")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("Try saying: \"testing this one out\"")
+                Text(coordinator.modelPreparation.isReady ? "Try saying: \"testing this one out\"" : "You can skip this test while the model finishes preparing in the background.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
@@ -717,42 +764,58 @@ struct OnboardingView: View {
                         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     }
 
-                    Text(coordinator.onboardingTestTranscript.isEmpty ? "Your transcription will appear here." : coordinator.onboardingTestTranscript)
-                        .font(coordinator.onboardingTestTranscript.isEmpty ? MuesliTheme.body() : .system(size: 14, design: .monospaced))
-                        .foregroundStyle(coordinator.onboardingTestTranscript.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
-                        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+                    if coordinator.modelPreparation.isReady {
+                        Text(coordinator.onboardingTestTranscript.isEmpty ? "Your transcription will appear here." : coordinator.onboardingTestTranscript)
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(coordinator.onboardingTestTranscript.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+                    } else {
+                        modelPreparationInlineStatus
+                    }
 
                     if let error = coordinator.onboardingTestError {
                         Text(error)
                             .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.recording)
+                            .foregroundStyle(MuesliTheme.destructive)
                     }
 
-                    Button {
-                        if coordinator.isOnboardingTestRecording {
-                            coordinator.stopOnboardingTestDictation()
-                        } else {
-                            coordinator.startOnboardingTestDictation()
+                    if coordinator.modelPreparation.isReady {
+                        Button {
+                            if coordinator.isOnboardingTestRecording {
+                                coordinator.stopOnboardingTestDictation()
+                            } else {
+                                coordinator.startOnboardingTestDictation()
+                            }
+                        } label: {
+                            Label(
+                                onboardingTestButtonTitle,
+                                systemImage: onboardingTestButtonIcon
+                            )
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .foregroundStyle(onboardingTestButtonTextColor)
+                            .background(onboardingTestButtonBackground)
+                            .overlay(onboardingTestButtonBorder)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                         }
-                    } label: {
-                        Label(
-                            onboardingTestButtonTitle,
-                            systemImage: onboardingTestButtonIcon
-                        )
-                        .font(MuesliTheme.headline())
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .background(onboardingTestColor)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    .disabled(!coordinator.modelPreparation.isReady || coordinator.isOnboardingTestTranscribing)
-
-                    if !coordinator.modelPreparation.isReady {
-                        Text("The test unlocks after model preparation completes.")
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textTertiary)
+                        .buttonStyle(.plain)
+                        .disabled(coordinator.isOnboardingTestTranscribing)
+                    } else if coordinator.modelPreparation.phase == .failed || coordinator.modelPreparation.phase == .idle {
+                        Button {
+                            coordinator.prepareModelForOnboarding()
+                        } label: {
+                            Label("Retry Model Setup", systemImage: "arrow.clockwise")
+                                .font(MuesliTheme.headline())
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                                .foregroundStyle(.white)
+                                .background(MuesliTheme.accent)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(MuesliTheme.spacing16)
@@ -763,6 +826,30 @@ struct OnboardingView: View {
                 coordinator.prepareModelForOnboarding()
             }
         }
+    }
+
+    private var modelPreparationInlineStatus: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                modelStatusIcon
+
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text(coordinator.modelPreparation.status)
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(coordinator.modelPreparation.detail)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Text("Finish onboarding now, or come back here when setup is ready to test voice notes.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
     }
 
     private var meetingSummaryStep: some View {
@@ -916,9 +1003,8 @@ struct OnboardingView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .frame(width: 44, height: 48)
                         .foregroundStyle(MuesliTheme.textSecondary)
-                        .background(MuesliTheme.backgroundRaised)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .muesliGlassButton(cornerRadius: MuesliTheme.cornerMedium)
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -935,8 +1021,12 @@ struct OnboardingView: View {
                 .frame(height: 48)
                 .foregroundStyle(.white)
                 .background(canContinue ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
+                        .strokeBorder(MuesliTheme.glassHighlight, lineWidth: canContinue ? 0.8 : 0)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(!canContinue)
@@ -956,9 +1046,13 @@ struct OnboardingView: View {
         case .sync:
             iCloudSyncEnabled ? "Continue" : "Skip for Now"
         case .model:
-            coordinator.modelPreparation.isReady ? "Continue" : "Skip for Now"
+            coordinator.modelPreparation.isReady ? "Continue" : "Continue in Background"
         case .test:
-            isLastStep ? "Finish" : "Continue"
+            if coordinator.onboardingTestTranscript.isEmpty {
+                "Skip Test"
+            } else {
+                isLastStep ? "Finish" : "Continue"
+            }
         case .summary:
             isLastStep ? "Finish" : "Continue"
         }
@@ -973,9 +1067,9 @@ struct OnboardingView: View {
         case .sync:
             true
         case .model:
-            !coordinator.modelPreparation.isPreparing
+            true
         case .test:
-            !isOnboardingTestActive && !coordinator.onboardingTestTranscript.isEmpty
+            !isOnboardingTestActive
         case .summary:
             !isSigningInChatGPT
         }
@@ -1040,6 +1134,23 @@ struct OnboardingView: View {
         } else {
             MuesliTheme.accent
         }
+    }
+
+    private var onboardingTestButtonTextColor: Color {
+        .white
+    }
+
+    private var onboardingTestButtonBackground: some View {
+        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+            .fill(coordinator.isOnboardingTestRecording ? MuesliTheme.destructive.opacity(0.32) : onboardingTestColor)
+    }
+
+    private var onboardingTestButtonBorder: some View {
+        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+            .strokeBorder(
+                coordinator.isOnboardingTestRecording ? MuesliTheme.destructive.opacity(0.34) : .clear,
+                lineWidth: 1
+            )
     }
 
     private var onboardingTestButtonTitle: String {
@@ -1283,12 +1394,98 @@ struct OnboardingView: View {
         case .ready:
             MuesliTheme.success
         case .failed:
-            MuesliTheme.recording
+            MuesliTheme.destructive
         case .preparing:
             MuesliTheme.transcribing
         default:
             MuesliTheme.accent
         }
+    }
+
+    private var shouldShowCompactModelPreparation: Bool {
+        switch coordinator.modelPreparation.phase {
+        case .downloading, .preparing, .ready, .failed:
+            true
+        case .idle:
+            false
+        }
+    }
+}
+
+private struct CompactModelPreparationIndicator: View {
+    let state: ModelPreparationState
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(MuesliTheme.backgroundRaised.opacity(0.86))
+                .frame(width: 38, height: 38)
+                .overlay(
+                    Circle()
+                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                )
+
+            switch state.phase {
+            case .downloading:
+                ModelPreparationPie(progress: state.progress ?? 0)
+                    .fill(MuesliTheme.accent)
+                    .frame(width: 24, height: 24)
+                    .overlay(
+                        Circle()
+                            .stroke(MuesliTheme.accent.opacity(0.45), lineWidth: 1.5)
+                    )
+            case .preparing:
+                ProgressView()
+                    .controlSize(.small)
+            case .ready:
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(MuesliTheme.success)
+            case .failed:
+                Image(systemName: "exclamationmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(MuesliTheme.destructive)
+            case .idle:
+                EmptyView()
+            }
+        }
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        switch state.phase {
+        case .downloading:
+            "Model downloading"
+        case .preparing:
+            "Model preparing"
+        case .ready:
+            "Model ready"
+        case .failed:
+            "Model setup failed"
+        case .idle:
+            "Model setup idle"
+        }
+    }
+}
+
+private struct ModelPreparationPie: Shape {
+    var progress: Double
+
+    func path(in rect: CGRect) -> Path {
+        let normalized = min(max(progress, 0), 1)
+        var path = Path()
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+        path.move(to: center)
+        path.addArc(
+            center: center,
+            radius: radius,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(-90 + normalized * 360),
+            clockwise: false
+        )
+        path.closeSubpath()
+        return path
     }
 }
 

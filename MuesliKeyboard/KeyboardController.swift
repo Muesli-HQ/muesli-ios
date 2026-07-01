@@ -36,57 +36,78 @@ final class KeyboardController {
     }
 
     var primaryButtonTitle: String {
-        if recoveryRequestID != nil {
-            return "Open Muesli"
-        }
-
-        if latestHandoffState?.phase == .stopRequested {
-            return "Waiting for Muesli"
-        }
-
-        return switch dictationPhase {
-        case .requested:
-            activeRequestID == nil ? "Open Muesli" : "Stop"
-        case .recording:
+        return switch primaryButtonRole {
+        case .openMuesliRecovery:
+            "Open Muesli"
+        case .waitingForMuesli:
+            "Waiting for Muesli"
+        case .openMuesliRequested:
+            "Open Muesli"
+        case .stop:
             "Stop"
         case .transcribing:
             "Transcribing"
-        case .finished:
+        case .inserted:
             "Inserted"
-        default:
+        case .record:
             "Record"
         }
     }
 
     var primaryButtonIcon: String {
-        if recoveryRequestID != nil {
-            return "arrow.up.forward.app"
-        }
-
-        if latestHandoffState?.phase == .stopRequested {
-            return "hourglass"
-        }
-
-        return switch dictationPhase {
-        case .requested, .recording:
+        return switch primaryButtonRole {
+        case .openMuesliRecovery:
+            "arrow.up.forward.app"
+        case .waitingForMuesli:
+            "hourglass"
+        case .openMuesliRequested:
+            "arrow.up.forward.app"
+        case .stop:
             "stop.fill"
         case .transcribing:
             "waveform"
-        case .finished:
+        case .inserted:
             "checkmark"
-        default:
+        case .record:
             "mic.fill"
         }
     }
 
     var primaryButtonColor: ColorToken {
-        switch dictationPhase {
+        return switch dictationPhase {
         case .requested, .recording:
             .recording
         case .transcribing:
             .transcribing
         default:
             .accent
+        }
+    }
+
+    var stylesPrimaryButtonAsStop: Bool {
+        primaryButtonRole == .stop
+    }
+
+    var primaryButtonRole: KeyboardPrimaryButtonRole {
+        if recoveryRequestID != nil {
+            return .openMuesliRecovery
+        }
+
+        if latestHandoffState?.phase == .stopRequested {
+            return .waitingForMuesli
+        }
+
+        return switch dictationPhase {
+        case .requested:
+            activeRequestID == nil ? .openMuesliRequested : .stop
+        case .recording:
+            .stop
+        case .transcribing:
+            .transcribing
+        case .finished:
+            .inserted
+        default:
+            .record
         }
     }
 
@@ -613,4 +634,14 @@ enum ColorToken {
     case accent
     case recording
     case transcribing
+}
+
+enum KeyboardPrimaryButtonRole {
+    case openMuesliRecovery
+    case waitingForMuesli
+    case openMuesliRequested
+    case stop
+    case transcribing
+    case inserted
+    case record
 }

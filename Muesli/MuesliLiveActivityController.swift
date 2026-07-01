@@ -178,9 +178,9 @@ actor MuesliLiveActivityController {
     private func accent(for phase: String) -> String {
         switch phase.lowercased() {
         case "listening", "recording":
-            "red"
+            "blue"
         case "transcribing":
-            "orange"
+            "green"
         default:
             "blue"
         }

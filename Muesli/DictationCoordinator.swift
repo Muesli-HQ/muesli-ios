@@ -33,6 +33,7 @@ final class DictationCoordinator {
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
     private var pendingICloudSyncReason: String?
+    private var onboardingModelReadyCueModel: LocalTranscriptionModel?
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
     private var meetingChunkTranscriptions: [MeetingChunkTranscription] = []
     private var meetingChunksDirectory: URL?
@@ -122,6 +123,8 @@ final class DictationCoordinator {
     }
 
     init() {
+        ModelBackgroundDownloadService.shared.delegate = self
+
         #if DEBUG
         if Self.shouldConfigureForUITestingFromLaunchArguments() {
             configureForUITesting()
@@ -440,6 +443,37 @@ final class DictationCoordinator {
         }
     }
 
+    @discardableResult
+    func deleteDictationAudio(for result: DictationResult) -> Bool {
+        do {
+            guard var session = recordingSession(for: result),
+                  let audioFileName = session.audioFileName
+            else {
+                clipboardStatusText = "Audio already removed"
+                clearClipboardStatusSoon()
+                return true
+            }
+
+            try store.deleteAudioFile(fileName: audioFileName)
+            session.audioFileName = nil
+            session.keepsAudioRecording = false
+            try store.saveSession(session)
+
+            if let index = recordingSessions.firstIndex(where: { $0.id == session.id }) {
+                recordingSessions[index] = session
+            }
+
+            clipboardStatusText = "Audio deleted"
+            AppTelemetry.signal("dictation_audio_deleted")
+            clearClipboardStatusSoon()
+            return true
+        } catch {
+            clipboardStatusText = "Audio delete failed"
+            clearClipboardStatusSoon()
+            return false
+        }
+    }
+
     func deleteMeeting(_ session: RecordingSession) {
         do {
             if let audioFileName = session.audioFileName {
@@ -742,6 +776,13 @@ final class DictationCoordinator {
         modelPreparationTask = Task { [engine, model] in
             do {
                 await engine.selectModel(model)
+                let didStartBackgroundDownload = try await ModelBackgroundDownloadService.shared.startDownload(for: model)
+                if didStartBackgroundDownload {
+                    await MainActor.run {
+                        coordinator.modelPreparationTask = nil
+                    }
+                    return
+                }
                 try await engine.prepare { progress, status in
                     Task { @MainActor in
                         coordinator.applyModelPreparationProgress(progress, status: status)
@@ -756,6 +797,7 @@ final class DictationCoordinator {
                         status: "\(model.shortName) ready",
                         detail: model.detail
                     )
+                    coordinator.playOnboardingModelReadyCueIfNeeded(for: model)
                     AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
                 }
             } catch is CancellationError {
@@ -944,6 +986,70 @@ final class DictationCoordinator {
                 : "Downloading \(selectedTranscriptionModel.shortName)",
             detail: detail
         )
+    }
+
+    private func prepareDownloadedModelAfterBackgroundDownload(_ model: LocalTranscriptionModel) {
+        guard selectedTranscriptionModel == model else { return }
+        guard modelPreparationTask == nil else { return }
+
+        modelPreparation = ModelPreparationState(
+            phase: .preparing,
+            progress: nil,
+            status: "Optimizing for this iPhone...",
+            detail: "Download complete"
+        )
+
+        let coordinator = self
+        modelPreparationTask = Task { [engine, model] in
+            do {
+                await engine.selectModel(model)
+                try await engine.prepare { progress, status in
+                    Task { @MainActor in
+                        coordinator.applyModelPreparationProgress(progress, status: status)
+                    }
+                }
+
+                await MainActor.run {
+                    coordinator.modelPreparationTask = nil
+                    coordinator.modelPreparation = ModelPreparationState(
+                        phase: .ready,
+                        progress: 1,
+                        status: "\(model.shortName) ready",
+                        detail: model.detail
+                    )
+                    coordinator.playOnboardingModelReadyCueIfNeeded(for: model)
+                    AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    coordinator.modelPreparationTask = nil
+                }
+            } catch {
+                await MainActor.run {
+                    coordinator.modelPreparationTask = nil
+                    coordinator.modelPreparation = ModelPreparationState(
+                        phase: .failed,
+                        progress: nil,
+                        status: "Model setup paused",
+                        detail: "Download finished, but optimization failed"
+                    )
+                    AppTelemetry.signal(
+                        "model_prepare_failed",
+                        parameters: [
+                            "engine": model.engineIdentifier,
+                            "error": String(describing: type(of: error))
+                        ]
+                    )
+                }
+            }
+        }
+    }
+
+    private func playOnboardingModelReadyCueIfNeeded(for model: LocalTranscriptionModel) {
+        guard !hasCompletedOnboarding else { return }
+        guard onboardingModelReadyCueModel != model else { return }
+        onboardingModelReadyCueModel = model
+        MuesliAudioCues.modelReady()
     }
 
     private func startRealtimeDictationRecorder(audioURL: URL, sessionID: UUID) async throws {
@@ -2294,6 +2400,47 @@ final class DictationCoordinator {
         realtimeDictationChunksDirectory = nil
         realtimeDictationCommittedText = ""
         liveDictationTranscript = ""
+    }
+}
+
+extension DictationCoordinator: ModelBackgroundDownloadServiceDelegate {
+    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String) {
+        guard selectedTranscriptionModel == model else { return }
+        modelPreparation = ModelPreparationState(
+            phase: .downloading,
+            progress: progress,
+            status: "Downloading \(model.shortName)",
+            detail: detail
+        )
+    }
+
+    func modelBackgroundDownloadDidFinish(model: LocalTranscriptionModel) {
+        guard selectedTranscriptionModel == model else { return }
+        modelPreparation = ModelPreparationState(
+            phase: .preparing,
+            progress: nil,
+            status: "Optimizing for this iPhone...",
+            detail: "Download complete"
+        )
+        prepareDownloadedModelAfterBackgroundDownload(model)
+    }
+
+    func modelBackgroundDownloadDidFail(model: LocalTranscriptionModel, message: String) {
+        guard selectedTranscriptionModel == model else { return }
+        modelPreparationTask = nil
+        modelPreparation = ModelPreparationState(
+            phase: .failed,
+            progress: nil,
+            status: "Download paused",
+            detail: message
+        )
+        AppTelemetry.signal(
+            "model_prepare_failed",
+            parameters: [
+                "engine": model.engineIdentifier,
+                "error": "background_download_failed"
+            ]
+        )
     }
 }
 

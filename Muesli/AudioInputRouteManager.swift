@@ -80,6 +80,28 @@ enum AudioInputRouteManager {
         return snapshot
     }
 
+    static func configureForKeyboardKeepAlive(stage: String) throws -> AudioInputRouteSnapshot {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(
+                .playAndRecord,
+                mode: .spokenAudio,
+                options: [.mixWithOthers]
+            )
+            try session.setActive(true)
+        } catch {
+            throw AudioRecorder.RecordingError.audioSessionFailed(stage: stage, underlying: error)
+        }
+
+        let builtInInput = (session.availableInputs ?? []).first(where: isBuiltInInput)
+        try? session.setPreferredInput(builtInInput)
+
+        #if DEBUG
+        print("Muesli audio route configured [\(stage)]: preference=\(RecordingMicrophonePreference.builtIn.rawValue)")
+        #endif
+        return currentSnapshot(preference: .builtIn)
+    }
+
     static func currentSnapshot(
         preference: RecordingMicrophonePreference = MuesliPreferences.recordingMicrophonePreference
     ) -> AudioInputRouteSnapshot {
@@ -101,10 +123,6 @@ enum AudioInputRouteManager {
             options.append(.external)
         }
         return options
-    }
-
-    static func normalizedPreference(_ preference: RecordingMicrophonePreference) -> RecordingMicrophonePreference {
-        availablePreferenceOptions().contains(preference) ? preference : .automatic
     }
 
     private static func preferredInput(

@@ -890,30 +890,13 @@ private struct SettingsMicrophonePicker: View {
     @Binding var selection: String
 
     private var availableOptions: [RecordingMicrophonePreference] {
-        AudioInputRouteManager.availablePreferenceOptions()
-    }
-
-    private var normalizedSelection: Binding<String> {
-        Binding(
-            get: {
-                let selectedPreference = RecordingMicrophonePreference(rawValue: selection) ?? .automatic
-                let normalizedPreference = AudioInputRouteManager.normalizedPreference(selectedPreference)
-                return normalizedPreference.rawValue
-            },
-            set: { selection = $0 }
-        )
+        let options = AudioInputRouteManager.availablePreferenceOptions()
+        guard !options.contains(preference) else { return options }
+        return options + [preference]
     }
 
     private var preference: RecordingMicrophonePreference {
-        RecordingMicrophonePreference(rawValue: normalizedSelection.wrappedValue) ?? .automatic
-    }
-
-    private func normalizeStoredSelection() {
-        let selectedPreference = RecordingMicrophonePreference(rawValue: selection) ?? .automatic
-        let normalizedPreference = AudioInputRouteManager.normalizedPreference(selectedPreference)
-        if normalizedPreference.rawValue != selection {
-            selection = normalizedPreference.rawValue
-        }
+        RecordingMicrophonePreference(rawValue: selection) ?? .automatic
     }
 
     var body: some View {
@@ -935,7 +918,7 @@ private struct SettingsMicrophonePicker: View {
 
             Spacer(minLength: MuesliTheme.spacing12)
 
-            Picker("Microphone", selection: normalizedSelection) {
+            Picker("Microphone", selection: $selection) {
                 ForEach(availableOptions) { option in
                     Text(option.label).tag(option.rawValue)
                 }
@@ -943,10 +926,6 @@ private struct SettingsMicrophonePicker: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .tint(MuesliTheme.accent)
-        }
-        .onAppear(perform: normalizeStoredSelection)
-        .onChange(of: selection) { _, _ in
-            normalizeStoredSelection()
         }
     }
 }

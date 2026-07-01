@@ -166,6 +166,7 @@ struct DictationView: View {
                         title: dictationButtonTitle,
                         systemImage: dictationButtonIcon,
                         color: statusColor,
+                        isStopState: coordinator.isRecording,
                         isDisabled: isDictationButtonDisabled
                     )
                 }
@@ -516,31 +517,77 @@ private struct VoiceNoteRecordButtonLabel: View {
     let title: String
     let systemImage: String
     let color: Color
+    let isStopState: Bool
     let isDisabled: Bool
 
     var body: some View {
         VStack(spacing: MuesliTheme.spacing8) {
             ZStack {
                 Circle()
-                    .fill(isDisabled ? MuesliTheme.surfacePrimary : color)
+                    .fill(circleFill)
                     .frame(width: 74, height: 74)
                     .overlay(
                         Circle()
-                            .strokeBorder((isDisabled ? MuesliTheme.surfaceBorder : color.opacity(0.36)), lineWidth: 1)
+                            .strokeBorder(circleBorder, lineWidth: 1)
                     )
+                    .shadow(color: circleShadow, radius: isStopState ? 10 : 0, x: 0, y: 5)
 
                 Image(systemName: systemImage)
                     .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(isDisabled ? MuesliTheme.textTertiary : .white)
+                    .foregroundStyle(iconColor)
             }
 
             Text(title)
                 .font(MuesliTheme.headline())
-                .foregroundStyle(isDisabled ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                .foregroundStyle(titleColor)
         }
         .frame(maxWidth: .infinity)
         .frame(minHeight: 112)
         .contentShape(Rectangle())
+    }
+
+    private var circleFill: Color {
+        if isDisabled {
+            MuesliTheme.surfacePrimary
+        } else if isStopState {
+            MuesliTheme.destructiveSubtle
+        } else {
+            color
+        }
+    }
+
+    private var circleBorder: Color {
+        if isDisabled {
+            MuesliTheme.surfaceBorder
+        } else if isStopState {
+            MuesliTheme.destructive.opacity(0.38)
+        } else {
+            color.opacity(0.36)
+        }
+    }
+
+    private var circleShadow: Color {
+        isStopState && !isDisabled ? MuesliTheme.destructive.opacity(0.16) : .clear
+    }
+
+    private var iconColor: Color {
+        if isDisabled {
+            MuesliTheme.textTertiary
+        } else if isStopState {
+            MuesliTheme.destructive
+        } else {
+            .white
+        }
+    }
+
+    private var titleColor: Color {
+        if isDisabled {
+            MuesliTheme.textTertiary
+        } else if isStopState {
+            MuesliTheme.destructive
+        } else {
+            MuesliTheme.textPrimary
+        }
     }
 }
 

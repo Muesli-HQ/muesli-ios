@@ -59,6 +59,8 @@ enum MuesliTheme {
     static let recording = Color(hex: 0x69A1FF)
     static let transcribing = Color(hex: 0x6BA3F7)
     static let success = syncGreen
+    static let destructive = Color.adaptive(dark: 0xFF453A, light: 0xD70015)
+    static var destructiveSubtle: Color { destructive.opacity(0.16) }
 
     static func title1() -> Font { .system(size: 28, weight: .bold) }
     static func title2() -> Font { .system(size: 22, weight: .semibold) }

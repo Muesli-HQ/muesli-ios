@@ -157,8 +157,9 @@ struct MeetingsView: View {
                     .font(MuesliTheme.headline())
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
-                    .foregroundStyle(.white)
-                    .background(statusColor)
+                    .foregroundStyle(meetingPrimaryButtonTextColor)
+                    .background(meetingPrimaryButtonBackground)
+                    .overlay(meetingPrimaryButtonBorder)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
@@ -306,6 +307,23 @@ struct MeetingsView: View {
         } else {
             MuesliTheme.accent
         }
+    }
+
+    private var meetingPrimaryButtonTextColor: Color {
+        coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructive : .white
+    }
+
+    private var meetingPrimaryButtonBackground: some View {
+        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+            .fill(coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructiveSubtle : statusColor)
+    }
+
+    private var meetingPrimaryButtonBorder: some View {
+        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+            .strokeBorder(
+                coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructive.opacity(0.34) : .clear,
+                lineWidth: 1
+            )
     }
 
     private func copyText(for session: RecordingSession) -> String {

@@ -792,8 +792,9 @@ struct OnboardingView: View {
                             .font(MuesliTheme.headline())
                             .frame(maxWidth: .infinity)
                             .frame(height: 48)
-                            .foregroundStyle(.white)
-                            .background(onboardingTestColor)
+                            .foregroundStyle(onboardingTestButtonTextColor)
+                            .background(onboardingTestButtonBackground)
+                            .overlay(onboardingTestButtonBorder)
                             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                             .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                         }
@@ -1131,6 +1132,23 @@ struct OnboardingView: View {
         } else {
             MuesliTheme.accent
         }
+    }
+
+    private var onboardingTestButtonTextColor: Color {
+        coordinator.isOnboardingTestRecording ? MuesliTheme.destructive : .white
+    }
+
+    private var onboardingTestButtonBackground: some View {
+        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+            .fill(coordinator.isOnboardingTestRecording ? MuesliTheme.destructiveSubtle : onboardingTestColor)
+    }
+
+    private var onboardingTestButtonBorder: some View {
+        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+            .strokeBorder(
+                coordinator.isOnboardingTestRecording ? MuesliTheme.destructive.opacity(0.34) : .clear,
+                lineWidth: 1
+            )
     }
 
     private var onboardingTestButtonTitle: String {

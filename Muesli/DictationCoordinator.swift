@@ -32,6 +32,7 @@ final class DictationCoordinator {
     private var keyboardSessionTimeoutTask: Task<Void, Never>?
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
+    private var lastKeyboardRuntimeLevelWriteAt = Date.distantPast
     private var pendingICloudSyncReason: String?
     private var onboardingModelReadyCueModel: LocalTranscriptionModel?
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
@@ -1218,7 +1219,11 @@ final class DictationCoordinator {
                     )
                 }
                 startMetering { [weak self] level in
-                    self?.inputLevel = level
+                    guard let self else { return }
+                    self.inputLevel = level
+                    if source == "keyboard" {
+                        self.publishKeyboardRuntimeLevel(level, requestID: request.id)
+                    }
                 }
                 if source == "keyboard" {
                     startCommandPolling(for: request.id)
@@ -2291,15 +2296,34 @@ final class DictationCoordinator {
         activeRequestID: UUID?,
         phase: DictationPhase,
         message: String?,
-        supportsBackgroundStart: Bool = false
+        supportsBackgroundStart: Bool = false,
+        inputLevel: Double? = nil
     ) {
+        let runtimeInputLevel = inputLevel ?? (phase == .recording ? self.inputLevel : 0)
         try? store.saveKeyboardRuntimeStatus(.init(
             isActive: isActive,
             activeRequestID: activeRequestID,
             phase: phase,
             message: message,
-            supportsBackgroundStart: supportsBackgroundStart
+            supportsBackgroundStart: supportsBackgroundStart,
+            inputLevel: runtimeInputLevel
         ))
+    }
+
+    private func publishKeyboardRuntimeLevel(_ level: Double, requestID: UUID) {
+        guard activeRequest?.id == requestID, isRecording else { return }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastKeyboardRuntimeLevelWriteAt) >= 0.08 else { return }
+        lastKeyboardRuntimeLevelWriteAt = now
+        saveKeyboardRuntimeStatus(
+            isActive: true,
+            activeRequestID: requestID,
+            phase: .recording,
+            message: "Listening",
+            supportsBackgroundStart: isKeyboardSessionArmed,
+            inputLevel: level
+        )
     }
 
     private func saveKeyboardHandoff(

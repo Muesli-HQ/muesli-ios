@@ -29,6 +29,7 @@ final class KeyboardController {
     var inputModeSwitcher: (@MainActor () -> Void)?
     var keyboardDismisser: (@MainActor () -> Void)?
     var liveTranscript = ""
+    var inputLevel = 0.0
     private var lastInsertedCharacterCount = 0
     private var canUseRuntimeStart = false
 
@@ -117,6 +118,14 @@ final class KeyboardController {
 
     var showsActiveWaveform: Bool {
         [.requested, .recording, .transcribing].contains(dictationPhase)
+    }
+
+    var waveformMode: MuesliFloatingWaveformMode {
+        dictationPhase == .recording ? .level : .waiting
+    }
+
+    var waveformLevel: Double? {
+        dictationPhase == .recording ? inputLevel : nil
     }
 
     var canCancelActiveDictation: Bool {
@@ -416,6 +425,7 @@ final class KeyboardController {
                 recoveryRequestID = nil
                 liveTranscript = ""
                 dictationPhase = .idle
+                inputLevel = 0
                 statusText = hasLatestDictation ? "Latest ready" : "Ready"
             }
             return
@@ -449,6 +459,7 @@ final class KeyboardController {
             dictationPhase = .idle
             activeRequestID = nil
             liveTranscript = ""
+            inputLevel = 0
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         case .startRequested:
             dictationPhase = .requested
@@ -464,20 +475,25 @@ final class KeyboardController {
             statusText = handoffState.message ?? "Stopping"
         case .stopAcknowledged:
             dictationPhase = .transcribing
+            inputLevel = 0
             statusText = handoffState.message ?? "Finalizing audio"
         case .audioSaved:
             dictationPhase = .transcribing
+            inputLevel = 0
             statusText = handoffState.message ?? "Audio saved"
         case .transcribingStarted:
             dictationPhase = .transcribing
+            inputLevel = 0
             statusText = handoffState.message ?? "Transcribing"
         case .resultReady:
             dictationPhase = .transcribing
+            inputLevel = 0
             statusText = handoffState.message ?? "Inserting"
         case .inserted:
             dictationPhase = .finished
             activeRequestID = nil
             liveTranscript = ""
+            inputLevel = 0
             statusText = "Inserted"
         case .recoveryRequested:
             dictationPhase = .failed
@@ -489,18 +505,21 @@ final class KeyboardController {
             activeRequestID = nil
             recoveryRequestID = nil
             liveTranscript = ""
+            inputLevel = 0
             statusText = handoffState.message ?? "Voice note failed"
         case .cancelled:
             dictationPhase = .idle
             activeRequestID = nil
             recoveryRequestID = nil
             liveTranscript = ""
+            inputLevel = 0
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         }
     }
 
     private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
         let isRecent = runtimeStatus.map { Date().timeIntervalSince($0.updatedAt) < 8 } ?? false
+        inputLevel = isRecent ? (runtimeStatus?.inputLevel ?? 0) : 0
         canUseRuntimeStart = runtimeStatus?.isActive == true
             && isRecent
             && runtimeStatus?.supportsBackgroundStart == true

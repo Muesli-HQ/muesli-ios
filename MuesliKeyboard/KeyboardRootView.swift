@@ -122,9 +122,9 @@ struct KeyboardRootView: View {
 
             ZStack {
                 MuesliInlineWaveformView(
-                    mode: .waiting,
+                    mode: controller.waveformMode,
                     color: activeStatusColor,
-                    level: nil,
+                    level: controller.waveformLevel,
                     barCount: 32,
                     spacing: 2.5
                 )
@@ -164,10 +164,8 @@ struct KeyboardRootView: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                Spacer(minLength: MuesliTheme.spacing16)
-
                 primaryActionButton(isProminent: false)
-                    .frame(maxWidth: 132)
+                    .frame(maxWidth: .infinity)
             }
         }
     }
@@ -199,7 +197,7 @@ struct KeyboardRootView: View {
                 KeyboardTextKey("return") { controller.insertReturn() }
                     .frame(maxWidth: 96)
 
-                bottomMicKey
+                KeyboardTextKey(":") { controller.insertTextKey(":") }
                     .frame(maxWidth: 58)
             }
         }
@@ -224,32 +222,6 @@ struct KeyboardRootView: View {
             }
             .buttonStyle(.plain)
             .disabled(controller.isPrimaryButtonDisabled)
-        }
-    }
-
-    @ViewBuilder
-    private var bottomMicKey: some View {
-        if controller.opensMuesliFromPrimaryButton, let launchURL = controller.launchURL {
-            Link(destination: launchURL) {
-                KeyboardTextKeyLabel(systemImage: "mic.fill")
-            }
-            .simultaneousGesture(TapGesture().onEnded {
-                controller.primaryLaunchAction()
-            })
-            .buttonStyle(.plain)
-            .muesliKeyboardKeySurface(tint: MuesliTheme.recording)
-            .disabled(controller.isPrimaryButtonDisabled)
-            .accessibilityLabel(primaryActionTitle)
-        } else {
-            Button {
-                controller.primaryAction()
-            } label: {
-                KeyboardTextKeyLabel(systemImage: "mic.fill")
-            }
-            .buttonStyle(.plain)
-            .muesliKeyboardKeySurface(tint: MuesliTheme.recording)
-            .disabled(controller.isPrimaryButtonDisabled)
-            .accessibilityLabel(primaryActionTitle)
         }
     }
 

@@ -17,6 +17,12 @@ final class KeyboardViewController: UIInputViewController {
                 self?.textDocumentProxy.deleteBackward()
             }
         }
+        controller.inputModeSwitcher = { [weak self] in
+            self?.advanceToNextInputMode()
+        }
+        controller.keyboardDismisser = { [weak self] in
+            self?.dismissKeyboard()
+        }
         let rootView = KeyboardRootView(controller: controller)
         let hostingController = UIHostingController(rootView: rootView)
         self.hostingController = hostingController
@@ -29,7 +35,7 @@ final class KeyboardViewController: UIInputViewController {
             hostingController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             hostingController.view.topAnchor.constraint(equalTo: view.topAnchor),
             hostingController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            view.heightAnchor.constraint(greaterThanOrEqualToConstant: 216)
+            view.heightAnchor.constraint(greaterThanOrEqualToConstant: 292)
         ])
         hostingController.didMove(toParent: self)
     }

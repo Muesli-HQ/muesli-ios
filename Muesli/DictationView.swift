@@ -12,7 +12,6 @@ struct DictationView: View {
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
-    @State private var focusedHistoryResultID: UUID?
     @State private var previewInputLevel = 0.0
 
     var body: some View {
@@ -30,9 +29,6 @@ struct DictationView: View {
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
-            .onPreferenceChange(DictationHistoryRowOffsetPreferenceKey.self) { offsets in
-                updateFocusedHistoryResult(using: offsets)
-            }
             .confirmationDialog(
                 "Turn on private iCloud sync?",
                 isPresented: $isSyncSetupPromptPresented,
@@ -269,13 +265,11 @@ struct DictationView: View {
                     ForEach(filteredHistory) { result in
                         let session = coordinator.recordingSession(for: result)
                         let hasRetainedAudio = session?.keepsAudioRecording == true && coordinator.audioFileURL(for: result) != nil
-                        let isFocused = result.id == effectiveFocusedHistoryResultID
                         if hasRetainedAudio {
                             NavigationLink(value: result.id) {
                                 DictationHistoryRow(
                                     result: result,
                                     hasRetainedAudio: true,
-                                    isFocused: isFocused,
                                     onCopy: { coordinator.copyToClipboard(result) },
                                     onDelete: { coordinator.deleteDictation(result) }
                                 )
@@ -285,7 +279,6 @@ struct DictationView: View {
                             DictationHistoryRow(
                                 result: result,
                                 hasRetainedAudio: false,
-                                isFocused: isFocused,
                                 onCopy: { coordinator.copyToClipboard(result) },
                                 onDelete: { coordinator.deleteDictation(result) }
                             )
@@ -297,7 +290,6 @@ struct DictationView: View {
             .padding(.horizontal, MuesliTheme.spacing20)
             .padding(.bottom, 112)
         }
-        .coordinateSpace(name: DictationScrollCoordinateSpace.name)
         .refreshable {
             triggerHomeSync()
         }
@@ -315,10 +307,6 @@ struct DictationView: View {
         #endif
 
         return coordinator.dictationHistory
-    }
-
-    private var effectiveFocusedHistoryResultID: UUID? {
-        focusedHistoryResultID ?? filteredHistory.first?.id
     }
 
     private var shouldUseMockDictations: Bool {
@@ -484,32 +472,13 @@ struct DictationView: View {
             let phrase = (sin(tick * 0.82) + 1) * 0.28
             let syllable = (sin(tick * 2.7) + 1) * 0.18
             let transient = (sin(tick * 7.1) + 1) * 0.08
-            let pause = sin(tick * 0.31) > 0.72 ? 0.12 : 1.0
-            previewInputLevel = min(0.95, max(0.02, (0.08 + phrase + syllable + transient) * pause))
+            if sin(tick * 0.31) > 0.72 {
+                previewInputLevel = 0.02
+            } else {
+                previewInputLevel = min(0.95, max(0.02, 0.08 + phrase + syllable + transient))
+            }
             tick += 0.18
             try? await Task.sleep(for: .milliseconds(55))
-        }
-    }
-
-    private func updateFocusedHistoryResult(using offsets: [UUID: CGFloat]) {
-        guard !filteredHistory.isEmpty else {
-            focusedHistoryResultID = nil
-            return
-        }
-
-        let visibleTop: CGFloat = 0
-        let bestCandidate = filteredHistory
-            .compactMap { result -> (id: UUID, distance: CGFloat)? in
-                guard let minY = offsets[result.id] else { return nil }
-                guard minY >= -44 else { return nil }
-                return (result.id, abs(minY - visibleTop))
-            }
-            .min { lhs, rhs in lhs.distance < rhs.distance }
-
-        if let bestCandidate, focusedHistoryResultID != bestCandidate.id {
-            withAnimation(.snappy(duration: 0.24)) {
-                focusedHistoryResultID = bestCandidate.id
-            }
         }
     }
 
@@ -623,18 +592,6 @@ private struct ICloudSyncStatusButton: View {
         .disabled(isSyncing)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint("Double tap to sync text with your Mac through private iCloud.")
-    }
-}
-
-private enum DictationScrollCoordinateSpace {
-    static let name = "dictationScroll"
-}
-
-private struct DictationHistoryRowOffsetPreferenceKey: PreferenceKey {
-    static let defaultValue: [UUID: CGFloat] = [:]
-
-    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 
@@ -797,7 +754,6 @@ private struct DictationSourceFilterPicker: View {
 private struct DictationHistoryRow: View {
     let result: DictationResult
     let hasRetainedAudio: Bool
-    let isFocused: Bool
     let onCopy: () -> Void
     let onDelete: () -> Void
     @State private var isConfirmingDelete = false
@@ -817,32 +773,20 @@ private struct DictationHistoryRow: View {
                 perform: onCopy
             )
         ) {
-            MuesliSurface(
-                cornerRadius: isFocused ? MuesliTheme.cornerXL : MuesliTheme.cornerMedium,
-                tint: isFocused ? origin.accentColor : nil
-            ) {
+            MuesliSurface {
                 HStack(spacing: 0) {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(origin.accentColor)
-                        .frame(width: isFocused ? 4 : 3)
-                        .padding(.vertical, isFocused ? MuesliTheme.spacing16 : MuesliTheme.spacing12)
+                        .frame(width: 3)
+                        .padding(.vertical, MuesliTheme.spacing12)
 
                     rowContent
-                        .padding(.vertical, isFocused ? MuesliTheme.spacing20 : MuesliTheme.spacing16)
-                        .padding(.leading, isFocused ? MuesliTheme.spacing16 : MuesliTheme.spacing12)
-                        .padding(.trailing, isFocused ? MuesliTheme.spacing20 : MuesliTheme.spacing16)
+                        .padding(.vertical, MuesliTheme.spacing16)
+                        .padding(.leading, MuesliTheme.spacing12)
+                        .padding(.trailing, MuesliTheme.spacing16)
                 }
             }
         }
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: DictationHistoryRowOffsetPreferenceKey.self,
-                    value: [result.id: proxy.frame(in: .named(DictationScrollCoordinateSpace.name)).minY]
-                )
-            }
-        }
-        .animation(.snappy(duration: 0.24), value: isFocused)
         .confirmationDialog(
             "Delete this voice note?",
             isPresented: $isConfirmingDelete,
@@ -856,7 +800,7 @@ private struct DictationHistoryRow: View {
     }
 
     private var rowContent: some View {
-        VStack(alignment: .leading, spacing: isFocused ? MuesliTheme.spacing16 : MuesliTheme.spacing12) {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                     Text(result.createdAt, formatter: Self.dateFormatter)
@@ -881,19 +825,13 @@ private struct DictationHistoryRow: View {
             }
 
             Text(result.text)
-                .font(transcriptFont)
+                .font(.system(size: 17, weight: .regular))
                 .foregroundStyle(MuesliTheme.textPrimary)
-                .lineSpacing(isFocused ? 4 : 1)
+                .lineSpacing(2)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var transcriptFont: Font {
-        isFocused
-            ? .system(size: 20, weight: .regular)
-            : MuesliTheme.body()
     }
 
     private var origin: DictationSyncOrigin {

@@ -121,7 +121,7 @@ struct MuesliInlineWaveformView: View {
     }
 
     private func barHeight(sample: CGFloat, maxHeight: CGFloat) -> CGFloat {
-        let minHeight: CGFloat = 4
+        let minHeight: CGFloat = 1.5
         let maxBarHeight = max(minHeight, maxHeight)
         return min(maxBarHeight, max(minHeight, minHeight + (maxBarHeight - minHeight) * sample))
     }
@@ -166,19 +166,18 @@ struct MuesliInlineWaveformView: View {
         guard force || liveSamples.isEmpty else { return }
 
         let count = max(48, barCount * 2)
-        liveSamples = (0..<count).map { index in
-            let base = basePattern[index % basePattern.count]
-            return 0.07 + base * 0.08
-        }
+        liveSamples = Array(repeating: 0, count: count)
     }
 
     private func appendLiveSample(_ rawLevel: Double) {
         guard mode == .level else { return }
 
         let normalized = CGFloat(min(max(rawLevel, 0), 1))
-        let shaped = pow(normalized, 0.72)
+        let noiseFloor: CGFloat = 0.26
+        let gatedLevel = max(0, (normalized - noiseFloor) / (1 - noiseFloor))
+        let shaped = pow(gatedLevel, 0.72)
         let texture = CGFloat(0.90 + 0.16 * sin(Double(sampleSequence) * 1.73))
-        let sample = min(0.98, max(0.06, (0.07 + shaped * 0.88) * texture))
+        let sample = gatedLevel <= 0.02 ? 0 : min(0.98, max(0.01, shaped * 0.92 * texture))
         let maxSamples = max(48, barCount * 2) * 3
 
         sampleSequence += 1

@@ -205,7 +205,7 @@ struct DictationView: View {
     private var microphoneMenu: some View {
         Menu {
             Section("Recording Microphone") {
-                ForEach(AudioInputRouteManager.availablePreferenceOptions()) { option in
+                ForEach(microphonePreferenceOptions) { option in
                     Button {
                         microphonePreference = option.rawValue
                         coordinator.refreshAudioInputRoute()
@@ -236,6 +236,13 @@ struct DictationView: View {
         .disabled(coordinator.isRecording)
         .accessibilityLabel("Recording microphone")
         .accessibilityValue(coordinator.audioInputRouteText)
+    }
+
+    private var microphonePreferenceOptions: [RecordingMicrophonePreference] {
+        let options = AudioInputRouteManager.availablePreferenceOptions()
+        let currentPreference = RecordingMicrophonePreference(rawValue: microphonePreference) ?? .automatic
+        guard !options.contains(currentPreference) else { return options }
+        return options + [currentPreference]
     }
 
     private var keyboardShortcutRow: some View {

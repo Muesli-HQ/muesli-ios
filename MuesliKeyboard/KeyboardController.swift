@@ -195,9 +195,8 @@ final class KeyboardController {
     }
 
     func startDictation() {
-        guard !hasPendingCancelCommand() else {
-            statusText = "Cancelling"
-            return
+        if hasPendingCancelCommand() {
+            try? store.clearPendingCommand()
         }
 
         MuesliHaptics.dictationStart()

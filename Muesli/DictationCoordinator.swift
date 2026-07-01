@@ -2184,8 +2184,31 @@ final class DictationCoordinator {
                 guard let self else { return }
                 self.refreshKeyboardRuntimeHeartbeat()
 
-                if let command = try? self.store.pendingCommand(), command.action == .start {
+                if let command = try? self.store.pendingCommand() {
                     try? self.store.clearPendingCommand()
+                    switch command.action {
+                    case .start:
+                        break
+                    case .stop:
+                        self.saveKeyboardHandoff(
+                            requestID: command.requestID,
+                            phase: .stopAcknowledged,
+                            message: "Stopping"
+                        )
+                        self.stopRecording(requestID: command.requestID)
+                        try? await Task.sleep(for: .milliseconds(500))
+                        continue
+                    case .cancel:
+                        self.saveKeyboardHandoff(
+                            requestID: command.requestID,
+                            phase: .cancelled,
+                            message: "Cancelled"
+                        )
+                        self.cancelRecording(requestID: command.requestID)
+                        try? await Task.sleep(for: .milliseconds(500))
+                        continue
+                    }
+
                     let pendingRequest = try? self.store.pendingRequest()
                     let request = pendingRequest?.id == command.requestID
                         ? pendingRequest!

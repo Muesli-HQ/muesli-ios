@@ -315,15 +315,12 @@ struct MeetingsView: View {
 
     private var meetingPrimaryButtonBackground: some View {
         RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
-            .fill(coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructive.opacity(0.32) : statusColor)
+            .fill(coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructive : statusColor)
     }
 
     private var meetingPrimaryButtonBorder: some View {
         RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
-            .strokeBorder(
-                coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructive.opacity(0.34) : .clear,
-                lineWidth: 1
-            )
+            .strokeBorder(.clear, lineWidth: 1)
     }
 
     private func copyText(for session: RecordingSession) -> String {

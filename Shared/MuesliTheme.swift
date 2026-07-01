@@ -179,6 +179,7 @@ struct MuesliGlassGroup<Content: View>: View {
     }
 
     var body: some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             GlassEffectContainer(spacing: spacing) {
                 content
@@ -186,6 +187,9 @@ struct MuesliGlassGroup<Content: View>: View {
         } else {
             content
         }
+        #else
+        content
+        #endif
     }
 }
 
@@ -220,31 +224,41 @@ private struct MuesliGlassSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             content
                 .background(tintBackground, in: shape)
-                .glassEffect(glassEffect, in: .rect(cornerRadius: cornerRadius))
+                .glassEffect(glassEffect(), in: .rect(cornerRadius: cornerRadius))
                 .overlay(shape.strokeBorder(MuesliTheme.glassHighlight, lineWidth: 0.7))
                 .shadow(color: MuesliTheme.glassShadow, radius: 10, x: 0, y: 5)
         } else {
-            content
-                .background {
-                    shape.fill(.regularMaterial)
-                    shape.fill(tintBackground)
-                }
-                .overlay(shape.strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
-                .shadow(color: MuesliTheme.glassShadow, radius: 8, x: 0, y: 4)
+            fallback(content: content, shape: shape)
         }
+        #else
+        fallback(content: content, shape: shape)
+        #endif
     }
 
     private var tintBackground: Color {
         tint?.opacity(0.08) ?? MuesliTheme.backgroundRaised.opacity(0.74)
     }
 
+    #if compiler(>=6.2)
     @available(iOS 26.0, *)
-    private var glassEffect: Glass {
+    private func glassEffect() -> Glass {
         let base = Glass.regular.tint(tint?.opacity(0.18) ?? .clear)
         return isInteractive ? base.interactive() : base
+    }
+    #endif
+
+    private func fallback(content: Content, shape: RoundedRectangle) -> some View {
+        content
+            .background {
+                shape.fill(.regularMaterial)
+                shape.fill(tintBackground)
+            }
+            .overlay(shape.strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
+            .shadow(color: MuesliTheme.glassShadow, radius: 8, x: 0, y: 4)
     }
 }
 
@@ -255,6 +269,7 @@ private struct MuesliGlassButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             content
                 .background((tint ?? MuesliTheme.accent).opacity(0.10), in: shape)
@@ -262,14 +277,21 @@ private struct MuesliGlassButtonModifier: ViewModifier {
                 .overlay(shape.strokeBorder((tint ?? MuesliTheme.accent).opacity(0.24), lineWidth: 1))
                 .contentShape(shape)
         } else {
-            content
-                .background {
-                    shape.fill(.ultraThinMaterial)
-                    shape.fill((tint ?? MuesliTheme.accent).opacity(0.12))
-                }
-                .overlay(shape.strokeBorder((tint ?? MuesliTheme.accent).opacity(0.24), lineWidth: 1))
-                .contentShape(shape)
+            fallback(content: content, shape: shape)
         }
+        #else
+        fallback(content: content, shape: shape)
+        #endif
+    }
+
+    private func fallback(content: Content, shape: RoundedRectangle) -> some View {
+        content
+            .background {
+                shape.fill(.ultraThinMaterial)
+                shape.fill((tint ?? MuesliTheme.accent).opacity(0.12))
+            }
+            .overlay(shape.strokeBorder((tint ?? MuesliTheme.accent).opacity(0.24), lineWidth: 1))
+            .contentShape(shape)
     }
 }
 

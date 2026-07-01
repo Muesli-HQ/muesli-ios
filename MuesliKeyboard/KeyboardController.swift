@@ -60,7 +60,9 @@ final class KeyboardController {
             "arrow.up.forward.app"
         case .waitingForMuesli:
             "hourglass"
-        case .openMuesliRequested, .stop:
+        case .openMuesliRequested:
+            "arrow.up.forward.app"
+        case .stop:
             "stop.fill"
         case .transcribing:
             "waveform"

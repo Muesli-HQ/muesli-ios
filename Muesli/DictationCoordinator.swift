@@ -160,11 +160,9 @@ final class DictationCoordinator {
         }
     }
 
-    deinit {
-        MainActor.assumeIsolated {
-            if let audioRouteObserver {
-                NotificationCenter.default.removeObserver(audioRouteObserver)
-            }
+    isolated deinit {
+        if let audioRouteObserver {
+            NotificationCenter.default.removeObserver(audioRouteObserver)
         }
     }
 

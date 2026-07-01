@@ -135,7 +135,7 @@ struct ModelsView: View {
         case .ready:
             MuesliTheme.success
         case .failed:
-            MuesliTheme.recording
+            MuesliTheme.destructive
         case .downloading, .preparing:
             MuesliTheme.transcribing
         case .idle:

@@ -113,7 +113,7 @@ struct DictionarySettingsContent: View {
                 if let dictionaryError {
                     Text(dictionaryError)
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.destructive)
                 }
 
                 if customWords.isEmpty {
@@ -243,8 +243,8 @@ private struct CustomWordRow: View {
                 Image(systemName: "trash")
                     .font(.system(size: 15, weight: .semibold))
                     .frame(width: 36, height: 36)
-                    .foregroundStyle(MuesliTheme.recording)
-                    .background(MuesliTheme.recording.opacity(0.12))
+                    .foregroundStyle(MuesliTheme.destructive)
+                    .background(MuesliTheme.destructive.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }

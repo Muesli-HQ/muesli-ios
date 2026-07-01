@@ -301,7 +301,7 @@ private enum ScanResult {
         case .readyToEnable:
             return MuesliTheme.accent
         case .needsICloud:
-            return MuesliTheme.recording
+            return MuesliTheme.destructive
         }
     }
 

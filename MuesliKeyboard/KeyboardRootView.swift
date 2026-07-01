@@ -114,9 +114,7 @@ struct KeyboardRootView: View {
     }
 
     private var isPrimaryStopButton: Bool {
-        !controller.isPrimaryButtonDisabled
-            && controller.primaryButtonTitle == "Stop"
-            && controller.primaryButtonIcon == "stop.fill"
+        controller.stylesPrimaryButtonAsStop
     }
 
     private var primaryButtonCircleFill: Color {

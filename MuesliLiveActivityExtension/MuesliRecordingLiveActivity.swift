@@ -114,6 +114,8 @@ private func color(for accent: String) -> Color {
         .red
     case "orange":
         .orange
+    case "green":
+        .green
     default:
         .blue
     }

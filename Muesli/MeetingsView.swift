@@ -248,7 +248,7 @@ struct MeetingsView: View {
                             leadingAction: .init(
                                 title: "Delete",
                                 systemImage: "trash",
-                                tint: MuesliTheme.recording,
+                                tint: MuesliTheme.destructive,
                                 perform: { sessionPendingDelete = session }
                             ),
                             trailingAction: .init(
@@ -409,7 +409,7 @@ private struct MeetingSessionRow: View {
     }
 
     private var previewColor: Color {
-        session.errorMessage == nil ? MuesliTheme.textSecondary : MuesliTheme.recording
+        session.errorMessage == nil ? MuesliTheme.textSecondary : MuesliTheme.destructive
     }
 
     fileprivate static let dateFormatter: DateFormatter = {
@@ -620,8 +620,8 @@ private struct MeetingSessionDetailView: View {
             .font(MuesliTheme.headline())
             .frame(maxWidth: .infinity)
             .frame(height: 44)
-            .foregroundStyle(MuesliTheme.recording)
-            .background(MuesliTheme.recording.opacity(0.12))
+            .foregroundStyle(MuesliTheme.destructive)
+            .background(MuesliTheme.destructive.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
@@ -644,7 +644,7 @@ private struct MeetingSessionDetailView: View {
                 } else if let error = session.errorMessage {
                     Text(error)
                         .font(MuesliTheme.body())
-                        .foregroundStyle(MuesliTheme.recording)
+                        .foregroundStyle(MuesliTheme.destructive)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text(session.phase.description)
@@ -997,7 +997,7 @@ struct SavedAudioPlayerView: View {
             if let playbackError {
                 Text(playbackError)
                     .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.recording)
+                    .foregroundStyle(MuesliTheme.destructive)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -1375,8 +1375,10 @@ private extension RecordingSessionPhase {
 
     var tint: Color {
         switch self {
-        case .recording, .failed, .cancelled:
+        case .recording:
             MuesliTheme.recording
+        case .failed, .cancelled:
+            MuesliTheme.destructive
         case .transcriptionQueued, .transcribing:
             MuesliTheme.transcribing
         case .completed:

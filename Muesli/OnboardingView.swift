@@ -420,6 +420,8 @@ struct OnboardingView: View {
                                     lineWidth: 1
                                 )
                         )
+                        .padding(.vertical, 5)
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(isComplete)
@@ -706,7 +708,7 @@ struct OnboardingView: View {
         case .failed:
             Label("Model setup needs another try", systemImage: "exclamationmark.triangle.fill")
                 .font(MuesliTheme.captionMedium())
-                .foregroundStyle(MuesliTheme.recording)
+                .foregroundStyle(MuesliTheme.destructive)
         }
     }
 
@@ -774,7 +776,7 @@ struct OnboardingView: View {
                     if let error = coordinator.onboardingTestError {
                         Text(error)
                             .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.recording)
+                            .foregroundStyle(MuesliTheme.destructive)
                     }
 
                     if coordinator.modelPreparation.isReady {
@@ -1392,7 +1394,7 @@ struct OnboardingView: View {
         case .ready:
             MuesliTheme.success
         case .failed:
-            MuesliTheme.recording
+            MuesliTheme.destructive
         case .preparing:
             MuesliTheme.transcribing
         default:
@@ -1442,7 +1444,7 @@ private struct CompactModelPreparationIndicator: View {
             case .failed:
                 Image(systemName: "exclamationmark")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(MuesliTheme.recording)
+                    .foregroundStyle(MuesliTheme.destructive)
             case .idle:
                 EmptyView()
             }

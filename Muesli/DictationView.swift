@@ -121,7 +121,7 @@ struct DictationView: View {
                 if isWaveformActive {
                     VStack(spacing: MuesliTheme.spacing8) {
                         MuesliInlineWaveformView(
-                            mode: isPreviewWaveformActive ? .level : (coordinator.isRecording ? .level : .waiting),
+                            mode: isListeningWaveformActive ? .level : .waiting,
                             color: statusColor,
                             level: waveformLevel,
                             barCount: 24
@@ -130,7 +130,7 @@ struct DictationView: View {
                         .frame(height: 54)
                         .padding(.horizontal, MuesliTheme.spacing16)
 
-                        Text(isPreviewWaveformActive || coordinator.isRecording ? "Listening" : "Transcribing")
+                        Text(isListeningWaveformActive ? "Listening" : "Transcribing")
                             .font(MuesliTheme.captionMedium())
                             .foregroundStyle(MuesliTheme.textSecondary)
                     }
@@ -311,27 +311,11 @@ struct DictationView: View {
     }
 
     private var shouldUseMockDictations: Bool {
-        #if DEBUG
-        #if targetEnvironment(simulator)
-        return ProcessInfo.processInfo.arguments.contains("--muesli-mock-dictations")
-        #else
-        return false
-        #endif
-        #else
-        return false
-        #endif
+        Self.hasDebugSimulatorLaunchArgument("--muesli-mock-dictations")
     }
 
     private var isPreviewWaveformActive: Bool {
-        #if DEBUG
-        #if targetEnvironment(simulator)
-        return ProcessInfo.processInfo.arguments.contains("--muesli-preview-waveform")
-        #else
-        return false
-        #endif
-        #else
-        return false
-        #endif
+        Self.hasDebugSimulatorLaunchArgument("--muesli-preview-waveform")
     }
 
     private var waveformLevel: Double? {
@@ -342,11 +326,7 @@ struct DictationView: View {
     }
 
     private var shouldHideKeyboardSetupRowForMockPreview: Bool {
-        #if DEBUG
-        return shouldUseMockDictations
-        #else
-        return false
-        #endif
+        shouldUseMockDictations
     }
 
     private var emptyHistory: some View {
@@ -392,7 +372,11 @@ struct DictationView: View {
     }
 
     private var isWaveformActive: Bool {
-        isPreviewWaveformActive || coordinator.isRecording || coordinator.statusText == "Transcribing"
+        isListeningWaveformActive || isTranscribing
+    }
+
+    private var isListeningWaveformActive: Bool {
+        isPreviewWaveformActive || coordinator.isRecording
     }
 
     private var isTranscribing: Bool {
@@ -481,6 +465,14 @@ struct DictationView: View {
             tick += 0.18
             try? await Task.sleep(for: .milliseconds(55))
         }
+    }
+
+    private static func hasDebugSimulatorLaunchArgument(_ argument: String) -> Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.arguments.contains(argument)
+        #else
+        false
+        #endif
     }
 
     #if DEBUG
@@ -633,6 +625,7 @@ private struct ICloudSyncStatusButton: View {
             .foregroundStyle(tint)
             .frame(width: 38, height: 38)
             .muesliGlassButton(cornerRadius: 19, tint: tint)
+            .padding(3)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -788,6 +781,9 @@ private struct DictationSourceFilterPicker: View {
                         .frame(height: 32)
                         .background(selection == filter ? MuesliTheme.accent.opacity(0.13) : Color.clear)
                         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Show \(filter.title.lowercased()) voice notes")
@@ -810,7 +806,7 @@ private struct DictationHistoryRow: View {
             leadingAction: .init(
                 title: "Delete",
                 systemImage: "trash",
-                tint: MuesliTheme.recording,
+                tint: MuesliTheme.destructive,
                 perform: { isConfirmingDelete = true }
             ),
             trailingAction: .init(

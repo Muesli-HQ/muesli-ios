@@ -228,8 +228,10 @@ private struct MuesliGlassSurfaceModifier: ViewModifier {
                 .shadow(color: MuesliTheme.glassShadow, radius: 10, x: 0, y: 5)
         } else {
             content
-                .background(.regularMaterial, in: shape)
-                .overlay(shape.fill(tintBackground))
+                .background {
+                    shape.fill(.regularMaterial)
+                    shape.fill(tintBackground)
+                }
                 .overlay(shape.strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
                 .shadow(color: MuesliTheme.glassShadow, radius: 8, x: 0, y: 4)
         }
@@ -261,8 +263,10 @@ private struct MuesliGlassButtonModifier: ViewModifier {
                 .contentShape(shape)
         } else {
             content
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(shape.fill((tint ?? MuesliTheme.accent).opacity(0.12)))
+                .background {
+                    shape.fill(.ultraThinMaterial)
+                    shape.fill((tint ?? MuesliTheme.accent).opacity(0.12))
+                }
                 .overlay(shape.strokeBorder((tint ?? MuesliTheme.accent).opacity(0.24), lineWidth: 1))
                 .contentShape(shape)
         }

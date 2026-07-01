@@ -18,6 +18,9 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     private let stateQueue = DispatchQueue(label: "com.phequals7.muesli.model-background-download")
     private var activePlan: DownloadPlan?
     private var taskBytes: [Int: Int64] = [:]
+    private var activeTaskIDs = Set<Int>()
+    private var failedTaskIDs = Set<Int>()
+    private var failedModelRawValues = Set<String>()
     private var backgroundCompletionHandler: SendableCompletionHandler?
     private var completedModelsDuringBackgroundEvents = Set<String>()
 
@@ -48,10 +51,6 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             return false
         }
 
-        if spec.requiredModelsExist {
-            return false
-        }
-
         let files = try await Self.listFiles(for: spec)
         let missingFiles = files.filter { file in
             !FileManager.default.fileExists(atPath: spec.destinationURL(for: file.localPath).path)
@@ -77,6 +76,9 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
         stateQueue.sync {
             activePlan = plan
             taskBytes = [:]
+            activeTaskIDs = []
+            failedTaskIDs = []
+            failedModelRawValues.remove(model.rawValue)
         }
 
         for file in missingFiles {
@@ -102,6 +104,7 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             task.taskDescription = file.taskDescription(model: model)
             stateQueue.sync {
                 taskBytes[task.taskIdentifier] = 0
+                activeTaskIDs.insert(task.taskIdentifier)
             }
             task.resume()
         }
@@ -158,6 +161,7 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
         var snapshot: (LocalTranscriptionModel, Double)?
         stateQueue.sync {
             guard let plan = activePlan,
+                  activeTaskIDs.contains(taskIdentifier),
                   let model = LocalTranscriptionModel(rawValue: plan.modelRawValue)
             else {
                 snapshot = nil
@@ -198,11 +202,18 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
 
         stateQueue.async {
             if self.activePlan == nil {
+                guard !self.failedModelRawValues.contains(file.model.rawValue) else { return }
                 self.completedModelsDuringBackgroundEvents.insert(file.model.rawValue)
-            } else {
-                self.activePlan?.pendingCount -= 1
-                self.taskBytes[task.taskIdentifier] = max(self.taskBytes[task.taskIdentifier] ?? 0, file.size)
+                return
             }
+
+            guard self.activeTaskIDs.remove(task.taskIdentifier) != nil,
+                  self.failedTaskIDs.remove(task.taskIdentifier) == nil,
+                  self.activePlan?.modelRawValue == file.model.rawValue
+            else { return }
+
+            self.activePlan?.pendingCount -= 1
+            self.taskBytes[task.taskIdentifier] = max(self.taskBytes[task.taskIdentifier] ?? 0, file.size)
             self.completeIfNeeded()
         }
     }
@@ -211,11 +222,15 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
         guard let plan = activePlan, plan.pendingCount <= 0 else { return }
         activePlan = nil
         taskBytes = [:]
+        activeTaskIDs = []
+        failedTaskIDs = []
         let handler = backgroundCompletionHandler
         backgroundCompletionHandler = nil
 
         guard let model = LocalTranscriptionModel(rawValue: plan.modelRawValue) else {
-            handler?()
+            Task { @MainActor in
+                handler?()
+            }
             return
         }
 
@@ -226,18 +241,37 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     }
 
     private func fail(_ task: URLSessionTask?, error: Error) {
-        let model = task?.taskDescription.flatMap { ModelDownloadFile(taskDescription: $0)?.model }
-            ?? activePlan.flatMap { LocalTranscriptionModel(rawValue: $0.modelRawValue) }
-        let handler: SendableCompletionHandler? = stateQueue.sync {
+        let taskModel = task?.taskDescription.flatMap { ModelDownloadFile(taskDescription: $0)?.model }
+        let (model, handler): (LocalTranscriptionModel?, SendableCompletionHandler?) = stateQueue.sync {
+            let resolvedModel = taskModel ?? activePlan.flatMap { LocalTranscriptionModel(rawValue: $0.modelRawValue) }
+            if let resolvedModel, failedModelRawValues.contains(resolvedModel.rawValue) {
+                return (nil, nil)
+            }
+            if let task {
+                failedTaskIDs.insert(task.taskIdentifier)
+            }
+            if let resolvedModel {
+                failedModelRawValues.insert(resolvedModel.rawValue)
+            }
             activePlan = nil
             taskBytes = [:]
+            activeTaskIDs = []
             let handler = backgroundCompletionHandler
             backgroundCompletionHandler = nil
-            return handler
+            return (resolvedModel, handler)
+        }
+
+        session.getAllTasks { tasks in
+            let tasksToCancel = tasks.filter { task in
+                task.taskDescription.flatMap(ModelDownloadFile.init(taskDescription:))?.model == model
+            }
+            tasksToCancel.forEach { $0.cancel() }
         }
 
         guard let model else {
-            handler?()
+            Task { @MainActor in
+                handler?()
+            }
             return
         }
 
@@ -290,6 +324,7 @@ extension ModelBackgroundDownloadService: URLSessionDownloadDelegate {
             let handler = self.backgroundCompletionHandler
             let completedModels = self.completedModelsDuringBackgroundEvents.compactMap(LocalTranscriptionModel.init(rawValue:))
             self.completedModelsDuringBackgroundEvents = []
+            completedModels.forEach { self.failedModelRawValues.remove($0.rawValue) }
             self.backgroundCompletionHandler = nil
             DispatchQueue.main.async {
                 completedModels.forEach { model in
@@ -397,12 +432,6 @@ private struct ModelDownloadSpec {
 
     var repoRoot: URL {
         modelsRoot.appendingPathComponent(repoFolderName, isDirectory: true)
-    }
-
-    var requiredModelsExist: Bool {
-        requiredModels.allSatisfy {
-            FileManager.default.fileExists(atPath: repoRoot.appendingPathComponent($0).path)
-        }
     }
 
     func destinationURL(for localPath: String) -> URL {

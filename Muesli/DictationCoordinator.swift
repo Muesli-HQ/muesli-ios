@@ -1469,6 +1469,21 @@ final class DictationCoordinator {
                     }
                     text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
                 }
+                guard !isRecordingSessionCancelled(requestID: request.id) else {
+                    if startedFromKeyboard {
+                        saveKeyboardHandoff(requestID: request.id, phase: .cancelled, message: "Cancelled")
+                        saveKeyboardRuntimeStatus(
+                            isActive: isKeyboardSessionArmed,
+                            activeRequestID: nil,
+                            phase: .idle,
+                            message: isKeyboardSessionArmed ? "Keyboard session ready" : "Ready",
+                            supportsBackgroundStart: isKeyboardSessionArmed
+                        )
+                    }
+                    try? store.clearPendingRequest()
+                    try? store.saveStatus(.idle)
+                    return
+                }
                 if isKeyboardSessionArmed {
                     try? await keyboardSessionKeeper.start()
                     keyboardSessionStatusText = "Transcribing"
@@ -2385,7 +2400,23 @@ final class DictationCoordinator {
     }
 
     private func cancelRecording(requestID: UUID) {
-        guard activeRequest?.id == requestID else { return }
+        guard activeRequest?.id == requestID else {
+            if let pendingRequest = try? store.pendingRequest(), pendingRequest.id == requestID {
+                try? store.clearPendingRequest()
+            }
+            if activeRequest == nil {
+                try? store.saveStatus(.idle)
+                saveKeyboardRuntimeStatus(
+                    isActive: isKeyboardSessionArmed,
+                    activeRequestID: nil,
+                    phase: .idle,
+                    message: isKeyboardSessionArmed ? "Keyboard session ready" : "Ready",
+                    supportsBackgroundStart: isKeyboardSessionArmed
+                )
+            }
+            saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
+            return
+        }
         isRecording = false
         stopMetering()
         stopRecordingTimer()
@@ -2422,6 +2453,19 @@ final class DictationCoordinator {
         try? store.saveStatus(.idle)
         saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
         clearKeyboardLiveTranscript()
+    }
+
+    private func isRecordingSessionCancelled(requestID: UUID) -> Bool {
+        if activeSession?.requestID == requestID, activeSession?.phase == .cancelled {
+            return true
+        }
+
+        do {
+            guard let session = try store.recordingSession(requestID: requestID) else { return false }
+            return session.phase == .cancelled
+        } catch {
+            return false
+        }
     }
 
     private func cleanupRealtimeDictationRecorder() {

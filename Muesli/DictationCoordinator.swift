@@ -39,7 +39,7 @@ final class DictationCoordinator {
     private var meetingChunksDirectory: URL?
     private let meetingVadQueue = DispatchQueue(label: "com.phequals7.muesli.meeting-vad")
     private var transcriptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private var audioRouteObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var audioRouteObserver: NSObjectProtocol?
 
     private var activeRequest: DictationRequest?
     private var activeSession: RecordingSession?
@@ -160,7 +160,7 @@ final class DictationCoordinator {
         }
     }
 
-    isolated deinit {
+    deinit {
         if let audioRouteObserver {
             NotificationCenter.default.removeObserver(audioRouteObserver)
         }

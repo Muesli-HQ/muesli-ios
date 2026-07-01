@@ -9,6 +9,7 @@ struct DictationView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
+    @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
@@ -45,11 +46,16 @@ struct DictationView: View {
             }
             .onAppear {
                 coordinator.refreshHistory()
+                coordinator.refreshAudioInputRoute()
                 refreshKeyboardSetupPromptVisibility()
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
+                coordinator.refreshAudioInputRoute()
                 refreshKeyboardSetupPromptVisibility()
+            }
+            .onChange(of: microphonePreference) { _, _ in
+                coordinator.refreshAudioInputRoute()
             }
             .navigationDestination(for: UUID.self) { resultID in
                 if let result = coordinator.dictationHistory.first(where: { $0.id == resultID }),
@@ -91,7 +97,7 @@ struct DictationView: View {
             tint: statusColor,
             isInteractive: true
         ) {
-            VStack(spacing: MuesliTheme.spacing16) {
+            VStack(spacing: MuesliTheme.spacing12) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                         Text("Voice Note")
@@ -104,17 +110,21 @@ struct DictationView: View {
 
                     Spacer()
 
-                    if coordinator.isRecording {
-                        Text(formatElapsedTime(coordinator.recordingElapsedTime))
-                            .font(MuesliTheme.captionMedium())
-                            .monospacedDigit()
-                            .foregroundStyle(statusColor)
-                            .padding(.horizontal, MuesliTheme.spacing8)
-                            .padding(.vertical, MuesliTheme.spacing4)
-                            .background(statusColor.opacity(0.13))
-                            .clipShape(Capsule())
-                            .accessibilityLabel("Recording elapsed time")
-                            .accessibilityValue(formatElapsedTime(coordinator.recordingElapsedTime))
+                    VStack(alignment: .trailing, spacing: MuesliTheme.spacing8) {
+                        if coordinator.isRecording {
+                            Text(formatElapsedTime(coordinator.recordingElapsedTime))
+                                .font(MuesliTheme.captionMedium())
+                                .monospacedDigit()
+                                .foregroundStyle(statusColor)
+                                .padding(.horizontal, MuesliTheme.spacing8)
+                                .padding(.vertical, MuesliTheme.spacing4)
+                                .background(statusColor.opacity(0.13))
+                                .clipShape(Capsule())
+                                .accessibilityLabel("Recording elapsed time")
+                                .accessibilityValue(formatElapsedTime(coordinator.recordingElapsedTime))
+                        }
+
+                        microphoneMenu
                     }
                 }
 
@@ -177,6 +187,7 @@ struct DictationView: View {
                 .accessibilityLabel(dictationButtonTitle)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier("dictation.primaryButton")
+                .padding(.top, isWaveformActive || shouldShowRealtimeTranscript ? 0 : MuesliTheme.spacing4)
 
                 if shouldShowKeyboardSetupRow && !shouldHideKeyboardSetupRowForMockPreview {
                     keyboardShortcutRow
@@ -188,6 +199,41 @@ struct DictationView: View {
         .task {
             await runPreviewWaveformIfNeeded()
         }
+    }
+
+    private var microphoneMenu: some View {
+        Menu {
+            Section("Recording Microphone") {
+                ForEach(AudioInputRouteManager.availablePreferenceOptions()) { option in
+                    Button {
+                        microphonePreference = option.rawValue
+                        coordinator.refreshAudioInputRoute()
+                    } label: {
+                        Label(
+                            option.label,
+                            systemImage: option.rawValue == microphonePreference ? "checkmark" : "mic"
+                        )
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "mic")
+                Text(coordinator.audioInputRouteText)
+                    .lineLimit(1)
+            }
+            .font(MuesliTheme.captionMedium())
+            .foregroundStyle(MuesliTheme.textSecondary)
+            .padding(.horizontal, MuesliTheme.spacing8)
+            .frame(minHeight: 32)
+            .background(MuesliTheme.surfacePrimary)
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .menuOrder(.fixed)
+        .accessibilityLabel("Recording microphone")
+        .accessibilityValue(coordinator.audioInputRouteText)
     }
 
     private var keyboardShortcutRow: some View {

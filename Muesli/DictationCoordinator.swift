@@ -94,6 +94,7 @@ final class DictationCoordinator {
     var inputLevel = 0.0
     var recordingElapsedTime: TimeInterval = 0
     var statusText = "Ready"
+    var audioInputRouteText = AudioInputRouteManager.currentSnapshot().displayText
     var meetingStatusText = "Ready"
     var lastTranscript = ""
     var liveDictationTranscript = ""
@@ -133,6 +134,7 @@ final class DictationCoordinator {
         }
         #endif
 
+        refreshAudioInputRoute()
         refreshHistory()
         Task {
             await liveActivityController.endAllActivities(
@@ -145,6 +147,10 @@ final class DictationCoordinator {
                 await startKeyboardSessionMode()
             }
         }
+    }
+
+    func refreshAudioInputRoute() {
+        audioInputRouteText = AudioInputRouteManager.currentSnapshot().displayText
     }
 
     func handleOpenURL(_ url: URL) {
@@ -1185,6 +1191,7 @@ final class DictationCoordinator {
                 } else {
                     try recorder.start(outputURL: audioURL)
                 }
+                refreshAudioInputRoute()
                 activeSession = session
                 isRecording = true
                 startRecordingTimer(startedAt: session.startedAt ?? .now)
@@ -1619,6 +1626,7 @@ final class DictationCoordinator {
                 }
 
                 try streamingRecorder.start(chunksDirectory: chunksDirectory, retainedAudioURL: audioURL)
+                refreshAudioInputRoute()
                 vadController.start()
 
                 meetingRecorder = streamingRecorder

@@ -18,18 +18,7 @@ final class AudioRecorder {
             try stop()
         }
 
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [])
-        } catch {
-            throw RecordingError.audioSessionFailed(stage: "category", underlying: error)
-        }
-
-        do {
-            try session.setActive(true)
-        } catch {
-            throw RecordingError.audioSessionFailed(stage: "activation", underlying: error)
-        }
+        _ = try AudioInputRouteManager.configureForRecording(stage: "quick dictation")
 
         let url = preferredOutputURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-\(UUID().uuidString)")

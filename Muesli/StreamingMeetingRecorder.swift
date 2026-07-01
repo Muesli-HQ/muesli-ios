@@ -40,13 +40,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         self.chunksDirectory = chunksDirectory
         try FileManager.default.createDirectory(at: chunksDirectory, withIntermediateDirectories: true)
 
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.mixWithOthers])
-            try session.setActive(true)
-        } catch {
-            throw AudioRecorder.RecordingError.audioSessionFailed(stage: "streaming meeting", underlying: error)
-        }
+        _ = try AudioInputRouteManager.configureForRecording(stage: "streaming recorder")
 
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,

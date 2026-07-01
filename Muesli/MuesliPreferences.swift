@@ -12,6 +12,7 @@ enum MuesliPreferences {
     static let transcriptionModelKey = "muesli.transcription.localModel"
     static let keepDictationAudioRecordingsKey = "muesli.dictations.keepAudioRecordings"
     static let keepMeetingAudioRecordingsKey = "muesli.meetings.keepAudioRecordings"
+    static let recordingMicrophonePreferenceKey = "muesli.recording.microphonePreference"
     static let meetingSummariesEnabledKey = "muesli.meetings.summaries.enabled"
     static let meetingSummaryBackendKey = "muesli.meetings.summary.backend"
     static let openRouterModelKey = "muesli.meetings.summary.openRouter.model"
@@ -69,6 +70,12 @@ enum MuesliPreferences {
 
     static var keepMeetingAudioRecordingsEnabled: Bool {
         bool(for: keepMeetingAudioRecordingsKey, defaultValue: false)
+    }
+
+    static var recordingMicrophonePreference: RecordingMicrophonePreference {
+        RecordingMicrophonePreference(
+            rawValue: UserDefaults.standard.string(forKey: recordingMicrophonePreferenceKey) ?? ""
+        ) ?? .automatic
     }
 
     static var meetingSummariesEnabled: Bool {

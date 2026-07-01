@@ -71,6 +71,8 @@ struct RootView: View {
                 VStack(spacing: 0) {
                     sectionContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(sectionSwipeGesture)
 
                     MuesliTabSwitcher(
                         selectedSection: $selectedSection,
@@ -162,6 +164,32 @@ struct RootView: View {
             pins.append(section)
         }
         pinnedSectionsStorage = AppSection.storageString(for: pins)
+    }
+
+    private var sectionSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 32, coordinateSpace: .local)
+            .onEnded { value in
+                guard !isDrawerOpen else { return }
+
+                let translation = value.translation
+                let horizontalDistance = abs(translation.width)
+                let verticalDistance = abs(translation.height)
+                guard horizontalDistance >= 76, horizontalDistance > verticalDistance * 1.35 else { return }
+
+                navigateSections(by: translation.width < 0 ? 1 : -1)
+            }
+    }
+
+    private func navigateSections(by offset: Int) {
+        let sections = AppSection.defaultPinnedSections
+        guard let currentIndex = sections.firstIndex(of: selectedSection) else { return }
+
+        let nextIndex = currentIndex + offset
+        guard sections.indices.contains(nextIndex) else { return }
+
+        withAnimation(.snappy(duration: 0.2)) {
+            selectedSection = sections[nextIndex]
+        }
     }
 }
 

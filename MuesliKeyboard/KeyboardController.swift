@@ -185,7 +185,7 @@ final class KeyboardController {
         launchURL = makeLaunchURL(for: request)
 
         do {
-            if clearsPendingCommand {
+            if clearsPendingCommand, !hasPendingCancelCommand() {
                 try store.clearPendingCommand()
             }
             try store.saveRequest(request)
@@ -195,6 +195,11 @@ final class KeyboardController {
     }
 
     func startDictation() {
+        guard !hasPendingCancelCommand() else {
+            statusText = "Cancelling"
+            return
+        }
+
         MuesliHaptics.dictationStart()
         let request = preparedRequest ?? DictationRequest()
         preparedRequest = nil
@@ -326,6 +331,11 @@ final class KeyboardController {
         }
     }
 
+    private func hasPendingCancelCommand() -> Bool {
+        guard let command = try? store.pendingCommand(), command.action == .cancel else { return false }
+        return cancelledRequestIDs.contains(command.requestID)
+    }
+
     func startPolling() {
         markKeyboardVisible()
         refreshLatestDictation()
@@ -400,7 +410,9 @@ final class KeyboardController {
         guard let requestID = handoffState.requestID else { return }
 
         if cancelledRequestIDs.contains(requestID) {
-            if [.cancelled, .idle, .failed].contains(handoffState.phase) {
+            if [.cancelled, .idle, .failed].contains(handoffState.phase),
+               activeRequestID == nil || activeRequestID == requestID
+            {
                 activeRequestID = nil
                 recoveryRequestID = nil
                 liveTranscript = ""
@@ -495,7 +507,13 @@ final class KeyboardController {
             && runtimeStatus?.supportsBackgroundStart == true
 
         guard activeRequestID == nil, canUseRuntimeStart else { return }
-        activeRequestID = runtimeStatus?.activeRequestID
+        guard let runtimeRequestID = runtimeStatus?.activeRequestID,
+              !cancelledRequestIDs.contains(runtimeRequestID)
+        else {
+            return
+        }
+
+        activeRequestID = runtimeRequestID
         if runtimeStatus?.phase == .idle {
             statusText = runtimeStatus?.message ?? "Session ready"
         }
@@ -658,6 +676,7 @@ final class KeyboardController {
 
     private func insertCompletedResult(_ result: DictationResult) {
         guard !insertedRequestIDs.contains(result.requestID) else { return }
+        guard !cancelledRequestIDs.contains(result.requestID) else { return }
         insertText(result.text)
         insertedRequestIDs.insert(result.requestID)
         latestResultID = result.id

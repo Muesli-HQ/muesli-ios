@@ -623,9 +623,8 @@ private struct ICloudSyncStatusButton: View {
                     .opacity(hasError ? 0 : 1)
             }
             .foregroundStyle(tint)
-            .frame(width: 38, height: 38)
-            .muesliGlassButton(cornerRadius: 19, tint: tint)
-            .padding(3)
+            .frame(width: 44, height: 44)
+            .muesliGlassButton(cornerRadius: 22, tint: tint)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)

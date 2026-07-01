@@ -89,9 +89,9 @@ enum MuesliTheme {
     }
 
     private static var selectedAccentTheme: MuesliAccentTheme {
-        MuesliAccentTheme(
+        MuesliAccentTheme.resolved(
             rawValue: UserDefaults.standard.string(forKey: "muesli.appearance.accent") ?? ""
-        ) ?? .blue
+        )
     }
 }
 
@@ -320,6 +320,21 @@ enum MuesliAccentTheme: String, CaseIterable, Identifiable {
     case slate
 
     var id: String { rawValue }
+
+    static func resolved(rawValue: String) -> MuesliAccentTheme {
+        if let theme = MuesliAccentTheme(rawValue: rawValue) {
+            return theme
+        }
+
+        switch rawValue {
+        case "orange":
+            return .green
+        case "purple", "pink":
+            return .slate
+        default:
+            return .blue
+        }
+    }
 
     var label: String {
         switch self {

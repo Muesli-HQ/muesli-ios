@@ -73,6 +73,8 @@ struct MuesliInlineWaveformView: View {
     @State private var liveSamples: [CGFloat] = []
     @State private var sampleSequence = 0
 
+    private let sampleTimer = Timer.publish(every: 1.0 / 18.0, on: .main, in: .common).autoconnect()
+
     private let basePattern: [CGFloat] = [
         0.18, 0.26, 0.42, 0.58, 0.76, 0.92,
         0.72, 0.46, 0.28, 0.36, 0.62, 0.86,
@@ -93,6 +95,9 @@ struct MuesliInlineWaveformView: View {
         }
         .onChange(of: mode) { _, _ in
             seedLiveSamplesIfNeeded(force: true)
+        }
+        .onReceive(sampleTimer) { _ in
+            appendLiveSample(level ?? 0)
         }
     }
 
@@ -186,4 +191,5 @@ struct MuesliInlineWaveformView: View {
             liveSamples.removeFirst(liveSamples.count - maxSamples)
         }
     }
+
 }

@@ -35,7 +35,7 @@ struct RootView: View {
     }
 
     private var currentAccent: Color {
-        MuesliTheme.color(for: MuesliAccentTheme(rawValue: accentTheme) ?? .blue)
+        MuesliTheme.color(for: MuesliAccentTheme.resolved(rawValue: accentTheme))
     }
 
     private var preferredColorScheme: ColorScheme? {

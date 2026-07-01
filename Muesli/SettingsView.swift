@@ -554,7 +554,7 @@ struct SettingsView: View {
     }
 
     private var selectedAccentTheme: MuesliAccentTheme {
-        MuesliAccentTheme(rawValue: accentTheme) ?? .blue
+        MuesliAccentTheme.resolved(rawValue: accentTheme)
     }
 
     private var modelButtonTitle: String {
@@ -1030,7 +1030,7 @@ private struct SettingsAccentThemePicker: View {
     @Binding var selection: String
 
     private var selectedTheme: MuesliAccentTheme {
-        MuesliAccentTheme(rawValue: selection) ?? .blue
+        MuesliAccentTheme.resolved(rawValue: selection)
     }
 
     var body: some View {
@@ -1085,8 +1085,9 @@ private struct SettingsAccentThemePicker: View {
     }
 
     private func normalizeSelectionIfNeeded() {
-        guard MuesliAccentTheme(rawValue: selection) == nil else { return }
-        selection = MuesliAccentTheme.blue.rawValue
+        let resolved = MuesliAccentTheme.resolved(rawValue: selection)
+        guard selection != resolved.rawValue else { return }
+        selection = resolved.rawValue
     }
 }
 

@@ -552,9 +552,13 @@ final class DictationCoordinator {
     }
 
     func recordingSession(for result: DictationResult) -> RecordingSession? {
-        if let sessionID = result.sessionID,
-           let session = try? store.recordingSession(id: sessionID) {
-            return session
+        if let sessionID = result.sessionID {
+            if let cachedSession = recordingSessions.first(where: { $0.id == sessionID }) {
+                return cachedSession
+            }
+            if let storedSession = try? store.recordingSession(id: sessionID) {
+                return storedSession
+            }
         }
         return nil
     }

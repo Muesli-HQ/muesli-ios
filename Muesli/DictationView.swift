@@ -14,6 +14,7 @@ struct DictationView: View {
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
     @State private var previewInputLevel = 0.0
+    @State private var dashboardStats = DictationDashboardStats.empty
 
     var body: some View {
         NavigationStack {
@@ -49,11 +50,19 @@ struct DictationView: View {
                 coordinator.refreshHistory()
                 coordinator.refreshAudioInputRoute()
                 refreshKeyboardSetupPromptVisibility()
+                updateDashboardStats()
+            }
+            .onChange(of: coordinator.dictationHistory.count) { _, _ in
+                updateDashboardStats()
+            }
+            .onChange(of: coordinator.recordingSessions.count) { _, _ in
+                updateDashboardStats()
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
                 coordinator.refreshAudioInputRoute()
                 refreshKeyboardSetupPromptVisibility()
+                updateDashboardStats()
             }
             .onChange(of: microphonePreference) { _, _ in
                 coordinator.refreshAudioInputRoute()
@@ -74,28 +83,30 @@ struct DictationView: View {
         }
     }
 
+    @ViewBuilder
     private var homeStatsRow: some View {
+        let stats = dashboardStats
         HStack(spacing: MuesliTheme.spacing8) {
             DictationHomeStatTile(
-                value: dashboardStats.streak,
+                value: stats.streak,
                 label: "streak",
                 systemImage: "flame.fill",
                 tint: Color(hex: 0xFF9F2D)
             )
             DictationHomeStatTile(
-                value: dashboardStats.words,
+                value: stats.words,
                 label: "words",
                 systemImage: "waveform",
                 tint: MuesliTheme.accent
             )
             DictationHomeStatTile(
-                value: dashboardStats.wpm,
+                value: stats.wpm,
                 label: "WPM",
                 systemImage: "speedometer",
                 tint: MuesliTheme.success
             )
             DictationHomeStatTile(
-                value: dashboardStats.meetings,
+                value: stats.meetings,
                 label: "meetings",
                 systemImage: "person.2",
                 tint: MuesliTheme.accent
@@ -103,7 +114,7 @@ struct DictationView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "Stats: \(dashboardStats.streak) day streak, \(dashboardStats.words) words, \(dashboardStats.wpm) words per minute, \(dashboardStats.meetings) meetings"
+            "Stats: \(stats.streak) day streak, \(stats.words) words, \(stats.wpm) words per minute, \(stats.meetings) meetings"
         )
     }
 
@@ -122,34 +133,39 @@ struct DictationView: View {
         }
     }
 
-    private var dashboardStats: DictationDashboardStats {
+    private func updateDashboardStats() {
         #if DEBUG
         if shouldUseMockDictations {
-            return DictationDashboardStats(words: "61.0k", wpm: "152", meetings: "135", streak: "3")
+            dashboardStats = DictationDashboardStats(words: "61.0k", wpm: "152", meetings: "135", streak: "3")
+            return
         }
         #endif
 
-        return DictationDashboardStats(
-            words: formattedCompactCount(totalDictationWords),
-            wpm: formattedAverageWPM,
-            meetings: formattedCompactCount(totalMeetingCount),
-            streak: "\(currentActivityStreak)"
+        let history = displayHistory
+        let sessions = coordinator.recordingSessions
+        dashboardStats = DictationDashboardStats(
+            words: formattedCompactCount(totalDictationWords(in: history)),
+            wpm: formattedAverageWPM(history: history, sessions: sessions),
+            meetings: formattedCompactCount(totalMeetingCount(in: sessions)),
+            streak: "\(currentActivityStreak(history: history, sessions: sessions))"
         )
     }
 
-    private var totalDictationWords: Int {
-        displayHistory.reduce(0) { total, result in
+    private func totalDictationWords(in history: [DictationResult]) -> Int {
+        history.reduce(0) { total, result in
             total + result.text.split { $0.isWhitespace || $0.isNewline }.count
         }
     }
 
-    private var totalMeetingCount: Int {
-        coordinator.recordingSessions.filter { $0.kind == .meeting }.count
+    private func totalMeetingCount(in sessions: [RecordingSession]) -> Int {
+        sessions.filter { $0.kind == .meeting }.count
     }
 
-    private var formattedAverageWPM: String {
-        let completedDictationSessions = displayHistory.compactMap { result -> (words: Int, duration: TimeInterval)? in
-            guard let session = coordinator.recordingSession(for: result),
+    private func formattedAverageWPM(history: [DictationResult], sessions: [RecordingSession]) -> String {
+        let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let completedDictationSessions = history.compactMap { result -> (words: Int, duration: TimeInterval)? in
+            guard let sessionID = result.sessionID,
+                  let session = sessionsByID[sessionID],
                   let duration = session.duration,
                   duration >= 10 else {
                 return nil
@@ -168,11 +184,11 @@ struct DictationView: View {
         return "\(Int(wpm.rounded()))"
     }
 
-    private var currentActivityStreak: Int {
+    private func currentActivityStreak(history: [DictationResult], sessions: [RecordingSession]) -> Int {
         let calendar = Calendar.current
         let activeDays = Set(
-            displayHistory.map { calendar.startOfDay(for: $0.createdAt) }
-                + coordinator.recordingSessions.map { calendar.startOfDay(for: $0.createdAt) }
+            history.map { calendar.startOfDay(for: $0.createdAt) }
+                + sessions.map { calendar.startOfDay(for: $0.createdAt) }
         )
 
         guard !activeDays.isEmpty else { return 0 }
@@ -676,6 +692,8 @@ struct DictationView: View {
 }
 
 private struct DictationDashboardStats {
+    static let empty = DictationDashboardStats(words: "0", wpm: "0", meetings: "0", streak: "0")
+
     let words: String
     let wpm: String
     let meetings: String

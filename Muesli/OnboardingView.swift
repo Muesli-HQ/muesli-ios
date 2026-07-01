@@ -1135,12 +1135,12 @@ struct OnboardingView: View {
     }
 
     private var onboardingTestButtonTextColor: Color {
-        coordinator.isOnboardingTestRecording ? MuesliTheme.destructive : .white
+        .white
     }
 
     private var onboardingTestButtonBackground: some View {
         RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
-            .fill(coordinator.isOnboardingTestRecording ? MuesliTheme.destructiveSubtle : onboardingTestColor)
+            .fill(coordinator.isOnboardingTestRecording ? MuesliTheme.destructive.opacity(0.32) : onboardingTestColor)
     }
 
     private var onboardingTestButtonBorder: some View {

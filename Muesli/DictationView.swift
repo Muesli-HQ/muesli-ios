@@ -550,7 +550,7 @@ private struct VoiceNoteRecordButtonLabel: View {
         if isDisabled {
             MuesliTheme.surfacePrimary
         } else if isStopState {
-            MuesliTheme.destructiveSubtle
+            MuesliTheme.destructive.opacity(0.32)
         } else {
             color
         }
@@ -574,7 +574,7 @@ private struct VoiceNoteRecordButtonLabel: View {
         if isDisabled {
             MuesliTheme.textTertiary
         } else if isStopState {
-            MuesliTheme.destructive
+            .white
         } else {
             .white
         }

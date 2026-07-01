@@ -123,7 +123,7 @@ struct KeyboardRootView: View {
         if controller.isPrimaryButtonDisabled {
             MuesliTheme.surfacePrimary
         } else if isPrimaryStopButton {
-            MuesliTheme.destructiveSubtle
+            MuesliTheme.destructive.opacity(0.32)
         } else {
             buttonColor
         }
@@ -143,7 +143,7 @@ struct KeyboardRootView: View {
         if controller.isPrimaryButtonDisabled {
             MuesliTheme.textTertiary
         } else if isPrimaryStopButton {
-            MuesliTheme.destructive
+            .white
         } else {
             .white
         }

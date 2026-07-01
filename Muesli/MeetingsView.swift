@@ -310,12 +310,12 @@ struct MeetingsView: View {
     }
 
     private var meetingPrimaryButtonTextColor: Color {
-        coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructive : .white
+        .white
     }
 
     private var meetingPrimaryButtonBackground: some View {
         RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
-            .fill(coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructiveSubtle : statusColor)
+            .fill(coordinator.hasMeetingRecordingInProgress ? MuesliTheme.destructive.opacity(0.32) : statusColor)
     }
 
     private var meetingPrimaryButtonBorder: some View {

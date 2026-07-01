@@ -69,10 +69,8 @@ struct RootView: View {
                 .background(MuesliTheme.backgroundBase)
             } else {
                 VStack(spacing: 0) {
-                    sectionContent
+                    pagedSectionContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                        .simultaneousGesture(sectionSwipeGesture)
 
                     MuesliTabSwitcher(
                         selectedSection: $selectedSection,
@@ -132,6 +130,26 @@ struct RootView: View {
         }
     }
 
+    private var pagedSectionContent: some View {
+        TabView(selection: $selectedSection) {
+            DictationView(coordinator: coordinator)
+                .tag(AppSection.dictations)
+
+            MeetingsView(coordinator: coordinator)
+                .tag(AppSection.meetings)
+
+            SettingsView(
+                coordinator: coordinator,
+                openSyncPrivacyRequest: coordinator.syncSetupRequestID
+            ) { section in
+                selectedSection = section
+            }
+            .tag(AppSection.settings)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .animation(.snappy(duration: 0.22), value: selectedSection)
+    }
+
     private func openDrawer() {
         withAnimation(.snappy(duration: 0.24)) {
             isDrawerOpen = true
@@ -166,31 +184,6 @@ struct RootView: View {
         pinnedSectionsStorage = AppSection.storageString(for: pins)
     }
 
-    private var sectionSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 32, coordinateSpace: .local)
-            .onEnded { value in
-                guard !isDrawerOpen else { return }
-
-                let translation = value.translation
-                let horizontalDistance = abs(translation.width)
-                let verticalDistance = abs(translation.height)
-                guard horizontalDistance >= 76, horizontalDistance > verticalDistance * 1.35 else { return }
-
-                navigateSections(by: translation.width < 0 ? 1 : -1)
-            }
-    }
-
-    private func navigateSections(by offset: Int) {
-        let sections = AppSection.defaultPinnedSections
-        guard let currentIndex = sections.firstIndex(of: selectedSection) else { return }
-
-        let nextIndex = currentIndex + offset
-        guard sections.indices.contains(nextIndex) else { return }
-
-        withAnimation(.snappy(duration: 0.2)) {
-            selectedSection = sections[nextIndex]
-        }
-    }
 }
 
 private struct KeyboardHandoffOverlay: View {

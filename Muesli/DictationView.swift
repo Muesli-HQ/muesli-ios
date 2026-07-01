@@ -18,17 +18,20 @@ struct DictationView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     header
                     homeStatsRow
                     recorderPanel
                     historyHeader
+                    historyRows
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)
                 .padding(.top, MuesliTheme.spacing24)
-
-                historyList
+                .padding(.bottom, 112)
+            }
+            .refreshable {
+                triggerHomeSync()
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
@@ -442,9 +445,8 @@ struct DictationView: View {
     }
 
     @ViewBuilder
-    private var historyList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+    private var historyRows: some View {
+        Group {
             if filteredHistory.isEmpty {
                 emptyHistory
             } else {
@@ -473,12 +475,6 @@ struct DictationView: View {
                     }
                 }
             }
-            }
-            .padding(.horizontal, MuesliTheme.spacing20)
-            .padding(.bottom, 112)
-        }
-        .refreshable {
-            triggerHomeSync()
         }
     }
 

@@ -25,6 +25,8 @@ final class KeyboardController {
     var launchURL: URL?
     var textInserter: (@MainActor (String) -> Void)?
     var textDeleter: (@MainActor (Int) -> Void)?
+    var inputModeSwitcher: (@MainActor () -> Void)?
+    var keyboardDismisser: (@MainActor () -> Void)?
     var liveTranscript = ""
     private var lastInsertedCharacterCount = 0
     private var canUseRuntimeStart = false
@@ -121,6 +123,17 @@ final class KeyboardController {
 
     var canInsertLatest: Bool {
         hasLatestDictation && activeRequestID == nil
+    }
+
+    var showsActiveWaveform: Bool {
+        [.requested, .recording, .transcribing].contains(dictationPhase)
+    }
+
+    var settingsURL: URL? {
+        var components = URLComponents()
+        components.scheme = MuesliAppConstants.urlScheme
+        components.host = MuesliAppConstants.settingsHost
+        return components.url
     }
 
     var isRecoveryRequested: Bool {
@@ -250,8 +263,20 @@ final class KeyboardController {
         insertText(" ")
     }
 
+    func insertTextKey(_ text: String) {
+        insertText(text)
+    }
+
     func insertReturn() {
         insertText("\n")
+    }
+
+    func switchInputMode() {
+        inputModeSwitcher?()
+    }
+
+    func dismissKeyboard() {
+        keyboardDismisser?()
     }
 
     func clearInsertedText() {
@@ -259,6 +284,35 @@ final class KeyboardController {
         textDeleter?(deleteCount)
         lastInsertedCharacterCount = 0
         statusText = deleteCount > 1 ? "Cleared" : "Deleted"
+    }
+
+    func cancelActiveDictation() {
+        guard let activeRequestID else {
+            dictationPhase = .idle
+            liveTranscript = ""
+            statusText = hasLatestDictation ? "Latest ready" : "Ready"
+            prepareLaunchRequestIfNeeded()
+            return
+        }
+
+        MuesliHaptics.dictationStop()
+        do {
+            try store.saveCommand(.init(requestID: activeRequestID, action: .cancel))
+            try store.saveKeyboardHandoffState(.init(
+                requestID: activeRequestID,
+                phase: .cancelled,
+                message: "Cancelled"
+            ))
+            try store.saveStatus(.idle)
+            self.activeRequestID = nil
+            recoveryRequestID = nil
+            liveTranscript = ""
+            dictationPhase = .idle
+            statusText = hasLatestDictation ? "Latest ready" : "Ready"
+            prepareLaunchRequestIfNeeded()
+        } catch {
+            statusText = "Enable Full Access"
+        }
     }
 
     func startPolling() {

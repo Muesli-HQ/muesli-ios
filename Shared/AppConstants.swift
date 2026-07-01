@@ -5,6 +5,7 @@ enum MuesliAppConstants {
     static let urlScheme = "muesli"
     static let dictateHost = "dictate"
     static let syncHost = "sync"
+    static let settingsHost = "settings"
     static let debugHost = "debug"
     static let resetOnboardingPath = "/reset-onboarding"
     static let resetOnboardingLaunchArgument = "--muesli-reset-onboarding"

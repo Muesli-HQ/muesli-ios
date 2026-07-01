@@ -48,6 +48,7 @@ final class DictationCoordinator {
     var keyboardSessionStatusText = "Off"
     var iCloudSyncStatusText: String?
     var isICloudSyncInProgress = false
+    var settingsNavigationRequestID: UUID?
     var syncSetupRequestID: UUID? {
         didSet {
             if syncSetupRequestID == nil {
@@ -155,6 +156,10 @@ final class DictationCoordinator {
         #endif
 
         if handleSyncBridgeURL(url) {
+            return
+        }
+
+        if handleSettingsURL(url) {
             return
         }
 
@@ -383,6 +388,15 @@ final class DictationCoordinator {
         syncSetupRequestID = UUID()
         iCloudSyncStatusText = "Continue setup with private iCloud sync."
         AppTelemetry.signal("ios_bridge_deeplink_opened", parameters: ["source": source])
+        return true
+    }
+
+    private func handleSettingsURL(_ url: URL) -> Bool {
+        guard url.scheme == MuesliAppConstants.urlScheme,
+              url.host == MuesliAppConstants.settingsHost
+        else { return false }
+
+        settingsNavigationRequestID = UUID()
         return true
     }
 

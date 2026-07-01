@@ -32,6 +32,13 @@ struct RootView: View {
             }
             isDrawerOpen = false
         }
+        .onChange(of: coordinator.settingsNavigationRequestID) { _, requestID in
+            guard requestID != nil else { return }
+            if coordinator.hasCompletedOnboarding {
+                selectedSection = .settings
+            }
+            isDrawerOpen = false
+        }
     }
 
     private var currentAccent: Color {

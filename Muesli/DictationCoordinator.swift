@@ -1746,7 +1746,7 @@ final class DictationCoordinator {
                     )
                 }
             } catch {
-                guard shouldContinueMeetingFinalization(sessionID: session.id) else {
+                guard !discardedMeetingSessionIDs.contains(session.id) else {
                     cleanupMeetingChunks()
                     meetingStatusText = "Ready"
                     refreshHistory()
@@ -2000,6 +2000,13 @@ final class DictationCoordinator {
                     "chunked": "true"
                 ])
             } catch {
+                guard shouldContinueMeetingFinalization(sessionID: session.id) else {
+                    cleanupMeetingChunks()
+                    meetingStatusText = "Ready"
+                    refreshHistory()
+                    return
+                }
+
                 session.phase = .failed
                 session.errorMessage = error.localizedDescription
                 try? store.saveSession(session)

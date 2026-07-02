@@ -38,6 +38,7 @@ final class DictationCoordinator {
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
     private var meetingChunkTranscriptions: [MeetingChunkTranscription] = []
     private var meetingChunksDirectory: URL?
+    private var discardedMeetingSessionIDs = Set<UUID>()
     private let meetingVadQueue = DispatchQueue(label: "com.phequals7.muesli.meeting-vad")
     private var transcriptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     nonisolated(unsafe) private var audioRouteObserver: NSObjectProtocol?
@@ -436,9 +437,10 @@ final class DictationCoordinator {
 
     func cancelActiveRecording() {
         guard let request = activeRequest else { return }
+        let source = isKeyboardHandoffActive ? "keyboard" : "app"
         MuesliHaptics.dictationStop()
         cancelRecording(requestID: request.id)
-        AppTelemetry.signal("dictation_cancelled", parameters: ["source": isKeyboardHandoffActive ? "keyboard" : "app"])
+        AppTelemetry.signal("dictation_cancelled", parameters: ["source": source])
     }
 
     func refreshHistory() {
@@ -539,7 +541,7 @@ final class DictationCoordinator {
 
     func updateMeetingTitle(sessionID: UUID, title: String) {
         do {
-            guard var session = try store.recordingSession(id: sessionID),
+            guard var session = try store.activeRecordingSession(id: sessionID),
                   session.kind == .meeting
             else { return }
 
@@ -587,7 +589,7 @@ final class DictationCoordinator {
             if let cachedSession = recordingSessions.first(where: { $0.id == sessionID }) {
                 return cachedSession
             }
-            if let storedSession = try? store.recordingSession(id: sessionID) {
+            if let storedSession = try? store.activeRecordingSession(id: sessionID) {
                 return storedSession
             }
         }
@@ -1800,6 +1802,7 @@ final class DictationCoordinator {
         meetingRecorder = nil
         meetingVadController = nil
         activeSession = nil
+        discardedMeetingSessionIDs.insert(session.id)
         cleanupMeetingChunks(cancelTasks: true)
 
         if let audioFileName = session.audioFileName {
@@ -1901,7 +1904,8 @@ final class DictationCoordinator {
         let merged = MeetingChunkTranscriptMerger.merge(meetingChunkTranscriptions)
         let text = postProcessTranscript(merged.text)
         guard !text.isEmpty else { return }
-        guard var session = try? store.recordingSession(id: sessionID),
+        guard !discardedMeetingSessionIDs.contains(sessionID),
+              var session = try? store.activeRecordingSession(id: sessionID),
               session.kind == .meeting,
               session.phase != .cancelled
         else { return }
@@ -1940,6 +1944,11 @@ final class DictationCoordinator {
                     }
                 }
                 meetingChunkTasks.removeAll(keepingCapacity: false)
+                guard shouldContinueMeetingFinalization(sessionID: session.id) else {
+                    meetingStatusText = "Ready"
+                    cleanupMeetingChunks()
+                    return
+                }
 
                 let mergedTranscription = MeetingChunkTranscriptMerger.merge(meetingChunkTranscriptions)
                 let text = postProcessTranscript(mergedTranscription.text)
@@ -1954,6 +1963,12 @@ final class DictationCoordinator {
                     ),
                     audioURL: audioURL
                 )
+                guard shouldContinueMeetingFinalization(sessionID: session.id) else {
+                    try? store.deleteTranscript(for: session.id)
+                    meetingStatusText = "Ready"
+                    cleanupMeetingChunks()
+                    return
+                }
 
                 session.phase = .completed
                 session.title = finalTranscript.resolvedTitle
@@ -2189,6 +2204,13 @@ final class DictationCoordinator {
         meetingChunksDirectory = nil
         meetingChunkTasks.removeAll(keepingCapacity: false)
         meetingChunkTranscriptions.removeAll(keepingCapacity: false)
+    }
+
+    private func shouldContinueMeetingFinalization(sessionID: UUID) -> Bool {
+        guard !discardedMeetingSessionIDs.contains(sessionID),
+              (try? store.activeRecordingSession(id: sessionID)) != nil
+        else { return false }
+        return true
     }
 
     private func startMetering(update: @escaping @MainActor (Double) -> Void) {

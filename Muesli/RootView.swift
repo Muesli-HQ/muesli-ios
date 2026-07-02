@@ -31,6 +31,12 @@ struct RootView: View {
         .onChange(of: coordinator.settingsNavigationRequestID) { _, requestID in
             navigateToSettingsIfNeeded(requestID)
         }
+        .onChange(of: selectedSection) { _, section in
+            ensureSectionPinned(section)
+        }
+        .onChange(of: pinnedSectionsStorage) { _, _ in
+            clampSelectedSectionToPinnedSections()
+        }
     }
 
     private var currentAccent: Color {
@@ -115,7 +121,12 @@ struct RootView: View {
 
     @ViewBuilder
     private var sectionContent: some View {
-        switch selectedSection {
+        sectionView(for: selectedSection)
+    }
+
+    @ViewBuilder
+    private func sectionView(for section: AppSection) -> some View {
+        switch section {
         case .dictations:
             DictationView(coordinator: coordinator)
         case .meetings:
@@ -132,22 +143,12 @@ struct RootView: View {
 
     private var pagedSectionContent: some View {
         TabView(selection: $selectedSection) {
-            DictationView(coordinator: coordinator)
-                .tag(AppSection.dictations)
-
-            MeetingsView(coordinator: coordinator)
-                .tag(AppSection.meetings)
-
-            SettingsView(
-                coordinator: coordinator,
-                openSyncPrivacyRequest: coordinator.syncSetupRequestID
-            ) { section in
-                selectedSection = section
+            ForEach(pinnedSections, id: \.self) { section in
+                sectionView(for: section)
+                    .tag(section)
             }
-            .tag(AppSection.settings)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .animation(.snappy(duration: 0.22), value: selectedSection)
     }
 
     private func openDrawer() {
@@ -165,6 +166,7 @@ struct RootView: View {
     private func navigateToSettingsIfNeeded(_ requestID: UUID?) {
         guard requestID != nil else { return }
         if coordinator.hasCompletedOnboarding {
+            ensureSectionPinned(.settings)
             selectedSection = .settings
         }
         isDrawerOpen = false
@@ -181,6 +183,26 @@ struct RootView: View {
             }
             pins.append(section)
         }
+        pinnedSectionsStorage = AppSection.storageString(for: pins)
+        if !pins.contains(selectedSection), let nextSection = pins.first {
+            selectedSection = nextSection
+        }
+    }
+
+    private func clampSelectedSectionToPinnedSections() {
+        let pins = pinnedSections
+        if !pins.contains(selectedSection), let nextSection = pins.first {
+            selectedSection = nextSection
+        }
+    }
+
+    private func ensureSectionPinned(_ section: AppSection) {
+        var pins = pinnedSections
+        guard !pins.contains(section) else { return }
+        if pins.count >= AppSection.maxPinnedSections {
+            pins.removeFirst()
+        }
+        pins.append(section)
         pinnedSectionsStorage = AppSection.storageString(for: pins)
     }
 

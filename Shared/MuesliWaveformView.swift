@@ -146,14 +146,12 @@ struct MuesliInlineWaveformView: View {
         }
 
         let shaped = pow(gatedLevel, 0.72)
-        let dynamicCount = max(10, min(count, count / 2))
-        let startIndex = count - dynamicCount
 
-        for offset in 0..<dynamicCount {
-            let index = startIndex + offset
-            let localPhase = CGFloat(elapsed) * 8.6 + CGFloat(offset) * 0.58
-            let broadPhase = CGFloat(elapsed) * 2.1 + CGFloat(offset) * 0.13
-            let motion = 0.62 + 0.24 * sin(localPhase) + 0.14 * sin(broadPhase)
+        for index in 0..<count {
+            let base = basePattern[index % basePattern.count]
+            let localPhase = CGFloat(elapsed) * 8.6 + CGFloat(index) * 0.58
+            let broadPhase = CGFloat(elapsed) * 2.1 + CGFloat(index) * 0.13
+            let motion = 0.54 + 0.22 * sin(localPhase) + 0.12 * sin(broadPhase) + base * 0.22
             let texture = 0.90 + 0.12 * sin(localPhase * 1.47)
             let sample = shaped * motion * texture
             samples[index] = min(0.98, max(0.01, sample))

@@ -143,12 +143,27 @@ struct RootView: View {
 
     private var pagedSectionContent: some View {
         TabView(selection: $selectedSection) {
-            ForEach(pinnedSections, id: \.self) { section in
+            ForEach(compactPageSections, id: \.self) { section in
                 sectionView(for: section)
                     .tag(section)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+    }
+
+    private var compactPageSections: [AppSection] {
+        let sections = pinnedSections
+        guard let selectedIndex = sections.firstIndex(of: selectedSection) else {
+            return sections.first.map { [$0] } ?? []
+        }
+
+        let nearbyIndices = [
+            selectedIndex - 1,
+            selectedIndex,
+            selectedIndex + 1
+        ].filter { sections.indices.contains($0) }
+
+        return nearbyIndices.map { sections[$0] }
     }
 
     private func openDrawer() {

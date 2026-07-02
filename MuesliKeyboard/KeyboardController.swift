@@ -7,6 +7,8 @@ final class KeyboardController {
     private static let staleRecordingInterval: TimeInterval = 45
     private static let staleStoppingInterval: TimeInterval = 10
     private static let staleTranscribingInterval: TimeInterval = 120
+    private static let runtimeLevelMinUpdateInterval: TimeInterval = 0.16
+    private static let runtimeLevelMinDelta = 0.02
 
     private let store = SharedStore()
     private let handoffRecoveryPolicy = KeyboardHandoffRecoveryPolicy.keyboardDefaults
@@ -19,6 +21,7 @@ final class KeyboardController {
     private var latestRuntimeStatus: KeyboardRuntimeStatus?
     private var insertedRequestIDs = Set<UUID>()
     private var cancelledRequestIDs = Set<UUID>()
+    private var lastRuntimeLevelUpdateAt = Date.distantPast
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -358,11 +361,11 @@ final class KeyboardController {
                    Date().timeIntervalSince(lastFullRefresh) < 0.45
                 {
                     self.refreshRuntimeLevelOnly()
-                    try? await Task.sleep(for: .milliseconds(100))
+                    try? await Task.sleep(for: .milliseconds(125))
                 } else {
                     self.refreshLatestDictation()
                     lastFullRefresh = Date()
-                    try? await Task.sleep(for: self.dictationPhase == .recording ? .milliseconds(100) : .milliseconds(500))
+                    try? await Task.sleep(for: self.dictationPhase == .recording ? .milliseconds(125) : .milliseconds(500))
                 }
             }
         }
@@ -539,8 +542,9 @@ final class KeyboardController {
     }
 
     private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
-        let isRecent = runtimeStatus.map { Date().timeIntervalSince($0.updatedAt) < 8 } ?? false
-        inputLevel = isRecent ? (runtimeStatus?.inputLevel ?? 0) : 0
+        let now = Date()
+        let isRecent = runtimeStatus.map { now.timeIntervalSince($0.updatedAt) < 8 } ?? false
+        applyRuntimeInputLevel(isRecent ? (runtimeStatus?.inputLevel ?? 0) : 0, now: now)
         canUseRuntimeStart = runtimeStatus?.isActive == true
             && isRecent
             && runtimeStatus?.supportsBackgroundStart == true
@@ -556,6 +560,28 @@ final class KeyboardController {
         if runtimeStatus?.phase == .idle {
             statusText = runtimeStatus?.message ?? "Session ready"
         }
+    }
+
+    private func applyRuntimeInputLevel(_ rawLevel: Double, now: Date) {
+        let level = min(max(rawLevel, 0), 1)
+
+        guard level > 0 else {
+            if inputLevel != 0 {
+                inputLevel = 0
+            }
+            lastRuntimeLevelUpdateAt = now
+            return
+        }
+
+        let hasMeaningfulDelta = abs(inputLevel - level) >= Self.runtimeLevelMinDelta
+        let hasReachedCadence = now.timeIntervalSince(lastRuntimeLevelUpdateAt) >= Self.runtimeLevelMinUpdateInterval
+
+        guard hasMeaningfulDelta || hasReachedCadence else {
+            return
+        }
+
+        inputLevel = level
+        lastRuntimeLevelUpdateAt = now
     }
 
     private func apply(status: DictationStatus) {

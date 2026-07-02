@@ -131,7 +131,7 @@ struct MeetingsView: View {
                             mode: coordinator.isMeetingRecording ? .level : .waiting,
                             color: statusColor,
                             level: coordinator.isMeetingRecording ? coordinator.inputLevel : nil,
-                            barCount: 24
+                            barCount: 32
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: 54)
@@ -181,7 +181,11 @@ struct MeetingsView: View {
                                 .foregroundStyle(MuesliTheme.destructive)
                                 .frame(maxWidth: .infinity)
                                 .frame(minHeight: 44)
-                                .background(MuesliTheme.destructiveSubtle)
+                                .background(MuesliTheme.destructive.opacity(0.07))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                        .strokeBorder(MuesliTheme.destructive.opacity(0.22), lineWidth: 1)
+                                )
                                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                                 .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                         }
@@ -522,7 +526,7 @@ private struct MeetingSessionDetailView: View {
                                 Image(systemName: "pencil")
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundStyle(MuesliTheme.accent)
-                                    .frame(width: 32, height: 32)
+                                    .frame(width: 44, height: 44)
                                     .background(MuesliTheme.accentSubtle)
                                     .clipShape(Circle())
                                     .contentShape(Circle())

@@ -276,7 +276,7 @@ struct DictationView: View {
                             mode: isListeningWaveformActive ? .level : .waiting,
                             color: statusColor,
                             level: waveformLevel,
-                            barCount: 24
+                            barCount: 32
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: 54)
@@ -335,12 +335,16 @@ struct DictationView: View {
                         Button(role: .destructive) {
                             coordinator.cancelActiveRecording()
                         } label: {
-                            Label("Cancel Recording", systemImage: "xmark")
+                            Label("Discard Recording", systemImage: "xmark")
                                 .font(MuesliTheme.captionMedium())
                                 .foregroundStyle(MuesliTheme.destructive)
                                 .frame(maxWidth: .infinity)
                                 .frame(minHeight: 44)
-                                .background(MuesliTheme.destructiveSubtle)
+                                .background(MuesliTheme.destructive.opacity(0.07))
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(MuesliTheme.destructive.opacity(0.22), lineWidth: 1)
+                                )
                                 .clipShape(Capsule())
                                 .contentShape(Capsule())
                         }
@@ -350,7 +354,7 @@ struct DictationView: View {
                 }
                 .padding(.top, isWaveformActive || shouldShowRealtimeTranscript ? 0 : MuesliTheme.spacing4)
 
-                if shouldShowKeyboardSetupRow && !shouldHideKeyboardSetupRowForMockPreview {
+                if shouldShowKeyboardSetupRow && !shouldHideKeyboardSetupRowForMockPreview && !coordinator.isRecording {
                     keyboardShortcutRow
                 }
             }
@@ -386,7 +390,7 @@ struct DictationView: View {
             .font(MuesliTheme.captionMedium())
             .foregroundStyle(MuesliTheme.textSecondary)
             .padding(.horizontal, MuesliTheme.spacing8)
-            .frame(minHeight: 32)
+            .frame(minHeight: 44)
             .background(MuesliTheme.surfacePrimary)
             .clipShape(Capsule())
             .contentShape(Capsule())
@@ -752,15 +756,15 @@ private struct DictationHomeStatTile: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 76)
+        .frame(height: 72)
         .padding(.horizontal, MuesliTheme.spacing8)
         .background {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [
-                            MuesliTheme.backgroundRaised.opacity(0.88),
-                            MuesliTheme.backgroundDeep.opacity(0.76)
+                            MuesliTheme.backgroundRaised.opacity(0.80),
+                            MuesliTheme.backgroundDeep.opacity(0.68)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -776,8 +780,8 @@ private struct DictationHomeStatTile: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                 .strokeBorder(MuesliTheme.accent.opacity(0.34), lineWidth: 1)
         }
-        .shadow(color: MuesliTheme.accent.opacity(0.10), radius: 12, x: 0, y: 7)
-        .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+        .shadow(color: MuesliTheme.accent.opacity(0.07), radius: 9, x: 0, y: 5)
+        .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 3)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(value) \(label)")
     }
@@ -795,12 +799,12 @@ private struct VoiceNoteRecordButtonLabel: View {
             ZStack {
                 Circle()
                     .fill(color.opacity(isStopState ? 0.18 : 0.16))
-                    .frame(width: 96, height: 96)
+                    .frame(width: haloSize, height: haloSize)
                     .blur(radius: 0.5)
 
                 Circle()
                     .fill(outerRingFill)
-                    .frame(width: 88, height: 88)
+                    .frame(width: outerRingSize, height: outerRingSize)
                     .overlay(
                         Circle()
                             .strokeBorder(outerRingBorder, lineWidth: 1.2)
@@ -816,7 +820,7 @@ private struct VoiceNoteRecordButtonLabel: View {
                             endPoint: .bottomTrailing
                         )
                     )
-                    .frame(width: 74, height: 74)
+                    .frame(width: innerCircleSize, height: innerCircleSize)
                     .overlay(alignment: .topLeading) {
                         Circle()
                             .strokeBorder(.white.opacity(isDisabled ? 0.08 : 0.42), lineWidth: 2)
@@ -838,7 +842,7 @@ private struct VoiceNoteRecordButtonLabel: View {
                     .shadow(color: .black.opacity(0.20), radius: 7, x: 0, y: 5)
 
                 Image(systemName: systemImage)
-                    .font(.system(size: 26, weight: .semibold))
+                    .font(.system(size: isStopState ? 26 : 24, weight: .semibold))
                     .foregroundStyle(iconColor)
             }
 
@@ -847,8 +851,20 @@ private struct VoiceNoteRecordButtonLabel: View {
                 .foregroundStyle(titleColor)
         }
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 112)
+        .frame(minHeight: isStopState ? 112 : 98)
         .contentShape(Rectangle())
+    }
+
+    private var haloSize: CGFloat {
+        isStopState ? 96 : 84
+    }
+
+    private var outerRingSize: CGFloat {
+        isStopState ? 88 : 76
+    }
+
+    private var innerCircleSize: CGFloat {
+        isStopState ? 74 : 64
     }
 
     private var outerRingFill: Color {
@@ -1215,7 +1231,7 @@ private struct DictationHistoryRow: View {
             }
 
             Text(result.text)
-                .font(.system(size: 17, weight: .regular))
+                .font(MuesliTheme.transcript())
                 .foregroundStyle(MuesliTheme.textPrimary)
                 .lineSpacing(2)
                 .textSelection(.enabled)

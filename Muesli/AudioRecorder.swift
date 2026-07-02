@@ -72,6 +72,18 @@ final class AudioRecorder {
         return outputURL
     }
 
+    func cancel() {
+        recorder?.stop()
+        recorder = nil
+
+        if let outputURL {
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+        outputURL = nil
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
     enum RecordingError: LocalizedError {
         case microphonePermissionDenied
         case noRecording

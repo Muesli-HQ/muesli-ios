@@ -1032,6 +1032,18 @@ final class DictationCoordinator {
         }
     }
 
+    func cancelOnboardingTestDictation() {
+        guard isOnboardingTestRecording else { return }
+        MuesliHaptics.dictationStop()
+        isOnboardingTestRecording = false
+        isOnboardingTestTranscribing = false
+        onboardingTestInputLevel = 0
+        onboardingTestError = nil
+        stopMetering()
+        recorder.cancel()
+        AppTelemetry.signal("onboarding_test_cancelled")
+    }
+
     func completeOnboarding() {
         hasCompletedOnboarding = true
         UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)

@@ -233,7 +233,7 @@ private struct KeyboardHandoffOverlay: View {
                         mode: coordinator.isRecording ? .level : .waiting,
                         color: coordinator.isRecording ? MuesliTheme.recording : MuesliTheme.transcribing,
                         level: coordinator.isRecording ? coordinator.inputLevel : nil,
-                        barCount: 24
+                        barCount: 32
                     )
                     .frame(width: 220, height: 56)
 
@@ -471,12 +471,12 @@ private struct MuesliDrawer: View {
                 Spacer()
 
                 Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .frame(width: 34, height: 34)
-                        .muesliGlassButton(cornerRadius: 17)
-                        .contentShape(Circle())
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .frame(width: 44, height: 44)
+                            .muesliGlassButton(cornerRadius: 22)
+                            .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
@@ -551,7 +551,7 @@ private struct SidebarSectionRow: View {
                 Image(systemName: isPinned ? "pin.fill" : "pin")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(isPinned ? accent : MuesliTheme.textTertiary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 44, height: 44)
                     .background(isPinned ? accent.opacity(0.15) : Color.clear)
                     .clipShape(Circle())
                     .contentShape(Circle())

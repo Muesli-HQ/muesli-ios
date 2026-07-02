@@ -404,14 +404,14 @@ struct OnboardingView: View {
                 Spacer()
 
                 Button(action: action) {
-                    Text(buttonTitle)
-                        .font(MuesliTheme.captionMedium())
-                        .foregroundStyle(isComplete ? MuesliTheme.success : .white)
-                        .padding(.horizontal, MuesliTheme.spacing12)
-                        .frame(height: 34)
-                        .background(
-                            Capsule()
-                                .fill(isComplete ? MuesliTheme.success.opacity(0.13) : MuesliTheme.accent)
+                        Text(buttonTitle)
+                            .font(MuesliTheme.captionMedium())
+                            .foregroundStyle(isComplete ? MuesliTheme.success : .white)
+                            .padding(.horizontal, MuesliTheme.spacing12)
+                            .frame(minHeight: 44)
+                            .background(
+                                Capsule()
+                                    .fill(isComplete ? MuesliTheme.success.opacity(0.13) : MuesliTheme.accent)
                         )
                         .overlay(
                             Capsule()
@@ -748,7 +748,7 @@ struct OnboardingView: View {
                                 mode: coordinator.isOnboardingTestRecording ? .level : .waiting,
                                 color: onboardingTestColor,
                                 level: coordinator.isOnboardingTestRecording ? coordinator.onboardingTestInputLevel : nil,
-                                barCount: 24
+                                barCount: 32
                             )
                             .frame(maxWidth: .infinity)
                             .frame(height: 54)
@@ -780,28 +780,50 @@ struct OnboardingView: View {
                     }
 
                     if coordinator.modelPreparation.isReady {
-                        Button {
-                            if coordinator.isOnboardingTestRecording {
-                                coordinator.stopOnboardingTestDictation()
-                            } else {
-                                coordinator.startOnboardingTestDictation()
+                        VStack(spacing: MuesliTheme.spacing8) {
+                            Button {
+                                if coordinator.isOnboardingTestRecording {
+                                    coordinator.stopOnboardingTestDictation()
+                                } else {
+                                    coordinator.startOnboardingTestDictation()
+                                }
+                            } label: {
+                                Label(
+                                    onboardingTestButtonTitle,
+                                    systemImage: onboardingTestButtonIcon
+                                )
+                                .font(MuesliTheme.headline())
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                                .foregroundStyle(onboardingTestButtonTextColor)
+                                .background(onboardingTestButtonBackground)
+                                .overlay(onboardingTestButtonBorder)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                             }
-                        } label: {
-                            Label(
-                                onboardingTestButtonTitle,
-                                systemImage: onboardingTestButtonIcon
-                            )
-                            .font(MuesliTheme.headline())
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                            .foregroundStyle(onboardingTestButtonTextColor)
-                            .background(onboardingTestButtonBackground)
-                            .overlay(onboardingTestButtonBorder)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .buttonStyle(.plain)
+                            .disabled(coordinator.isOnboardingTestTranscribing)
+
+                            if coordinator.isOnboardingTestRecording {
+                                Button(role: .destructive) {
+                                    coordinator.cancelOnboardingTestDictation()
+                                } label: {
+                                    Label("Discard Test", systemImage: "xmark")
+                                        .font(MuesliTheme.captionMedium())
+                                        .frame(maxWidth: .infinity)
+                                        .frame(minHeight: 44)
+                                        .foregroundStyle(MuesliTheme.destructive)
+                                        .background(MuesliTheme.destructive.opacity(0.07))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                                .strokeBorder(MuesliTheme.destructive.opacity(0.22), lineWidth: 1)
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .disabled(coordinator.isOnboardingTestTranscribing)
                     } else if coordinator.modelPreparation.phase == .failed || coordinator.modelPreparation.phase == .idle {
                         Button {
                             coordinator.prepareModelForOnboarding()

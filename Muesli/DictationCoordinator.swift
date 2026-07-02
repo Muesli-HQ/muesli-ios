@@ -110,7 +110,7 @@ final class DictationCoordinator {
     var clipboardStatusText: String?
 
     var hasMeetingRecordingInProgress: Bool {
-        isMeetingRecording || persistedRecordingMeetingSession != nil
+        isMeetingRecording || activeSession?.kind == .meeting || persistedRecordingMeetingSession != nil
     }
 
     var effectiveMeetingStatusText: String {
@@ -1685,7 +1685,7 @@ final class DictationCoordinator {
     }
 
     func startMeetingRecording(title: String = "Untitled Meeting") {
-        guard !isRecording, !isMeetingRecording, !isMeetingTranscribing, statusText != "Transcribing" else { return }
+        guard !isRecording, !isMeetingRecording, !isMeetingTranscribing, activeSession?.kind != .meeting, statusText != "Transcribing" else { return }
         MuesliHaptics.dictationStart()
         activeMeetingTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Untitled Meeting"

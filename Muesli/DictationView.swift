@@ -171,7 +171,7 @@ struct DictationView: View {
     }
 
     private func formattedAverageWPM(history: [DictationResult], sessions: [RecordingSession]) -> String {
-        let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let sessionsByID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         let completedDictationSessions = history.compactMap { result -> (words: Int, duration: TimeInterval)? in
             guard let sessionID = result.sessionID,
                   let session = sessionsByID[sessionID],

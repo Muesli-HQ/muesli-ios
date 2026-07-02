@@ -31,9 +31,6 @@ struct RootView: View {
         .onChange(of: coordinator.settingsNavigationRequestID) { _, requestID in
             navigateToSettingsIfNeeded(requestID)
         }
-        .onChange(of: selectedSection) { _, section in
-            ensureSectionPinned(section)
-        }
         .onChange(of: pinnedSectionsStorage) { _, _ in
             clampSelectedSectionToPinnedSections()
         }
@@ -143,27 +140,35 @@ struct RootView: View {
 
     private var pagedSectionContent: some View {
         TabView(selection: $selectedSection) {
-            ForEach(compactPageSections, id: \.self) { section in
-                sectionView(for: section)
-                    .tag(section)
+            ForEach(pageSections, id: \.self) { section in
+                Group {
+                    if shouldRenderPage(section) {
+                        sectionView(for: section)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .tag(section)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
     }
 
-    private var compactPageSections: [AppSection] {
-        let sections = pinnedSections
-        guard let selectedIndex = sections.firstIndex(of: selectedSection) else {
-            return sections.first.map { [$0] } ?? []
+    private var pageSections: [AppSection] {
+        var sections = pinnedSections
+        if !sections.contains(selectedSection) {
+            sections.append(selectedSection)
         }
+        return sections
+    }
 
-        let nearbyIndices = [
-            selectedIndex - 1,
-            selectedIndex,
-            selectedIndex + 1
-        ].filter { sections.indices.contains($0) }
-
-        return nearbyIndices.map { sections[$0] }
+    private func shouldRenderPage(_ section: AppSection) -> Bool {
+        let sections = pageSections
+        guard let selectedIndex = sections.firstIndex(of: selectedSection),
+              let sectionIndex = sections.firstIndex(of: section) else {
+            return section == selectedSection
+        }
+        return abs(sectionIndex - selectedIndex) <= 1
     }
 
     private func openDrawer() {
@@ -181,7 +186,6 @@ struct RootView: View {
     private func navigateToSettingsIfNeeded(_ requestID: UUID?) {
         guard requestID != nil else { return }
         if coordinator.hasCompletedOnboarding {
-            ensureSectionPinned(.settings)
             selectedSection = .settings
         }
         isDrawerOpen = false
@@ -209,16 +213,6 @@ struct RootView: View {
         if !pins.contains(selectedSection), let nextSection = pins.first {
             selectedSection = nextSection
         }
-    }
-
-    private func ensureSectionPinned(_ section: AppSection) {
-        var pins = pinnedSections
-        guard !pins.contains(section) else { return }
-        if pins.count >= AppSection.maxPinnedSections {
-            pins.removeFirst()
-        }
-        pins.append(section)
-        pinnedSectionsStorage = AppSection.storageString(for: pins)
     }
 
 }

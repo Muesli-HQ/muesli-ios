@@ -129,11 +129,37 @@ struct MuesliInlineWaveformView: View {
     private func samplesForRender(count: Int, elapsed: TimeInterval) -> [CGFloat] {
         switch mode {
         case .level:
-            let samples = paddedLiveSamples(count: count)
-            return samples
+            return liveLevelSamples(count: count, elapsed: elapsed)
         case .waiting:
             return waitingSamples(count: count, elapsed: elapsed)
         }
+    }
+
+    private func liveLevelSamples(count: Int, elapsed: TimeInterval) -> [CGFloat] {
+        var samples = paddedLiveSamples(count: count)
+        guard let level else { return samples }
+
+        let normalized = CGFloat(min(max(level, 0), 1))
+        let gatedLevel = gatedLevel(for: normalized)
+        guard gatedLevel > 0.02 else {
+            return samples.map { min($0, 0.02) }
+        }
+
+        let shaped = pow(gatedLevel, 0.72)
+        let dynamicCount = max(10, min(count, count / 2))
+        let startIndex = count - dynamicCount
+
+        for offset in 0..<dynamicCount {
+            let index = startIndex + offset
+            let localPhase = CGFloat(elapsed) * 8.6 + CGFloat(offset) * 0.58
+            let broadPhase = CGFloat(elapsed) * 2.1 + CGFloat(offset) * 0.13
+            let motion = 0.62 + 0.24 * sin(localPhase) + 0.14 * sin(broadPhase)
+            let texture = 0.90 + 0.12 * sin(localPhase * 1.47)
+            let sample = shaped * motion * texture
+            samples[index] = min(0.98, max(0.01, sample))
+        }
+
+        return samples
     }
 
     private func paddedLiveSamples(count: Int) -> [CGFloat] {
@@ -173,8 +199,7 @@ struct MuesliInlineWaveformView: View {
         guard mode == .level else { return }
 
         let normalized = CGFloat(min(max(rawLevel, 0), 1))
-        let noiseFloor: CGFloat = 0.26
-        let gatedLevel = max(0, (normalized - noiseFloor) / (1 - noiseFloor))
+        let gatedLevel = gatedLevel(for: normalized)
         let shaped = pow(gatedLevel, 0.72)
         let texture = CGFloat(0.90 + 0.16 * sin(Double(sampleSequence) * 1.73))
         let sample = gatedLevel <= 0.02 ? 0 : min(0.98, max(0.01, shaped * 0.92 * texture))
@@ -185,6 +210,11 @@ struct MuesliInlineWaveformView: View {
         if liveSamples.count > maxSamples {
             liveSamples.removeFirst(liveSamples.count - maxSamples)
         }
+    }
+
+    private func gatedLevel(for normalized: CGFloat) -> CGFloat {
+        let noiseFloor: CGFloat = 0.26
+        return max(0, (normalized - noiseFloor) / (1 - noiseFloor))
     }
 
 }

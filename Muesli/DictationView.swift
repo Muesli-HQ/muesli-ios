@@ -124,7 +124,13 @@ struct DictationView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
             HStack(spacing: MuesliTheme.spacing12) {
-                MuesliHeaderWaveformMark()
+                Image("MuesliAppIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 42, height: 42)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .shadow(color: MuesliTheme.accent.opacity(0.24), radius: 8, x: 0, y: 3)
+                    .accessibilityHidden(true)
                 Text("muesli")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
@@ -714,23 +720,6 @@ private struct DictationDashboardStats {
     let wpm: String
     let meetings: String
     let streak: String
-}
-
-private struct MuesliHeaderWaveformMark: View {
-    private let bars: [CGFloat] = [0.34, 0.58, 0.82, 1.0, 0.74, 0.5, 0.68, 0.96, 0.78, 0.54]
-
-    var body: some View {
-        HStack(spacing: 2.2) {
-            ForEach(bars.indices, id: \.self) { index in
-                Capsule()
-                    .fill(MuesliTheme.accent)
-                    .frame(width: 3.2, height: 32 * bars[index])
-            }
-        }
-        .frame(width: 42, height: 42)
-        .shadow(color: MuesliTheme.accent.opacity(0.28), radius: 8, x: 0, y: 3)
-        .accessibilityHidden(true)
-    }
 }
 
 private struct DictationHomeStatTile: View {

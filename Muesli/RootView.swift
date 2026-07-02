@@ -31,6 +31,9 @@ struct RootView: View {
         .onChange(of: coordinator.settingsNavigationRequestID) { _, requestID in
             navigateToSettingsIfNeeded(requestID)
         }
+        .onChange(of: pinnedSectionsStorage) { _, _ in
+            clampSelectedSectionToPinnedSections()
+        }
     }
 
     private var currentAccent: Color {
@@ -69,7 +72,7 @@ struct RootView: View {
                 .background(MuesliTheme.backgroundBase)
             } else {
                 VStack(spacing: 0) {
-                    sectionContent
+                    pagedSectionContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     MuesliTabSwitcher(
@@ -115,7 +118,12 @@ struct RootView: View {
 
     @ViewBuilder
     private var sectionContent: some View {
-        switch selectedSection {
+        sectionView(for: selectedSection)
+    }
+
+    @ViewBuilder
+    private func sectionView(for section: AppSection) -> some View {
+        switch section {
         case .dictations:
             DictationView(coordinator: coordinator)
         case .meetings:
@@ -128,6 +136,39 @@ struct RootView: View {
                 selectedSection = section
             }
         }
+    }
+
+    private var pagedSectionContent: some View {
+        TabView(selection: $selectedSection) {
+            ForEach(pageSections, id: \.self) { section in
+                Group {
+                    if shouldRenderPage(section) {
+                        sectionView(for: section)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .tag(section)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+    }
+
+    private var pageSections: [AppSection] {
+        var sections = pinnedSections
+        if !sections.contains(selectedSection) {
+            sections.append(selectedSection)
+        }
+        return sections
+    }
+
+    private func shouldRenderPage(_ section: AppSection) -> Bool {
+        let sections = pageSections
+        guard let selectedIndex = sections.firstIndex(of: selectedSection),
+              let sectionIndex = sections.firstIndex(of: section) else {
+            return section == selectedSection
+        }
+        return abs(sectionIndex - selectedIndex) <= 1
     }
 
     private func openDrawer() {
@@ -162,7 +203,18 @@ struct RootView: View {
             pins.append(section)
         }
         pinnedSectionsStorage = AppSection.storageString(for: pins)
+        if !pins.contains(selectedSection), let nextSection = pins.first {
+            selectedSection = nextSection
+        }
     }
+
+    private func clampSelectedSectionToPinnedSections() {
+        let pins = pinnedSections
+        if !pins.contains(selectedSection), let nextSection = pins.first {
+            selectedSection = nextSection
+        }
+    }
+
 }
 
 private struct KeyboardHandoffOverlay: View {

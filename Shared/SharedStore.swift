@@ -136,6 +136,10 @@ struct SharedStore: Sendable {
         try database().recordingSession(id: id)
     }
 
+    func activeRecordingSession(id: UUID) throws -> RecordingSession? {
+        try database().activeRecordingSession(id: id)
+    }
+
     func recordingSession(requestID: UUID) throws -> RecordingSession? {
         try database().recordingSession(requestID: requestID)
     }
@@ -464,6 +468,17 @@ private struct SharedStoreDatabase {
         try withDatabase { db in
             try querySingleBlob(
                 "SELECT payload FROM recording_sessions WHERE id = ? LIMIT 1",
+                db: db
+            ) { statement in
+                try bind(id.uuidString, to: statement, at: 1)
+            }.map { try decoder.decode(RecordingSession.self, from: $0) }
+        }
+    }
+
+    func activeRecordingSession(id: UUID) throws -> RecordingSession? {
+        try withDatabase { db in
+            try querySingleBlob(
+                "SELECT payload FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
                 db: db
             ) { statement in
                 try bind(id.uuidString, to: statement, at: 1)

@@ -110,7 +110,7 @@ enum AudioInputRouteManager {
         let output = session.currentRoute.outputs.first
         return AudioInputRouteSnapshot(
             preference: preference,
-            inputName: input?.portName ?? fallbackInputName(for: preference, availableInputs: session.availableInputs ?? []),
+            inputName: displayName(for: input) ?? fallbackInputName(for: preference, availableInputs: session.availableInputs ?? []),
             inputDetail: detail(for: input?.portType),
             outputName: output?.portName ?? "Default Output"
         )
@@ -160,7 +160,15 @@ enum AudioInputRouteManager {
         for preference: RecordingMicrophonePreference,
         availableInputs: [AVAudioSessionPortDescription]
     ) -> String {
-        preferredInput(for: preference, in: availableInputs)?.portName ?? preference.label
+        preferredInput(for: preference, in: availableInputs).flatMap(displayName(for:)) ?? preference.label
+    }
+
+    private static func displayName(for input: AVAudioSessionPortDescription?) -> String? {
+        guard let input else { return nil }
+        if isBuiltInInput(input) {
+            return RecordingMicrophonePreference.builtIn.label
+        }
+        return input.portName
     }
 
     private static func isBuiltInInput(_ input: AVAudioSessionPortDescription) -> Bool {

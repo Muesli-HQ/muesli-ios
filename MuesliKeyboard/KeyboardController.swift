@@ -350,9 +350,20 @@ final class KeyboardController {
         prepareLaunchRequestIfNeeded()
         pollingTask?.cancel()
         pollingTask = Task { @MainActor [weak self] in
+            var lastFullRefresh = Date.distantPast
             while !Task.isCancelled {
-                self?.refreshLatestDictation()
-                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+
+                if self.dictationPhase == .recording,
+                   Date().timeIntervalSince(lastFullRefresh) < 0.45
+                {
+                    self.refreshRuntimeLevelOnly()
+                    try? await Task.sleep(for: .milliseconds(100))
+                } else {
+                    self.refreshLatestDictation()
+                    lastFullRefresh = Date()
+                    try? await Task.sleep(for: self.dictationPhase == .recording ? .milliseconds(100) : .milliseconds(500))
+                }
             }
         }
     }
@@ -368,6 +379,16 @@ final class KeyboardController {
     func stopPolling() {
         pollingTask?.cancel()
         pollingTask = nil
+    }
+
+    private func refreshRuntimeLevelOnly() {
+        do {
+            let runtimeStatus = try store.keyboardRuntimeStatus()
+            latestRuntimeStatus = runtimeStatus
+            apply(runtimeStatus: runtimeStatus)
+        } catch {
+            inputLevel = 0
+        }
     }
 
     private func refreshLatestDictation() {

@@ -73,8 +73,6 @@ struct MuesliInlineWaveformView: View {
     @State private var liveSamples: [CGFloat] = []
     @State private var sampleSequence = 0
 
-    private let sampleTimer = Timer.publish(every: 1.0 / 18.0, on: .main, in: .common).autoconnect()
-
     private let basePattern: [CGFloat] = [
         0.18, 0.26, 0.42, 0.58, 0.76, 0.92,
         0.72, 0.46, 0.28, 0.36, 0.62, 0.86,
@@ -95,9 +93,6 @@ struct MuesliInlineWaveformView: View {
         }
         .onChange(of: mode) { _, _ in
             seedLiveSamplesIfNeeded(force: true)
-        }
-        .onReceive(sampleTimer) { _ in
-            appendLiveSample(level ?? 0)
         }
     }
 
@@ -134,11 +129,35 @@ struct MuesliInlineWaveformView: View {
     private func samplesForRender(count: Int, elapsed: TimeInterval) -> [CGFloat] {
         switch mode {
         case .level:
-            let samples = paddedLiveSamples(count: count)
-            return samples
+            return liveLevelSamples(count: count, elapsed: elapsed)
         case .waiting:
             return waitingSamples(count: count, elapsed: elapsed)
         }
+    }
+
+    private func liveLevelSamples(count: Int, elapsed: TimeInterval) -> [CGFloat] {
+        var samples = paddedLiveSamples(count: count)
+        guard let level else { return samples }
+
+        let normalized = CGFloat(min(max(level, 0), 1))
+        let gatedLevel = gatedLevel(for: normalized)
+        guard gatedLevel > 0.02 else {
+            return samples.map { min($0, 0.02) }
+        }
+
+        let shaped = pow(gatedLevel, 0.72)
+
+        for index in 0..<count {
+            let base = basePattern[index % basePattern.count]
+            let localPhase = CGFloat(elapsed) * 8.6 + CGFloat(index) * 0.58
+            let broadPhase = CGFloat(elapsed) * 2.1 + CGFloat(index) * 0.13
+            let motion = 0.54 + 0.22 * sin(localPhase) + 0.12 * sin(broadPhase) + base * 0.22
+            let texture = 0.90 + 0.12 * sin(localPhase * 1.47)
+            let sample = shaped * motion * texture
+            samples[index] = min(0.98, max(0.01, sample))
+        }
+
+        return samples
     }
 
     private func paddedLiveSamples(count: Int) -> [CGFloat] {
@@ -178,8 +197,7 @@ struct MuesliInlineWaveformView: View {
         guard mode == .level else { return }
 
         let normalized = CGFloat(min(max(rawLevel, 0), 1))
-        let noiseFloor: CGFloat = 0.26
-        let gatedLevel = max(0, (normalized - noiseFloor) / (1 - noiseFloor))
+        let gatedLevel = gatedLevel(for: normalized)
         let shaped = pow(gatedLevel, 0.72)
         let texture = CGFloat(0.90 + 0.16 * sin(Double(sampleSequence) * 1.73))
         let sample = gatedLevel <= 0.02 ? 0 : min(0.98, max(0.01, shaped * 0.92 * texture))
@@ -190,6 +208,11 @@ struct MuesliInlineWaveformView: View {
         if liveSamples.count > maxSamples {
             liveSamples.removeFirst(liveSamples.count - maxSamples)
         }
+    }
+
+    private func gatedLevel(for normalized: CGFloat) -> CGFloat {
+        let noiseFloor: CGFloat = 0.26
+        return max(0, (normalized - noiseFloor) / (1 - noiseFloor))
     }
 
 }

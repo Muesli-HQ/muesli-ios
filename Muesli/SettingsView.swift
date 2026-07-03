@@ -269,16 +269,25 @@ struct SettingsView: View {
     }
 
     private var keyboardSessionModeDetail: String {
+        let baseDetail = "Keeps Muesli ready for longer voice notes from the keyboard with a visible microphone session."
         let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !status.isEmpty, status != "Off" {
-            return "\(status). Keeps Muesli ready for longer voice notes from the keyboard with a visible microphone session."
+            switch status {
+            case "Ready", "Starting", "Recording", "Transcribing", "Timed out":
+                return "\(status). \(baseDetail)"
+            default:
+                if status.hasPrefix("Retrying session standby") || status.hasPrefix("Session standby unavailable") {
+                    return "\(status). \(baseDetail)"
+                }
+                return "Session standby needs attention. Tap Start to record normally, or toggle this off and on to retry."
+            }
         }
 
         guard keyboardSessionMode else {
             return "Start from the keyboard will open Muesli when microphone access is needed."
         }
 
-        return "Starting. Keeps Muesli ready for longer voice notes from the keyboard with a visible microphone session."
+        return "Starting. \(baseDetail)"
     }
 
     private var meetingSettings: some View {

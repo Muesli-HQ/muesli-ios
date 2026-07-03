@@ -81,7 +81,27 @@ private enum KeyboardSessionEvent {
     case recordingStarted(UUID)
     case transcribing(UUID)
     case requestFinished
-    case stop(reason: String)
+    case stop(KeyboardSessionStopReason)
+}
+
+private enum KeyboardSessionStopReason: Equatable {
+    case off
+    case timedOut
+    case turnedOff
+    case stopped
+
+    var message: String {
+        switch self {
+        case .off:
+            "Off"
+        case .timedOut:
+            "Timed out"
+        case .turnedOff:
+            "Turned off"
+        case .stopped:
+            "Stopped"
+        }
+    }
 }
 
 private enum KeyboardSessionReducer {
@@ -110,7 +130,7 @@ private enum KeyboardSessionReducer {
                 sessionAvailable: state.sessionAvailable
             )
         case .stop(let reason):
-            return KeyboardSessionState(phase: reason == "Timed out" ? .timedOut : .off)
+            return KeyboardSessionState(phase: reason == .timedOut ? .timedOut : .off)
         }
     }
 }
@@ -142,6 +162,7 @@ final class DictationCoordinator {
     private var keyboardRuntimePollingTask: Task<Void, Never>?
     private var keyboardSessionTimeoutTask: Task<Void, Never>?
     private var keyboardSessionRetryTask: Task<Void, Never>?
+    private var keyboardSessionRetryAttempt = 0
     private var keyboardSessionLiveActivityRequestIDs = Set<UUID>()
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
@@ -173,6 +194,11 @@ final class DictationCoordinator {
             }
         }
     }
+
+    private static let keyboardSessionRetryMessage = "Retrying session standby"
+    private static let keyboardSessionUnavailableMessage = "Session standby unavailable. Tap Start to record normally."
+    private static let keyboardSessionMaxRetryAttempts = 3
+    private static let keyboardSessionRetryBaseDelaySeconds: TimeInterval = 15
     var syncSetupSource: String?
     var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingCompletedKey)
     var userName = UserDefaults.standard.string(forKey: userNameKey) ?? ""
@@ -498,7 +524,7 @@ final class DictationCoordinator {
         userName = "UI Tests"
         selectedUseCase = .everything
         selectedTranscriptionModel = .defaultModel
-        transitionKeyboardSession(.stop(reason: "Off"))
+        transitionKeyboardSession(.stop(.off))
         UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
         UserDefaults.standard.set(userName, forKey: Self.userNameKey)
         UserDefaults.standard.set(selectedUseCase.rawValue, forKey: Self.useCaseKey)
@@ -846,16 +872,17 @@ final class DictationCoordinator {
             guard isKeyboardSessionArmed || keyboardSessionActivitySession != nil || keyboardSessionKeeper.isRunning else {
                 keyboardSessionRetryTask?.cancel()
                 keyboardSessionRetryTask = nil
-                transitionKeyboardSession(.stop(reason: "Turned off"))
+                keyboardSessionRetryAttempt = 0
+                transitionKeyboardSession(.stop(.turnedOff))
                 saveKeyboardRuntimeStatus(
                     isActive: false,
                     activeRequestID: activeRequest?.id,
                     phase: activeRequest == nil ? .idle : .recording,
-                    message: "Turned off"
+                    message: KeyboardSessionStopReason.turnedOff.message
                 )
                 return
             }
-            stopKeyboardSessionMode(reason: "Turned off")
+            stopKeyboardSessionMode(reason: .turnedOff)
         }
     }
 
@@ -882,6 +909,7 @@ final class DictationCoordinator {
             try await keyboardSessionKeeper.start()
             keyboardSessionRetryTask?.cancel()
             keyboardSessionRetryTask = nil
+            keyboardSessionRetryAttempt = 0
             prewarmModelIfNeeded(reason: "keyboard_session")
             transitionKeyboardSession(.startSucceeded)
             startKeyboardRuntimePolling()
@@ -911,9 +939,10 @@ final class DictationCoordinator {
         } catch {
             let isRecoverable = isRecoverableKeyboardSessionError(error)
             if isRecoverable {
-                transitionKeyboardSession(.retryScheduled(message: error.localizedDescription))
+                transitionKeyboardSession(.retryScheduled(message: Self.keyboardSessionRetryMessage))
                 scheduleKeyboardSessionRetry()
             } else {
+                keyboardSessionRetryAttempt = 0
                 transitionKeyboardSession(.startFailed(message: error.localizedDescription, recoverable: false))
                 UserDefaults.standard.set(false, forKey: MuesliPreferences.keyboardSessionModeKey)
             }
@@ -921,38 +950,39 @@ final class DictationCoordinator {
                 isActive: false,
                 activeRequestID: nil,
                 phase: .failed,
-                message: error.localizedDescription
+                message: isRecoverable ? Self.keyboardSessionRetryMessage : error.localizedDescription
             )
             AppTelemetry.signal("keyboard_session_failed", parameters: ["error": String(describing: type(of: error))])
         }
     }
 
-    func stopKeyboardSessionMode(reason: String = "Stopped") {
+    private func stopKeyboardSessionMode(reason: KeyboardSessionStopReason = .stopped) {
         keyboardSessionTimeoutTask?.cancel()
         keyboardSessionTimeoutTask = nil
         keyboardSessionRetryTask?.cancel()
         keyboardSessionRetryTask = nil
-        transitionKeyboardSession(.stop(reason: reason))
+        keyboardSessionRetryAttempt = 0
+        transitionKeyboardSession(.stop(reason))
         keyboardSessionKeeper.stop(deactivateSession: !isRecording)
         saveKeyboardRuntimeStatus(
             isActive: false,
             activeRequestID: activeRequest?.id,
             phase: activeRequest == nil ? .idle : .recording,
-            message: reason
+            message: reason.message
         )
 
         if let session = keyboardSessionActivitySession {
             Task {
                 await liveActivityController.end(
                     phase: "Ended",
-                    detail: reason,
+                    detail: reason.message,
                     session: session,
                     dismissal: .immediate
                 )
             }
         }
         keyboardSessionActivitySession = nil
-        AppTelemetry.signal("keyboard_session_stopped", parameters: ["reason": reason])
+        AppTelemetry.signal("keyboard_session_stopped", parameters: ["reason": reason.message])
     }
 
     private func isRecoverableKeyboardSessionError(_ error: Error) -> Bool {
@@ -1526,6 +1556,7 @@ final class DictationCoordinator {
                 clearKeyboardLiveTranscript()
                 clearKeyboardSessionLiveActivityRoute(for: request.id)
                 stopMetering()
+                transitionKeyboardSession(.requestFinished)
                 resumeKeyboardSessionKeeperIfNeeded()
                 AppTelemetry.signal("dictation_failed", parameters: ["stage": "recording"])
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
@@ -2805,21 +2836,45 @@ final class DictationCoordinator {
                 self.scheduleKeyboardSessionTimeout()
                 return
             }
-            self.stopKeyboardSessionMode(reason: "Timed out")
+            self.stopKeyboardSessionMode(reason: .timedOut)
         }
     }
 
-    private func scheduleKeyboardSessionRetry() {
+    private func scheduleKeyboardSessionRetry(attempt: Int? = nil) {
+        guard MuesliPreferences.keyboardSessionModeEnabled else { return }
+        let retryAttempt = attempt ?? (keyboardSessionRetryAttempt + 1)
+        guard retryAttempt <= Self.keyboardSessionMaxRetryAttempts else {
+            keyboardSessionRetryTask?.cancel()
+            keyboardSessionRetryTask = nil
+            keyboardSessionRetryAttempt = 0
+            transitionKeyboardSession(.startFailed(message: Self.keyboardSessionUnavailableMessage, recoverable: false))
+            saveKeyboardRuntimeStatus(
+                isActive: false,
+                activeRequestID: nil,
+                phase: .failed,
+                message: Self.keyboardSessionUnavailableMessage
+            )
+            return
+        }
+
+        keyboardSessionRetryAttempt = retryAttempt
+        let delay = Self.keyboardSessionRetryBaseDelaySeconds * pow(2, Double(retryAttempt - 1))
         keyboardSessionRetryTask?.cancel()
         keyboardSessionRetryTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(15))
+            try? await Task.sleep(for: .seconds(delay))
             guard let self,
                   MuesliPreferences.keyboardSessionModeEnabled,
-                  !self.isKeyboardSessionArmed,
-                  !self.keyboardSessionState.isWorkflowActive,
-                  !self.isRecording,
-                  !self.isMeetingRecording
+                  !self.isKeyboardSessionArmed
             else { return }
+
+            guard !self.keyboardSessionState.isWorkflowActive,
+                  !self.isRecording,
+                  !self.isMeetingRecording,
+                  self.activeRequest == nil
+            else {
+                self.scheduleKeyboardSessionRetry(attempt: retryAttempt)
+                return
+            }
 
             await self.startKeyboardSessionMode()
         }
@@ -2834,6 +2889,7 @@ final class DictationCoordinator {
                 try await self.keyboardSessionKeeper.start()
                 self.keyboardSessionRetryTask?.cancel()
                 self.keyboardSessionRetryTask = nil
+                self.keyboardSessionRetryAttempt = 0
                 self.transitionKeyboardSession(.startSucceeded)
                 self.scheduleKeyboardSessionTimeout()
                 self.saveKeyboardRuntimeStatus(
@@ -2854,9 +2910,10 @@ final class DictationCoordinator {
             } catch {
                 let isRecoverable = self.isRecoverableKeyboardSessionError(error)
                 if isRecoverable {
-                    self.transitionKeyboardSession(.retryScheduled(message: error.localizedDescription))
+                    self.transitionKeyboardSession(.retryScheduled(message: Self.keyboardSessionRetryMessage))
                     self.scheduleKeyboardSessionRetry()
                 } else {
+                    self.keyboardSessionRetryAttempt = 0
                     self.transitionKeyboardSession(.startFailed(message: error.localizedDescription, recoverable: false))
                     UserDefaults.standard.set(false, forKey: MuesliPreferences.keyboardSessionModeKey)
                 }
@@ -2864,7 +2921,7 @@ final class DictationCoordinator {
                     isActive: false,
                     activeRequestID: nil,
                     phase: .failed,
-                    message: error.localizedDescription
+                    message: isRecoverable ? Self.keyboardSessionRetryMessage : error.localizedDescription
                 )
             }
         }

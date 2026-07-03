@@ -778,6 +778,7 @@ final class DictationCoordinator {
             AppTelemetry.signal("keyboard_session_started")
         } catch {
             isKeyboardSessionArmed = false
+            UserDefaults.standard.set(false, forKey: MuesliPreferences.keyboardSessionModeKey)
             keyboardSessionStatusText = error.localizedDescription
             saveKeyboardRuntimeStatus(
                 isActive: false,
@@ -790,6 +791,7 @@ final class DictationCoordinator {
     }
 
     func stopKeyboardSessionMode(reason: String = "Stopped") {
+        UserDefaults.standard.set(false, forKey: MuesliPreferences.keyboardSessionModeKey)
         keyboardSessionTimeoutTask?.cancel()
         keyboardSessionTimeoutTask = nil
         isKeyboardSessionArmed = false
@@ -814,6 +816,29 @@ final class DictationCoordinator {
         }
         keyboardSessionActivitySession = nil
         AppTelemetry.signal("keyboard_session_stopped", parameters: ["reason": reason])
+    }
+
+    private func refreshKeyboardSessionLiveActivity(phase: String, detail: String) {
+        guard isKeyboardSessionArmed else { return }
+
+        if keyboardSessionActivitySession == nil {
+            keyboardSessionActivitySession = RecordingSession(
+                kind: .keyboardDictation,
+                title: "Keyboard Session",
+                startedAt: .now,
+                phase: .recording
+            )
+        }
+
+        guard let session = keyboardSessionActivitySession else { return }
+        Task {
+            await liveActivityController.start(
+                session: session,
+                requestID: nil,
+                phase: phase,
+                detail: detail
+            )
+        }
     }
 
     func transcript(for session: RecordingSession) -> Transcript? {
@@ -1310,12 +1335,19 @@ final class DictationCoordinator {
                 try store.saveRequest(request)
                 try store.saveStatus(.init(requestID: request.id, phase: .recording))
                 Task {
-                    await liveActivityController.start(
-                        session: session,
-                        requestID: request.id,
-                        phase: "Listening",
-                        detail: source == "keyboard" ? "Keyboard voice note active" : "Recording voice note"
-                    )
+                    if source == "keyboard", isKeyboardSessionArmed {
+                        refreshKeyboardSessionLiveActivity(
+                            phase: "Listening",
+                            detail: "Keyboard voice note active"
+                        )
+                    } else {
+                        await liveActivityController.start(
+                            session: session,
+                            requestID: request.id,
+                            phase: "Listening",
+                            detail: "Recording voice note"
+                        )
+                    }
                 }
             } catch {
                 session.phase = .failed
@@ -1495,11 +1527,18 @@ final class DictationCoordinator {
             try? store.saveSession(session)
             activeSession = session
             Task {
-                await liveActivityController.update(
-                    phase: "Transcribing",
-                    detail: "Preparing text for the keyboard",
-                    session: session
-                )
+                if isKeyboardHandoffActive, isKeyboardSessionArmed {
+                    refreshKeyboardSessionLiveActivity(
+                        phase: "Transcribing",
+                        detail: "Preparing text for the keyboard"
+                    )
+                } else {
+                    await liveActivityController.update(
+                        phase: "Transcribing",
+                        detail: "Preparing text for the keyboard",
+                        session: session
+                    )
+                }
             }
         }
 
@@ -1627,13 +1666,20 @@ final class DictationCoordinator {
                 liveDictationTranscript = ""
                 realtimeDictationCommittedText = ""
                 if let completedSession = try? store.recordingSession(requestID: request.id) {
-                    Task {
-                        await liveActivityController.end(
-                            phase: "Completed",
-                            detail: "Transcript saved",
-                            session: completedSession,
-                            dismissal: .immediate
+                    if startedFromKeyboard, isKeyboardSessionArmed {
+                        refreshKeyboardSessionLiveActivity(
+                            phase: "Ready",
+                            detail: "Keyboard voice note session active"
                         )
+                    } else {
+                        Task {
+                            await liveActivityController.end(
+                                phase: "Completed",
+                                detail: "Transcript saved",
+                                session: completedSession,
+                                dismissal: .immediate
+                            )
+                        }
                     }
                 }
                 AppTelemetry.signal(
@@ -2604,6 +2650,7 @@ final class DictationCoordinator {
                 }
             } catch {
                 self.isKeyboardSessionArmed = false
+                UserDefaults.standard.set(false, forKey: MuesliPreferences.keyboardSessionModeKey)
                 self.keyboardSessionStatusText = error.localizedDescription
                 self.saveKeyboardRuntimeStatus(
                     isActive: false,
@@ -2662,12 +2709,19 @@ final class DictationCoordinator {
             if let index = recordingSessions.firstIndex(where: { $0.id == session.id }) {
                 recordingSessions[index] = session
             }
-            Task {
-                await liveActivityController.end(
-                    phase: "Cancelled",
-                    detail: "Recording cancelled",
-                    session: session
+            if isKeyboardHandoffActive, isKeyboardSessionArmed {
+                refreshKeyboardSessionLiveActivity(
+                    phase: "Ready",
+                    detail: "Keyboard voice note session active"
                 )
+            } else {
+                Task {
+                    await liveActivityController.end(
+                        phase: "Cancelled",
+                        detail: "Recording cancelled",
+                        session: session
+                    )
+                }
             }
         }
         activeRequest = nil

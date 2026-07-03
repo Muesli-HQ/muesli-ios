@@ -234,14 +234,8 @@ struct SettingsView: View {
                     SettingsToggleRow(
                         icon: "keyboard.badge.ellipsis",
                         title: "Keyboard Session Mode",
-                        detail: "Keep Muesli ready for longer voice notes from the keyboard with a visible microphone session.",
+                        detail: keyboardSessionModeDetail,
                         isOn: $keyboardSessionMode
-                    )
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsRow(
-                        icon: "waveform.badge.mic",
-                        title: "Session",
-                        value: coordinator.keyboardSessionStatusText
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsMicrophonePicker(selection: $microphonePreference)
@@ -272,6 +266,16 @@ struct SettingsView: View {
                 .padding(MuesliTheme.spacing16)
             }
         }
+    }
+
+    private var keyboardSessionModeDetail: String {
+        guard keyboardSessionMode else {
+            return "Start from the keyboard will open Muesli when microphone access is needed."
+        }
+
+        let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let statusText = status.isEmpty ? "Starting" : status
+        return "\(statusText). Keeps Muesli ready for longer voice notes from the keyboard with a visible microphone session."
     }
 
     private var meetingSettings: some View {

@@ -4,13 +4,13 @@ struct KeyboardRootView: View {
     @Bindable var controller: KeyboardController
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 7) {
             keyboardDeck
             helperKeys
         }
-        .padding(.horizontal, 10)
-        .padding(.top, MuesliTheme.spacing8)
-        .padding(.bottom, 10)
+        .padding(.horizontal, MuesliTheme.spacing8)
+        .padding(.top, 6)
+        .padding(.bottom, MuesliTheme.spacing8)
         .background(
             LinearGradient(
                 colors: [
@@ -27,11 +27,10 @@ struct KeyboardRootView: View {
     }
 
     private var keyboardDeck: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 9) {
             Capsule()
                 .fill(MuesliTheme.textSecondary.opacity(0.7))
-                .frame(width: 44, height: 4)
-                .padding(.top, 2)
+                .frame(width: 40, height: 4)
 
             header
 
@@ -43,24 +42,25 @@ struct KeyboardRootView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
-        .padding(MuesliTheme.spacing12)
+        .padding(.horizontal, 10)
+        .padding(.top, MuesliTheme.spacing8)
+        .padding(.bottom, 10)
         .muesliKeyboardDeckSurface()
         .animation(.snappy(duration: 0.22), value: controller.showsActiveWaveform)
         .animation(.snappy(duration: 0.22), value: controller.primaryButtonRole)
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            MuesliWaveformView(
-                isActive: false,
-                color: MuesliTheme.recording,
-                barCount: 13,
-                spacing: 1.4
-            )
-            .frame(width: 34, height: 24)
+        HStack(spacing: MuesliTheme.spacing8) {
+            Image("MuesliAppIcon")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 32, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .accessibilityHidden(true)
 
             Text("muesli")
-                .font(.system(size: 22, weight: .bold))
+                .font(.system(size: 21, weight: .bold))
                 .foregroundStyle(MuesliTheme.textPrimary)
 
             Spacer()
@@ -80,14 +80,8 @@ struct KeyboardRootView: View {
     }
 
     private var readyRecorder: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: MuesliTheme.spacing8) {
             primaryActionButton(isProminent: true)
-
-            Text(readyHint)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
 
             if controller.canInsertLatest {
                 Button {
@@ -97,7 +91,7 @@ struct KeyboardRootView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(MuesliTheme.recording)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 36)
+                        .frame(height: 32)
                         .background(MuesliTheme.recording.opacity(0.14), in: Capsule())
                         .contentShape(Capsule())
                 }
@@ -107,7 +101,7 @@ struct KeyboardRootView: View {
     }
 
     private var activeRecorder: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(activeStatusColor)
@@ -129,7 +123,7 @@ struct KeyboardRootView: View {
                     spacing: 2.5,
                     framesPerSecond: 18
                 )
-                .frame(height: 68)
+                .frame(height: 54)
                 .shadow(color: activeStatusColor.opacity(0.36), radius: 12)
 
                 if controller.dictationPhase == .transcribing {
@@ -160,7 +154,7 @@ struct KeyboardRootView: View {
                         )
                     } else {
                         Color.clear
-                            .frame(height: 44)
+                            .frame(height: 40)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -172,8 +166,8 @@ struct KeyboardRootView: View {
     }
 
     private var helperKeys: some View {
-        VStack(spacing: MuesliTheme.spacing8) {
-            HStack(spacing: MuesliTheme.spacing8) {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
                 KeyboardTextKey(".") { controller.insertTextKey(".") }
                 KeyboardTextKey(",") { controller.insertTextKey(",") }
                 KeyboardTextKey("?") { controller.insertTextKey("?") }
@@ -184,7 +178,7 @@ struct KeyboardRootView: View {
                 }
             }
 
-            HStack(spacing: MuesliTheme.spacing8) {
+            HStack(spacing: 6) {
                 KeyboardTextKey(systemImage: "globe", accessibilityLabel: "Next keyboard") {
                     controller.switchInputMode()
                 }
@@ -235,7 +229,7 @@ struct KeyboardRootView: View {
         }
         .foregroundStyle(primaryForeground)
         .frame(maxWidth: .infinity)
-        .frame(height: isProminent ? 54 : 44)
+        .frame(height: isProminent ? 48 : 40)
         .background(primaryBackground, in: RoundedRectangle(cornerRadius: isProminent ? 15 : 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: isProminent ? 15 : 12, style: .continuous)
@@ -244,18 +238,6 @@ struct KeyboardRootView: View {
         .shadow(color: primaryShadow, radius: isProminent ? 12 : 8, x: 0, y: 5)
         .opacity(controller.isPrimaryButtonDisabled ? 0.55 : 1)
         .contentShape(RoundedRectangle(cornerRadius: isProminent ? 15 : 12, style: .continuous))
-    }
-
-    private var readyHint: String {
-        if controller.isRecoveryRequested {
-            return "Open Muesli to recover this voice note"
-        }
-
-        if controller.opensMuesliFromPrimaryButton {
-            return "Tap Start, then return here to stop and insert"
-        }
-
-        return controller.canInsertLatest ? "Tap Start or insert your latest voice note" : "Tap Start to begin dictating"
     }
 
     private var activeStatusText: String {
@@ -335,7 +317,7 @@ private struct KeyboardControlButton: View {
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(tint)
                 .frame(maxWidth: .infinity)
-                .frame(height: 44)
+                .frame(height: 40)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(tint.opacity(0.10))
@@ -371,16 +353,16 @@ private struct KeyboardIconLabel: View {
         Image(systemName: systemImage)
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(MuesliTheme.textPrimary)
-            .frame(width: 44, height: 44)
+            .frame(width: 38, height: 38)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(MuesliTheme.surfacePrimary.opacity(0.76))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -431,7 +413,7 @@ private struct KeyboardTextKeyLabel: View {
         }
         .foregroundStyle(MuesliTheme.textPrimary)
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 44)
+        .frame(minHeight: 40)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 

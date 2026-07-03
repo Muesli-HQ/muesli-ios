@@ -4,6 +4,7 @@ import UIKit
 
 struct MeetingsView: View {
     @Bindable var coordinator: DictationCoordinator
+    var isActive = true
     @State private var meetingTitle = ""
     @State private var sessionPendingDelete: RecordingSession?
     @AppStorage(MuesliPreferences.meetingTemplateKey) private var selectedMeetingTemplate = MeetingTemplatePreset.general.rawValue
@@ -31,7 +32,11 @@ struct MeetingsView: View {
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
-                coordinator.refreshHistory()
+                refreshVisibleStateIfNeeded()
+            }
+            .onChange(of: isActive) { _, active in
+                guard active else { return }
+                refreshVisibleStateIfNeeded()
             }
             .navigationDestination(for: UUID.self) { sessionID in
                 if let session = coordinator.recordingSessions.first(where: { $0.id == sessionID }) {
@@ -131,6 +136,7 @@ struct MeetingsView: View {
                             mode: coordinator.isMeetingRecording ? .level : .waiting,
                             color: statusColor,
                             level: coordinator.isMeetingRecording ? coordinator.inputLevel : nil,
+                            isActive: isActive,
                             barCount: 32
                         )
                         .frame(maxWidth: .infinity)
@@ -302,6 +308,11 @@ struct MeetingsView: View {
                 }
             }
         }
+    }
+
+    private func refreshVisibleStateIfNeeded() {
+        guard isActive else { return }
+        coordinator.refreshHistory()
     }
 
     private var emptyState: some View {

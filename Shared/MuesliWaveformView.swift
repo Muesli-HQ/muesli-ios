@@ -67,6 +67,7 @@ struct MuesliInlineWaveformView: View {
     var mode: MuesliFloatingWaveformMode
     var color: Color
     var level: Double? = nil
+    var isActive: Bool = true
     var barCount: Int = 24
     var spacing: CGFloat = 3
     var framesPerSecond: Double = 24
@@ -82,17 +83,28 @@ struct MuesliInlineWaveformView: View {
     ]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / max(framesPerSecond, 1.0))) { timeline in
-            let elapsed = timeline.date.timeIntervalSinceReferenceDate
-            waveformCanvas(elapsed: elapsed)
+        Group {
+            if isActive {
+                TimelineView(.animation(minimumInterval: 1.0 / max(framesPerSecond, 1.0))) { timeline in
+                    let elapsed = timeline.date.timeIntervalSinceReferenceDate
+                    waveformCanvas(elapsed: elapsed)
+                }
+            } else {
+                waveformCanvas(elapsed: 0)
+            }
         }
         .onAppear {
             seedLiveSamplesIfNeeded()
         }
         .onChange(of: level ?? 0) { _, newValue in
+            guard isActive else { return }
             appendLiveSample(newValue)
         }
         .onChange(of: mode) { _, _ in
+            seedLiveSamplesIfNeeded(force: true)
+        }
+        .onChange(of: isActive) { _, active in
+            guard active else { return }
             seedLiveSamplesIfNeeded(force: true)
         }
     }

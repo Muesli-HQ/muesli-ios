@@ -118,20 +118,21 @@ struct RootView: View {
 
     @ViewBuilder
     private var sectionContent: some View {
-        sectionView(for: selectedSection)
+        sectionView(for: selectedSection, isActive: true)
     }
 
     @ViewBuilder
-    private func sectionView(for section: AppSection) -> some View {
+    private func sectionView(for section: AppSection, isActive: Bool) -> some View {
         switch section {
         case .dictations:
-            DictationView(coordinator: coordinator)
+            DictationView(coordinator: coordinator, isActive: isActive)
         case .meetings:
-            MeetingsView(coordinator: coordinator)
+            MeetingsView(coordinator: coordinator, isActive: isActive)
         case .settings:
             SettingsView(
                 coordinator: coordinator,
-                openSyncPrivacyRequest: coordinator.syncSetupRequestID
+                openSyncPrivacyRequest: coordinator.syncSetupRequestID,
+                isActive: isActive
             ) { section in
                 selectedSection = section
             }
@@ -141,9 +142,9 @@ struct RootView: View {
     private var pagedSectionContent: some View {
         TabView(selection: $selectedSection) {
             ForEach(pageSections, id: \.self) { section in
-                sectionView(for: section)
+                sectionView(for: section, isActive: selectedSection == section)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .tag(section)
+                    .tag(section)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))

@@ -6,6 +6,7 @@ import UIKit
 
 struct DictationView: View {
     @Bindable var coordinator: DictationCoordinator
+    var isActive = true
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
@@ -50,24 +51,26 @@ struct DictationView: View {
                 Text("Muesli will sync voice note text, meeting transcripts, notes, and summaries with your Mac through your private iCloud account. Audio stays local.")
             }
             .onAppear {
-                coordinator.refreshHistory()
-                coordinator.refreshAudioInputRoute()
-                refreshKeyboardSetupPromptVisibility()
-                updateDashboardStats()
+                refreshVisibleStateIfNeeded()
+            }
+            .onChange(of: isActive) { _, active in
+                guard active else { return }
+                refreshVisibleStateIfNeeded()
             }
             .onChange(of: coordinator.dictationHistory.count) { _, _ in
+                guard isActive else { return }
                 updateDashboardStats()
             }
             .onChange(of: coordinator.recordingSessions.count) { _, _ in
+                guard isActive else { return }
                 updateDashboardStats()
             }
             .onChange(of: scenePhase) { _, phase in
-                guard phase == .active else { return }
-                coordinator.refreshAudioInputRoute()
-                refreshKeyboardSetupPromptVisibility()
-                updateDashboardStats()
+                guard phase == .active, isActive else { return }
+                refreshVisibleStateIfNeeded()
             }
             .onChange(of: microphonePreference) { _, _ in
+                guard isActive else { return }
                 coordinator.refreshAudioInputRoute()
             }
             .navigationDestination(for: UUID.self) { resultID in
@@ -276,6 +279,7 @@ struct DictationView: View {
                             mode: isListeningWaveformActive ? .level : .waiting,
                             color: statusColor,
                             level: waveformLevel,
+                            isActive: isActive,
                             barCount: 32
                         )
                         .frame(maxWidth: .infinity)
@@ -361,7 +365,8 @@ struct DictationView: View {
             .padding(MuesliTheme.spacing16)
         }
         .accessibilityIdentifier("dictation.recorderPanel")
-        .task {
+        .task(id: isActive) {
+            guard isActive else { return }
             await runPreviewWaveformIfNeeded()
         }
     }
@@ -636,6 +641,14 @@ struct DictationView: View {
             return
         }
         coordinator.syncICloudTextIfEnabled(reason: "home_manual")
+    }
+
+    private func refreshVisibleStateIfNeeded() {
+        guard isActive else { return }
+        coordinator.refreshHistory()
+        coordinator.refreshAudioInputRoute()
+        refreshKeyboardSetupPromptVisibility()
+        updateDashboardStats()
     }
 
     private func openKeyboardSettings() {

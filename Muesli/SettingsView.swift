@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
     var openSyncPrivacyRequest: UUID?
+    var isActive = true
     var onSelectSection: ((AppSection) -> Void)?
 
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
@@ -35,10 +36,12 @@ struct SettingsView: View {
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
-                refreshKeyboardStatus()
-                refreshSummarySettings()
-                AppTelemetry.signal("settings_viewed")
-                refreshAppleSyncSettings()
+                refreshVisibleSettingsIfNeeded()
+                openRequestedSyncPrivacySection()
+            }
+            .onChange(of: isActive) { _, active in
+                guard active else { return }
+                refreshVisibleSettingsIfNeeded()
                 openRequestedSyncPrivacySection()
             }
             .onChange(of: openSyncPrivacyRequest) { _, _ in
@@ -68,6 +71,7 @@ struct SettingsView: View {
                 coordinator.refreshKeyboardSessionTimeout()
             }
             .onChange(of: microphonePreference) { _, newValue in
+                guard isActive else { return }
                 coordinator.refreshAudioInputRoute()
                 AppTelemetry.signal("recording_microphone_preference_changed", parameters: ["preference": newValue])
             }
@@ -550,6 +554,14 @@ struct SettingsView: View {
         chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
     }
 
+    private func refreshVisibleSettingsIfNeeded() {
+        guard isActive else { return }
+        refreshKeyboardStatus()
+        refreshSummarySettings()
+        AppTelemetry.signal("settings_viewed")
+        refreshAppleSyncSettings()
+    }
+
     private func saveOpenRouterAPIKey(_ apiKey: String) {
         do {
             try MeetingSummaryClient.saveOpenRouterAPIKey(apiKey)
@@ -583,7 +595,9 @@ struct SettingsView: View {
 
     private func refreshAppleSyncSettings() {
         Task {
+            guard isActive else { return }
             appleSyncSnapshot = await AppleSyncAccountManager.shared.snapshot()
+            guard isActive else { return }
             AppTelemetry.signal(
                 "icloud_sync_status_checked",
                 parameters: ["icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"]

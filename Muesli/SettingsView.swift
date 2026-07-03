@@ -269,13 +269,16 @@ struct SettingsView: View {
     }
 
     private var keyboardSessionModeDetail: String {
+        let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !status.isEmpty, status != "Off" {
+            return "\(status). Keeps Muesli ready for longer voice notes from the keyboard with a visible microphone session."
+        }
+
         guard keyboardSessionMode else {
             return "Start from the keyboard will open Muesli when microphone access is needed."
         }
 
-        let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let statusText = status.isEmpty ? "Starting" : status
-        return "\(statusText). Keeps Muesli ready for longer voice notes from the keyboard with a visible microphone session."
+        return "Starting. Keeps Muesli ready for longer voice notes from the keyboard with a visible microphone session."
     }
 
     private var meetingSettings: some View {

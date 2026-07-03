@@ -12,7 +12,7 @@ actor MuesliLiveActivityController {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         await endInactiveActivities()
-        activity = activity(for: session)
+        activity = resolvedActivity(for: session)
         if activity != nil {
             await update(phase: phase, detail: detail, session: session)
             return
@@ -43,7 +43,7 @@ actor MuesliLiveActivityController {
             await endActivities(for: session.kind, phase: "Off", detail: "Live Activities disabled")
             return
         }
-        activity = activity(for: session)
+        activity = resolvedActivity(for: session)
         guard let activity else { return }
         await activity.update(ActivityContent(
             state: contentState(phase: phase, detail: detail, session: session),
@@ -52,15 +52,17 @@ actor MuesliLiveActivityController {
     }
 
     func end(phase: String, detail: String, session: RecordingSession, dismissal: ActivityUIDismissalPolicy = .default) async {
-        guard let activity = activity(for: session) else { return }
-        await activity.end(
+        guard let resolvedActivity = resolvedActivity(for: session) else { return }
+        await resolvedActivity.end(
             ActivityContent(
                 state: contentState(phase: phase, detail: detail, session: session),
                 staleDate: nil
             ),
             dismissalPolicy: dismissal
         )
-        self.activity = nil
+        if activity?.attributes.sessionID == session.id.uuidString {
+            activity = nil
+        }
     }
 
     func endInactiveActivities() async {
@@ -165,7 +167,7 @@ actor MuesliLiveActivityController {
         }
     }
 
-    private func activity(for session: RecordingSession) -> Activity<MuesliLiveActivityAttributes>? {
+    private func resolvedActivity(for session: RecordingSession) -> Activity<MuesliLiveActivityAttributes>? {
         if let activity, activity.attributes.sessionID == session.id.uuidString {
             return activity
         }

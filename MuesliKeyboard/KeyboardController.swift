@@ -142,10 +142,6 @@ final class KeyboardController {
         return components.url
     }
 
-    var isRecoveryRequested: Bool {
-        recoveryRequestID != nil
-    }
-
     var opensMuesliFromPrimaryButton: Bool {
         recoveryRequestID != nil
             || !canUseRuntimeStart

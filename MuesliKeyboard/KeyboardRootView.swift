@@ -125,8 +125,9 @@ struct KeyboardRootView: View {
                     mode: controller.waveformMode,
                     color: activeStatusColor,
                     level: controller.waveformLevel,
-                    barCount: 32,
-                    spacing: 2.5
+                    barCount: 24,
+                    spacing: 2.5,
+                    framesPerSecond: 18
                 )
                 .frame(height: 68)
                 .shadow(color: activeStatusColor.opacity(0.36), radius: 12)
@@ -290,7 +291,7 @@ struct KeyboardRootView: View {
             return MuesliTheme.textTertiary
         }
 
-        return controller.stylesPrimaryButtonAsStop ? MuesliTheme.destructive : .white
+        return .white
     }
 
     private var primaryBackground: LinearGradient {
@@ -298,7 +299,7 @@ struct KeyboardRootView: View {
         if controller.isPrimaryButtonDisabled {
             colors = [MuesliTheme.surfacePrimary, MuesliTheme.surfacePrimary.opacity(0.78)]
         } else if controller.stylesPrimaryButtonAsStop {
-            colors = [MuesliTheme.destructive.opacity(0.22), MuesliTheme.destructive.opacity(0.12)]
+            colors = [MuesliTheme.destructive.opacity(0.82), MuesliTheme.destructive.opacity(0.62)]
         } else {
             colors = [Color(hex: 0x4F88FF), MuesliTheme.recording]
         }
@@ -308,7 +309,7 @@ struct KeyboardRootView: View {
 
     private var primaryBorder: Color {
         if controller.stylesPrimaryButtonAsStop {
-            return MuesliTheme.destructive.opacity(0.42)
+            return MuesliTheme.destructive.opacity(0.55)
         }
 
         return Color.white.opacity(0.18)
@@ -316,7 +317,7 @@ struct KeyboardRootView: View {
 
     private var primaryShadow: Color {
         if controller.stylesPrimaryButtonAsStop {
-            return MuesliTheme.destructive.opacity(0.12)
+            return MuesliTheme.destructive.opacity(0.22)
         }
 
         return MuesliTheme.recording.opacity(0.22)
@@ -370,7 +371,7 @@ private struct KeyboardIconLabel: View {
         Image(systemName: systemImage)
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(MuesliTheme.textPrimary)
-            .frame(width: 44, height: 38)
+            .frame(width: 44, height: 44)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(MuesliTheme.surfacePrimary.opacity(0.76))
@@ -430,7 +431,7 @@ private struct KeyboardTextKeyLabel: View {
         }
         .foregroundStyle(MuesliTheme.textPrimary)
         .frame(maxWidth: .infinity)
-        .frame(height: 42)
+        .frame(minHeight: 44)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 

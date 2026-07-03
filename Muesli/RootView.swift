@@ -118,20 +118,21 @@ struct RootView: View {
 
     @ViewBuilder
     private var sectionContent: some View {
-        sectionView(for: selectedSection)
+        sectionView(for: selectedSection, isActive: true)
     }
 
     @ViewBuilder
-    private func sectionView(for section: AppSection) -> some View {
+    private func sectionView(for section: AppSection, isActive: Bool) -> some View {
         switch section {
         case .dictations:
-            DictationView(coordinator: coordinator)
+            DictationView(coordinator: coordinator, isActive: isActive)
         case .meetings:
-            MeetingsView(coordinator: coordinator)
+            MeetingsView(coordinator: coordinator, isActive: isActive)
         case .settings:
             SettingsView(
                 coordinator: coordinator,
-                openSyncPrivacyRequest: coordinator.syncSetupRequestID
+                openSyncPrivacyRequest: coordinator.syncSetupRequestID,
+                isActive: isActive
             ) { section in
                 selectedSection = section
             }
@@ -141,14 +142,9 @@ struct RootView: View {
     private var pagedSectionContent: some View {
         TabView(selection: $selectedSection) {
             ForEach(pageSections, id: \.self) { section in
-                Group {
-                    if shouldRenderPage(section) {
-                        sectionView(for: section)
-                    } else {
-                        Color.clear
-                    }
-                }
-                .tag(section)
+                sectionView(for: section, isActive: selectedSection == section)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .tag(section)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
@@ -160,15 +156,6 @@ struct RootView: View {
             sections.append(selectedSection)
         }
         return sections
-    }
-
-    private func shouldRenderPage(_ section: AppSection) -> Bool {
-        let sections = pageSections
-        guard let selectedIndex = sections.firstIndex(of: selectedSection),
-              let sectionIndex = sections.firstIndex(of: section) else {
-            return section == selectedSection
-        }
-        return abs(sectionIndex - selectedIndex) <= 1
     }
 
     private func openDrawer() {
@@ -233,7 +220,7 @@ private struct KeyboardHandoffOverlay: View {
                         mode: coordinator.isRecording ? .level : .waiting,
                         color: coordinator.isRecording ? MuesliTheme.recording : MuesliTheme.transcribing,
                         level: coordinator.isRecording ? coordinator.inputLevel : nil,
-                        barCount: 24
+                        barCount: 32
                     )
                     .frame(width: 220, height: 56)
 
@@ -471,12 +458,12 @@ private struct MuesliDrawer: View {
                 Spacer()
 
                 Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .frame(width: 34, height: 34)
-                        .muesliGlassButton(cornerRadius: 17)
-                        .contentShape(Circle())
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .frame(width: 44, height: 44)
+                            .muesliGlassButton(cornerRadius: 22)
+                            .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
@@ -551,7 +538,7 @@ private struct SidebarSectionRow: View {
                 Image(systemName: isPinned ? "pin.fill" : "pin")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(isPinned ? accent : MuesliTheme.textTertiary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 44, height: 44)
                     .background(isPinned ? accent.opacity(0.15) : Color.clear)
                     .clipShape(Circle())
                     .contentShape(Circle())

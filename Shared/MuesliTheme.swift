@@ -62,14 +62,15 @@ enum MuesliTheme {
     static let destructive = Color.adaptive(dark: 0xFF453A, light: 0xD70015)
     static var destructiveSubtle: Color { destructive.opacity(0.16) }
 
-    static func title1() -> Font { .system(size: 28, weight: .bold) }
-    static func title2() -> Font { .system(size: 22, weight: .semibold) }
-    static func title3() -> Font { .system(size: 18, weight: .semibold) }
-    static func headline() -> Font { .system(size: 15, weight: .semibold) }
-    static func body() -> Font { .system(size: 14, weight: .regular) }
-    static func callout() -> Font { .system(size: 13, weight: .regular) }
-    static func caption() -> Font { .system(size: 12, weight: .regular) }
-    static func captionMedium() -> Font { .system(size: 12, weight: .medium) }
+    static func title1() -> Font { .system(.title, design: .default, weight: .bold) }
+    static func title2() -> Font { .system(.title2, design: .default, weight: .semibold) }
+    static func title3() -> Font { .system(.headline, design: .default, weight: .semibold) }
+    static func headline() -> Font { .system(.callout, design: .default, weight: .semibold) }
+    static func body() -> Font { .system(.subheadline, design: .default, weight: .regular) }
+    static func transcript() -> Font { .system(.body, design: .default, weight: .regular) }
+    static func callout() -> Font { .system(.footnote, design: .default, weight: .regular) }
+    static func caption() -> Font { .system(.caption, design: .default, weight: .regular) }
+    static func captionMedium() -> Font { .system(.caption, design: .default, weight: .medium) }
 
     static let spacing4: CGFloat = 4
     static let spacing8: CGFloat = 8

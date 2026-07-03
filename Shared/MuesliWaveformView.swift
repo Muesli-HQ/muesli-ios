@@ -67,8 +67,10 @@ struct MuesliInlineWaveformView: View {
     var mode: MuesliFloatingWaveformMode
     var color: Color
     var level: Double? = nil
+    var isActive: Bool = true
     var barCount: Int = 24
     var spacing: CGFloat = 3
+    var framesPerSecond: Double = 24
 
     @State private var liveSamples: [CGFloat] = []
     @State private var sampleSequence = 0
@@ -81,43 +83,68 @@ struct MuesliInlineWaveformView: View {
     ]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-            let elapsed = timeline.date.timeIntervalSinceReferenceDate
-            waveformBars(elapsed: elapsed)
+        Group {
+            if isActive {
+                TimelineView(.animation(minimumInterval: 1.0 / max(framesPerSecond, 1.0))) { timeline in
+                    let elapsed = timeline.date.timeIntervalSinceReferenceDate
+                    waveformCanvas(elapsed: elapsed)
+                }
+            } else {
+                waveformCanvas(elapsed: 0)
+            }
         }
         .onAppear {
             seedLiveSamplesIfNeeded()
         }
         .onChange(of: level ?? 0) { _, newValue in
+            guard isActive else { return }
             appendLiveSample(newValue)
         }
         .onChange(of: mode) { _, _ in
             seedLiveSamplesIfNeeded(force: true)
         }
+        .onChange(of: isActive) { _, active in
+            guard active else { return }
+            seedLiveSamplesIfNeeded(force: true)
+        }
     }
 
-    private func waveformBars(elapsed: TimeInterval) -> some View {
+    private func waveformCanvas(elapsed: TimeInterval) -> some View {
         GeometryReader { geometry in
-            let count = max(48, barCount * 2)
-            let totalSpacing = spacing * CGFloat(count - 1)
-            let barWidth = max(2, min(5, (geometry.size.width - totalSpacing) / CGFloat(count)))
+            let count = sampleCount
             let samples = samplesForRender(count: count, elapsed: elapsed)
-            HStack(alignment: .center, spacing: spacing) {
-                ForEach(0..<count, id: \.self) { index in
+            Canvas { context, size in
+                let totalSpacing = spacing * CGFloat(count - 1)
+                let barWidth = max(2, min(5, (size.width - totalSpacing) / CGFloat(count)))
+                let xOffset = max((size.width - (barWidth * CGFloat(count) + totalSpacing)) / 2, 0)
+                let centerY = size.height / 2
+
+                for index in 0..<count {
                     let sample = samples[index]
-                    RoundedRectangle(cornerRadius: barWidth / 2, style: .continuous)
-                        .fill(color.opacity(mode == .waiting ? waitingOpacity(index: index, elapsed: elapsed) : 0.94))
-                        .frame(
-                            width: barWidth,
-                            height: barHeight(
-                                sample: sample,
-                                maxHeight: geometry.size.height
-                            )
-                        )
+                    let height = barHeight(sample: sample, maxHeight: size.height)
+                    let rect = CGRect(
+                        x: xOffset + CGFloat(index) * (barWidth + spacing),
+                        y: centerY - height / 2,
+                        width: barWidth,
+                        height: height
+                    )
+                    let path = Path(
+                        roundedRect: rect,
+                        cornerRadius: barWidth / 2,
+                        style: .continuous
+                    )
+                    context.fill(
+                        path,
+                        with: .color(color.opacity(mode == .waiting ? waitingOpacity(index: index, elapsed: elapsed) : 0.94))
+                    )
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
+    }
+
+    private var sampleCount: Int {
+        max(12, barCount)
     }
 
     private func barHeight(sample: CGFloat, maxHeight: CGFloat) -> CGFloat {
@@ -151,7 +178,7 @@ struct MuesliInlineWaveformView: View {
             let base = basePattern[index % basePattern.count]
             let localPhase = CGFloat(elapsed) * 8.6 + CGFloat(index) * 0.58
             let broadPhase = CGFloat(elapsed) * 2.1 + CGFloat(index) * 0.13
-            let motion = 0.54 + 0.22 * sin(localPhase) + 0.12 * sin(broadPhase) + base * 0.22
+            let motion = 0.48 + 0.30 * sin(localPhase) + 0.16 * sin(broadPhase) + base * 0.35
             let texture = 0.90 + 0.12 * sin(localPhase * 1.47)
             let sample = shaped * motion * texture
             samples[index] = min(0.98, max(0.01, sample))
@@ -162,7 +189,7 @@ struct MuesliInlineWaveformView: View {
 
     private func paddedLiveSamples(count: Int) -> [CGFloat] {
         guard !liveSamples.isEmpty else {
-            return Array(repeating: 0.08, count: count)
+            return Array(repeating: 0, count: count)
         }
 
         let suffix = liveSamples.suffix(count)
@@ -170,7 +197,7 @@ struct MuesliInlineWaveformView: View {
             return Array(suffix)
         }
 
-        return Array(repeating: 0.08, count: count - suffix.count) + suffix
+        return Array(repeating: 0, count: count - suffix.count) + suffix
     }
 
     private func waitingSamples(count: Int, elapsed: TimeInterval) -> [CGFloat] {
@@ -189,8 +216,7 @@ struct MuesliInlineWaveformView: View {
     private func seedLiveSamplesIfNeeded(force: Bool = false) {
         guard force || liveSamples.isEmpty else { return }
 
-        let count = max(48, barCount * 2)
-        liveSamples = Array(repeating: 0, count: count)
+        liveSamples = Array(repeating: 0, count: sampleCount)
     }
 
     private func appendLiveSample(_ rawLevel: Double) {
@@ -201,7 +227,7 @@ struct MuesliInlineWaveformView: View {
         let shaped = pow(gatedLevel, 0.72)
         let texture = CGFloat(0.90 + 0.16 * sin(Double(sampleSequence) * 1.73))
         let sample = gatedLevel <= 0.02 ? 0 : min(0.98, max(0.01, shaped * 0.92 * texture))
-        let maxSamples = max(48, barCount * 2) * 3
+        let maxSamples = sampleCount * 3
 
         sampleSequence += 1
         liveSamples.append(sample)

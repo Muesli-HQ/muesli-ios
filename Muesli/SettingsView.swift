@@ -4,10 +4,9 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
     var openSyncPrivacyRequest: UUID?
+    var isActive = true
     var onSelectSection: ((AppSection) -> Void)?
 
-    @AppStorage(MuesliPreferences.appearanceModeKey) private var appearanceMode = MuesliAppearanceMode.system.rawValue
-    @AppStorage(MuesliPreferences.accentThemeKey) private var accentTheme = MuesliAccentTheme.blue.rawValue
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
@@ -37,10 +36,12 @@ struct SettingsView: View {
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
-                refreshKeyboardStatus()
-                refreshSummarySettings()
-                AppTelemetry.signal("settings_viewed")
-                refreshAppleSyncSettings()
+                refreshVisibleSettingsIfNeeded()
+                openRequestedSyncPrivacySection()
+            }
+            .onChange(of: isActive) { _, active in
+                guard active else { return }
+                refreshVisibleSettingsIfNeeded()
                 openRequestedSyncPrivacySection()
             }
             .onChange(of: openSyncPrivacyRequest) { _, _ in
@@ -70,6 +71,7 @@ struct SettingsView: View {
                 coordinator.refreshKeyboardSessionTimeout()
             }
             .onChange(of: microphonePreference) { _, newValue in
+                guard isActive else { return }
                 coordinator.refreshAudioInputRoute()
                 AppTelemetry.signal("recording_microphone_preference_changed", parameters: ["preference": newValue])
             }
@@ -205,46 +207,7 @@ struct SettingsView: View {
     }
 
     private var appearanceSettings: some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-            MuesliSurface {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                    SettingsAppearanceModePicker(selection: $appearanceMode)
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsAccentThemePicker(selection: $accentTheme)
-                }
-                .padding(MuesliTheme.spacing16)
-            }
-
-            MuesliSurface {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                    Text("Preview")
-                        .font(MuesliTheme.headline())
-                        .foregroundStyle(MuesliTheme.textPrimary)
-
-                    HStack(spacing: MuesliTheme.spacing12) {
-                        MuesliTheme.accent
-                            .frame(width: 44, height: 44)
-                            .clipShape(Circle())
-                            .overlay(Circle().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
-
-                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                            Text(selectedAccentTheme.label)
-                                .font(MuesliTheme.headline())
-                                .foregroundStyle(MuesliTheme.textPrimary)
-                            Text("\(selectedAppearanceMode.label) appearance")
-                                .font(MuesliTheme.caption())
-                                .foregroundStyle(MuesliTheme.textSecondary)
-                        }
-
-                        Spacer()
-                    }
-                    .padding(MuesliTheme.spacing12)
-                    .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                }
-                .padding(MuesliTheme.spacing16)
-            }
-        }
+        AppearanceSettingsContent()
     }
 
     private var inputSettings: some View {
@@ -556,14 +519,6 @@ struct SettingsView: View {
         MeetingSummaryBackend(rawValue: meetingSummaryBackend) ?? .openRouter
     }
 
-    private var selectedAppearanceMode: MuesliAppearanceMode {
-        MuesliAppearanceMode(rawValue: appearanceMode) ?? .system
-    }
-
-    private var selectedAccentTheme: MuesliAccentTheme {
-        MuesliAccentTheme.resolved(rawValue: accentTheme)
-    }
-
     private var modelButtonTitle: String {
         switch coordinator.modelPreparation.phase {
         case .ready:
@@ -599,6 +554,13 @@ struct SettingsView: View {
         chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
     }
 
+    private func refreshVisibleSettingsIfNeeded() {
+        guard isActive else { return }
+        refreshKeyboardStatus()
+        refreshSummarySettings()
+        refreshAppleSyncSettings()
+    }
+
     private func saveOpenRouterAPIKey(_ apiKey: String) {
         do {
             try MeetingSummaryClient.saveOpenRouterAPIKey(apiKey)
@@ -632,11 +594,9 @@ struct SettingsView: View {
 
     private func refreshAppleSyncSettings() {
         Task {
+            guard isActive else { return }
             appleSyncSnapshot = await AppleSyncAccountManager.shared.snapshot()
-            AppTelemetry.signal(
-                "icloud_sync_status_checked",
-                parameters: ["icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"]
-            )
+            guard isActive else { return }
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
             } else if iCloudSyncEnabled {
@@ -749,6 +709,108 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiSummaries:
             "sparkles"
         }
+    }
+}
+
+private struct AppearanceSettingsContent: View {
+    @AppStorage(MuesliPreferences.appearanceModeKey) private var appearanceMode = MuesliAppearanceMode.system.rawValue
+    @AppStorage(MuesliPreferences.accentThemeKey) private var accentTheme = MuesliAccentTheme.blue.rawValue
+
+    private var selectedAppearanceMode: MuesliAppearanceMode {
+        MuesliAppearanceMode(rawValue: appearanceMode) ?? .system
+    }
+
+    private var selectedAccentTheme: MuesliAccentTheme {
+        MuesliAccentTheme.resolved(rawValue: accentTheme)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+            MuesliSurface {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    SettingsAppearanceModePicker(selection: $appearanceMode)
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    SettingsAccentThemePicker(selection: $accentTheme)
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+
+            MuesliSurface {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    Text("Preview")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+
+                    appearancePreviewSurface
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+        }
+    }
+
+    private var appearancePreviewSurface: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                MuesliTheme.accent
+                    .frame(width: 44, height: 44)
+                    .clipShape(Circle())
+                    .overlay(Circle().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
+
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text(selectedAccentTheme.label)
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text("\(selectedAppearanceMode.label) appearance")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+
+                Spacer()
+            }
+
+            HStack(spacing: MuesliTheme.spacing8) {
+                previewMetric("3", "streak", tint: Color(hex: 0xFF9F2D))
+                previewMetric("152", "WPM", tint: MuesliTheme.success)
+                previewRecorderButton
+            }
+        }
+        .padding(MuesliTheme.spacing12)
+        .background(MuesliTheme.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+    }
+
+    private func previewMetric(_ value: String, _ label: String, tint: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(MuesliTheme.headline())
+                .monospacedDigit()
+                .foregroundStyle(MuesliTheme.textPrimary)
+            Text(label)
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 52)
+        .background(tint.opacity(0.10))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+                .strokeBorder(tint.opacity(0.28), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+    }
+
+    private var previewRecorderButton: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 15, weight: .semibold))
+            Text("Record")
+                .font(MuesliTheme.captionMedium())
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity)
+        .frame(height: 52)
+        .background(MuesliTheme.accent)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
     }
 }
 
@@ -1107,7 +1169,7 @@ private struct SettingsAccentThemePicker: View {
                         selection = theme.rawValue
                     } label: {
                         MuesliTheme.color(for: theme)
-                            .frame(width: 42, height: 42)
+                            .frame(width: 44, height: 44)
                             .clipShape(Circle())
                             .overlay {
                                 Circle()

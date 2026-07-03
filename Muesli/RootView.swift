@@ -141,13 +141,8 @@ struct RootView: View {
     private var pagedSectionContent: some View {
         TabView(selection: $selectedSection) {
             ForEach(pageSections, id: \.self) { section in
-                Group {
-                    if shouldRenderPage(section) {
-                        sectionView(for: section)
-                    } else {
-                        Color.clear
-                    }
-                }
+                sectionView(for: section)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .tag(section)
             }
         }
@@ -160,15 +155,6 @@ struct RootView: View {
             sections.append(selectedSection)
         }
         return sections
-    }
-
-    private func shouldRenderPage(_ section: AppSection) -> Bool {
-        let sections = pageSections
-        guard let selectedIndex = sections.firstIndex(of: selectedSection),
-              let sectionIndex = sections.firstIndex(of: section) else {
-            return section == selectedSection
-        }
-        return abs(sectionIndex - selectedIndex) <= 1
     }
 
     private func openDrawer() {

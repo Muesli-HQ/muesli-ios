@@ -558,7 +558,6 @@ struct SettingsView: View {
         guard isActive else { return }
         refreshKeyboardStatus()
         refreshSummarySettings()
-        AppTelemetry.signal("settings_viewed")
         refreshAppleSyncSettings()
     }
 
@@ -598,10 +597,6 @@ struct SettingsView: View {
             guard isActive else { return }
             appleSyncSnapshot = await AppleSyncAccountManager.shared.snapshot()
             guard isActive else { return }
-            AppTelemetry.signal(
-                "icloud_sync_status_checked",
-                parameters: ["icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"]
-            )
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."
             } else if iCloudSyncEnabled {

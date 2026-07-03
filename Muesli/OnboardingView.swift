@@ -1278,10 +1278,6 @@ struct OnboardingView: View {
     private func refreshAppleSyncStatus() {
         Task {
             appleSyncSnapshot = await AppleSyncAccountManager.shared.snapshot()
-            AppTelemetry.signal(
-                "onboarding_icloud_sync_status_checked",
-                parameters: ["icloud_available": appleSyncSnapshot.isICloudAvailable ? "true" : "false"]
-            )
             if iCloudSyncEnabled && !appleSyncSnapshot.isICloudAvailable {
                 pinnedSyncSetupStatusText = nil
                 appleSyncStatusText = "Sign in to iCloud on this iPhone before enabling Muesli sync."

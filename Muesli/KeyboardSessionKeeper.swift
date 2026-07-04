@@ -6,14 +6,24 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
     private struct FileState {
         var activeFile: AVAudioFile?
         var activeURL: URL?
+        var activeSegmentID: UUID?
         var latestPowerDB: Float = -160
         var segmentFrames: AVAudioFramePosition = 0
         var lastInputBufferAt: Date?
         var lastInputActivityNotifiedAt = Date.distantPast
+        var isFinishingSegment = false
+    }
+
+    private struct PendingFileWrite: @unchecked Sendable {
+        let segmentID: UUID
+        let file: AVAudioFile
+        let buffer: AVAudioPCMBuffer
+        let frameCount: Int
     }
 
     private let engine = AVAudioEngine()
     private let lock = NSLock()
+    private let fileWriteQueue = DispatchQueue(label: "com.muesli.keyboardSessionKeeper.fileWrite")
     private var state = FileState()
     private var converter: AVAudioConverter?
     private var isEngineRunning = false
@@ -105,22 +115,36 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
 
         try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let file = try AVAudioFile(forWriting: outputURL, settings: Self.makeTargetFormat().settings)
+        let segmentID = UUID()
 
         lock.lock()
         state.activeFile = file
         state.activeURL = outputURL
+        state.activeSegmentID = segmentID
         state.segmentFrames = 0
+        state.isFinishingSegment = false
         lock.unlock()
     }
 
     @discardableResult
     func finishSegment() throws -> URL {
         lock.lock()
+        state.isFinishingSegment = true
         let url = state.activeURL
-        let frameCount = state.segmentFrames
+        let segmentID = state.activeSegmentID
+        lock.unlock()
+
+        if segmentID != nil {
+            fileWriteQueue.sync {}
+        }
+
+        lock.lock()
+        let frameCount = segmentID == state.activeSegmentID ? state.segmentFrames : 0
         state.activeFile = nil
         state.activeURL = nil
+        state.activeSegmentID = nil
         state.segmentFrames = 0
+        state.isFinishingSegment = false
         lock.unlock()
 
         guard let url, frameCount > 0 else {
@@ -131,10 +155,21 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
 
     func cancelSegment() {
         lock.lock()
+        state.isFinishingSegment = true
         let url = state.activeURL
+        let segmentID = state.activeSegmentID
+        lock.unlock()
+
+        if segmentID != nil {
+            fileWriteQueue.sync {}
+        }
+
+        lock.lock()
         state.activeFile = nil
         state.activeURL = nil
+        state.activeSegmentID = nil
         state.segmentFrames = 0
+        state.isFinishingSegment = false
         lock.unlock()
 
         if let url {
@@ -205,18 +240,22 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         let now = Date()
 
         lock.lock()
-        do {
-            try state.activeFile?.write(from: monoBuffer)
-            if state.activeFile != nil {
-                state.segmentFrames += AVAudioFramePosition(frameCount)
-            }
-            state.latestPowerDB = powerDB
-            state.lastInputBufferAt = now
-        } catch {
-            // Preserve the live session; stop/finish will surface missing audio if writes fail.
+        if let file = state.activeFile,
+           let segmentID = state.activeSegmentID,
+           !state.isFinishingSegment
+        {
+            enqueue(PendingFileWrite(
+                segmentID: segmentID,
+                file: file,
+                buffer: monoBuffer,
+                frameCount: frameCount
+            ))
+            isCapturing = true
+        } else {
+            isCapturing = false
         }
-
-        isCapturing = state.activeFile != nil
+        state.latestPowerDB = powerDB
+        state.lastInputBufferAt = now
         shouldNotifyActivity = now.timeIntervalSince(state.lastInputActivityNotifiedAt) >= 0.5
         if shouldNotifyActivity {
             state.lastInputActivityNotifiedAt = now
@@ -227,6 +266,25 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         if shouldNotifyActivity {
             handler?(powerDB, isCapturing)
         }
+    }
+
+    private func enqueue(_ write: PendingFileWrite) {
+        fileWriteQueue.async { [weak self] in
+            do {
+                try write.file.write(from: write.buffer)
+                self?.recordWrittenFrames(write.frameCount, for: write.segmentID)
+            } catch {
+                // Preserve the live session; stop/finish will surface missing audio if writes fail.
+            }
+        }
+    }
+
+    private func recordWrittenFrames(_ frameCount: Int, for segmentID: UUID) {
+        lock.lock()
+        if state.activeSegmentID == segmentID {
+            state.segmentFrames += AVAudioFramePosition(frameCount)
+        }
+        lock.unlock()
     }
 
     private func markInputBufferReceived() {
@@ -290,8 +348,10 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         lock.lock()
         state.activeFile = nil
         state.activeURL = nil
+        state.activeSegmentID = nil
         state.segmentFrames = 0
         state.lastInputBufferAt = nil
+        state.isFinishingSegment = false
         isEngineRunning = false
         lock.unlock()
     }

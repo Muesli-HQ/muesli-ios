@@ -144,7 +144,12 @@ final class KeyboardController {
     var opensMuesliFromPrimaryButton: Bool {
         recoveryRequestID != nil
             || !canUseRuntimeStart
-            && (dictationPhase == .idle || dictationPhase == .failed || (dictationPhase == .requested && activeRequestID == nil))
+            && (
+                dictationPhase == .idle
+                    || dictationPhase == .finished
+                    || dictationPhase == .failed
+                    || (dictationPhase == .requested && activeRequestID == nil)
+            )
     }
 
     func primaryLaunchAction() {
@@ -163,7 +168,12 @@ final class KeyboardController {
         case .transcribing:
             break
         case .finished:
-            startDictation()
+            if canUseRuntimeStart {
+                startDictation()
+            } else {
+                prepareLaunchRequestIfNeeded()
+                statusText = "Open Muesli"
+            }
         default:
             startDictation()
         }

@@ -112,6 +112,14 @@ struct SharedStore: Sendable {
         try database().clearValue(key: .keyboardRuntimeStatus)
     }
 
+    func saveKeyboardSessionPreference(_ preference: KeyboardSessionPreference) throws {
+        try database().saveValue(preference, key: .keyboardSessionPreference)
+    }
+
+    func keyboardSessionPreference() throws -> KeyboardSessionPreference? {
+        try database().value(KeyboardSessionPreference.self, key: .keyboardSessionPreference)
+    }
+
     func saveKeyboardLiveTranscript(_ transcript: KeyboardLiveTranscript) throws {
         try database().saveValue(transcript, key: .keyboardLiveTranscript)
     }
@@ -314,6 +322,7 @@ private enum SharedStoreKey: String {
     case dictationStatus = "dictation_status"
     case keyboardExtensionStatus = "keyboard_extension_status"
     case keyboardRuntimeStatus = "keyboard_runtime_status"
+    case keyboardSessionPreference = "keyboard_session_preference"
     case keyboardLiveTranscript = "keyboard_live_transcript"
     case legacyJSONMigrated = "legacy_json_migrated_v1"
     case customWordsInitialized = "custom_words_initialized"

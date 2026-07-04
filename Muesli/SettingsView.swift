@@ -10,7 +10,6 @@ struct SettingsView: View {
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
-    @AppStorage(MuesliPreferences.keyboardSessionTimeoutMinutesKey) private var keyboardSessionTimeoutMinutes = 10
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @AppStorage(MuesliPreferences.keepDictationAudioRecordingsKey) private var keepDictationAudioRecordings = false
     @AppStorage(MuesliPreferences.keepMeetingAudioRecordingsKey) private var keepMeetingAudioRecordings = false
@@ -66,9 +65,6 @@ struct SettingsView: View {
             }
             .onChange(of: keyboardSessionMode) { _, enabled in
                 coordinator.setKeyboardSessionModeEnabled(enabled)
-            }
-            .onChange(of: keyboardSessionTimeoutMinutes) { _, _ in
-                coordinator.refreshKeyboardSessionTimeout()
             }
             .onChange(of: microphonePreference) { _, newValue in
                 guard isActive else { return }
@@ -240,15 +236,6 @@ struct SettingsView: View {
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsMicrophonePicker(selection: $microphonePreference)
                     Divider().overlay(MuesliTheme.surfaceBorder)
-                    Stepper(value: $keyboardSessionTimeoutMinutes, in: 1...30, step: 1) {
-                        SettingsRow(
-                            icon: "timer",
-                            title: "Timeout",
-                            value: "\(keyboardSessionTimeoutMinutes) min"
-                        )
-                    }
-                    .disabled(!keyboardSessionMode)
-                    Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsToggleRow(
                         icon: "waveform.badge.mic",
                         title: "Voice Note Live Activities",
@@ -269,7 +256,7 @@ struct SettingsView: View {
     }
 
     private var keyboardSessionModeDetail: String {
-        let baseDetail = "Keeps Muesli ready for longer voice notes from the keyboard with a visible microphone session."
+        let baseDetail = "Keeps an app-owned microphone session live so the keyboard can start and stop voice notes without reopening Muesli."
         let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !status.isEmpty, status != "Off" {
             switch status {
@@ -284,7 +271,7 @@ struct SettingsView: View {
         }
 
         guard keyboardSessionMode else {
-            return "Start from the keyboard will open Muesli when microphone access is needed."
+            return "When off, keyboard Start opens Muesli because iOS keyboards cannot own microphone access."
         }
 
         return "Starting. \(baseDetail)"

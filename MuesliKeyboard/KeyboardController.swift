@@ -22,6 +22,7 @@ final class KeyboardController {
     private var insertedRequestIDs = Set<UUID>()
     private var cancelledRequestIDs = Set<UUID>()
     private var lastRuntimeLevelUpdateAt = Date.distantPast
+    private var isKeyboardSessionModeEnabled = false
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -101,7 +102,7 @@ final class KeyboardController {
         case .transcribing:
             .transcribing
         case .finished:
-            .inserted
+            .record
         default:
             .record
         }
@@ -110,7 +111,6 @@ final class KeyboardController {
     var isPrimaryButtonDisabled: Bool {
         recoveryRequestID == nil && (
             dictationPhase == .transcribing
-            || dictationPhase == .finished
             || latestHandoffState?.phase == .stopRequested
         )
     }
@@ -132,7 +132,7 @@ final class KeyboardController {
     }
 
     var canCancelActiveDictation: Bool {
-        [.requested, .recording].contains(dictationPhase)
+        [.requested, .recording, .transcribing].contains(dictationPhase)
     }
 
     var settingsURL: URL? {
@@ -161,8 +161,10 @@ final class KeyboardController {
         switch dictationPhase {
         case .requested, .recording:
             stopActiveDictation()
-        case .transcribing, .finished:
+        case .transcribing:
             break
+        case .finished:
+            startDictation()
         default:
             startDictation()
         }
@@ -384,8 +386,11 @@ final class KeyboardController {
         do {
             let runtimeStatus = try store.keyboardRuntimeStatus()
             latestRuntimeStatus = runtimeStatus
+            refreshKeyboardSessionPreference(runtimeStatus: runtimeStatus)
             apply(runtimeStatus: runtimeStatus)
         } catch {
+            refreshKeyboardSessionPreference(runtimeStatus: latestRuntimeStatus)
+            apply(runtimeStatus: latestRuntimeStatus)
             inputLevel = 0
         }
     }
@@ -394,6 +399,7 @@ final class KeyboardController {
         do {
             let runtimeStatus = try store.keyboardRuntimeStatus()
             latestRuntimeStatus = runtimeStatus
+            refreshKeyboardSessionPreference(runtimeStatus: runtimeStatus)
             apply(runtimeStatus: runtimeStatus)
 
             let handoffState = try store.keyboardHandoffState()
@@ -430,7 +436,17 @@ final class KeyboardController {
                 statusText = "Latest ready"
             }
         } catch {
+            refreshKeyboardSessionPreference(runtimeStatus: latestRuntimeStatus)
+            apply(runtimeStatus: latestRuntimeStatus)
             statusText = "Waiting for Full Access"
+        }
+    }
+
+    private func refreshKeyboardSessionPreference(runtimeStatus: KeyboardRuntimeStatus?) {
+        if let preference = try? store.keyboardSessionPreference() {
+            isKeyboardSessionModeEnabled = preference.isEnabled
+        } else if runtimeStatus?.sessionModeEnabled == true {
+            isKeyboardSessionModeEnabled = true
         }
     }
 
@@ -541,9 +557,7 @@ final class KeyboardController {
         let now = Date()
         let isRecent = runtimeStatus.map { now.timeIntervalSince($0.updatedAt) < 8 } ?? false
         applyRuntimeInputLevel(isRecent ? (runtimeStatus?.inputLevel ?? 0) : 0, now: now)
-        canUseRuntimeStart = runtimeStatus?.isActive == true
-            && isRecent
-            && runtimeStatus?.supportsBackgroundStart == true
+        canUseRuntimeStart = runtimeStatus?.canAcceptStartCommand == true && isRecent
 
         guard activeRequestID == nil, canUseRuntimeStart else { return }
         guard let runtimeRequestID = runtimeStatus?.activeRequestID,
@@ -747,8 +761,8 @@ final class KeyboardController {
         preparedRequest = nil
         recoveryRequestID = nil
         launchURL = nil
-        dictationPhase = .finished
-        statusText = "Inserted"
+        dictationPhase = .idle
+        statusText = "Latest ready"
         try? store.clearPendingRequest()
         try? store.clearPendingCommand()
         try? store.clearKeyboardLiveTranscript()
@@ -760,12 +774,6 @@ final class KeyboardController {
         try? store.saveStatus(.idle)
         prepareLaunchRequestIfNeeded()
 
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.2))
-            guard let self, self.dictationPhase == .finished else { return }
-            self.dictationPhase = .idle
-            self.statusText = "Latest ready"
-        }
     }
 
     private func makeLaunchURL(for request: DictationRequest) -> URL? {

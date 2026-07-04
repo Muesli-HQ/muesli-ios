@@ -11,6 +11,7 @@ struct DictationView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
+    @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
@@ -23,6 +24,7 @@ struct DictationView: View {
                 LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     header
                     homeStatsRow
+                    keyboardSessionHomeControl
                     recorderPanel
                     historyHeader
                     historyRows
@@ -72,6 +74,10 @@ struct DictationView: View {
             .onChange(of: microphonePreference) { _, _ in
                 guard isActive else { return }
                 coordinator.refreshAudioInputRoute()
+            }
+            .onChange(of: keyboardSessionMode) { _, enabled in
+                guard isActive else { return }
+                coordinator.setKeyboardSessionModeEnabled(enabled)
             }
             .navigationDestination(for: UUID.self) { resultID in
                 if let result = coordinator.dictationHistory.first(where: { $0.id == resultID }),
@@ -161,6 +167,75 @@ struct DictationView: View {
             meetings: formattedCompactCount(totalMeetingCount(in: sessions)),
             streak: "\(currentActivityStreak(history: history, sessions: sessions))"
         )
+    }
+
+    private var keyboardSessionHomeControl: some View {
+        MuesliSurface(
+            cornerRadius: MuesliTheme.cornerMedium,
+            tint: keyboardSessionMode ? MuesliTheme.success : MuesliTheme.accent,
+            isInteractive: true
+        ) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                ZStack {
+                    Circle()
+                        .fill(keyboardSessionMode ? MuesliTheme.success.opacity(0.16) : MuesliTheme.accentSubtle)
+                    Image(systemName: keyboardSessionMode ? "mic.circle.fill" : "mic.circle")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(keyboardSessionMode ? MuesliTheme.success : MuesliTheme.accent)
+                }
+                .frame(width: 44, height: 44)
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep mic ready")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(keyboardSessionHomeDetail)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: MuesliTheme.spacing8)
+
+                Toggle("Keep mic ready", isOn: $keyboardSessionMode)
+                    .labelsHidden()
+                    .tint(MuesliTheme.success)
+                    .frame(minWidth: 56, minHeight: 44)
+            }
+            .padding(MuesliTheme.spacing12)
+            .contentShape(Rectangle())
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Keep mic ready")
+        .accessibilityValue(keyboardSessionMode ? "On" : "Off")
+        .accessibilityHint("Keeps a Muesli microphone session ready for keyboard dictation.")
+    }
+
+    private var keyboardSessionHomeDetail: String {
+        let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard keyboardSessionMode else {
+            return "Turn on before using Muesli Keyboard for fewer app switches."
+        }
+
+        if status.isEmpty || status == "Off" {
+            return "Starting keyboard microphone standby."
+        }
+
+        switch status {
+        case "Ready":
+            return "Keyboard dictation can start from text fields."
+        case "Starting":
+            return "Preparing the app-owned microphone session."
+        case "Recording":
+            return "Keyboard dictation is listening."
+        case "Transcribing":
+            return "Preparing text for insertion."
+        case "Timed out":
+            return "Timed out. Toggle off and on to restart standby."
+        default:
+            return "\(status)."
+        }
     }
 
     private func totalDictationWords(in history: [DictationResult]) -> Int {

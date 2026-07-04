@@ -61,7 +61,17 @@ enum AudioInputRouteManager {
             )
             try session.setActive(true)
         } catch {
-            throw AudioRecorder.RecordingError.audioSessionFailed(stage: stage, underlying: error)
+            do {
+                try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                try session.setCategory(
+                    .playAndRecord,
+                    mode: .spokenAudio,
+                    options: recordingCategoryOptions
+                )
+                try session.setActive(true)
+            } catch {
+                throw AudioRecorder.RecordingError.audioSessionFailed(stage: stage, underlying: error)
+            }
         }
 
         let preferredInput = preferredInput(for: preference, in: session.availableInputs ?? [])

@@ -194,9 +194,9 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
     let runtimeFreshnessInterval: TimeInterval
 
     static let keyboardDefaults = KeyboardHandoffRecoveryPolicy(
-        staleStartInterval: 5,
+        staleStartInterval: 10,
         staleRecordingInterval: 45,
-        staleStopRequestInterval: 5,
+        staleStopRequestInterval: 8,
         staleTranscribingInterval: 120,
         runtimeFreshnessInterval: 8
     )
@@ -546,7 +546,6 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
     let activeRequestID: UUID?
     let phase: DictationPhase
     let message: String?
-    let sessionModeEnabled: Bool
     let supportsBackgroundStart: Bool
     let canAcceptStartCommand: Bool
     let inputLevel: Double
@@ -557,7 +556,6 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         activeRequestID: UUID? = nil,
         phase: DictationPhase = .idle,
         message: String? = nil,
-        sessionModeEnabled: Bool = false,
         supportsBackgroundStart: Bool = false,
         canAcceptStartCommand: Bool? = nil,
         inputLevel: Double = 0,
@@ -567,7 +565,6 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         self.activeRequestID = activeRequestID
         self.phase = phase
         self.message = message
-        self.sessionModeEnabled = sessionModeEnabled
         self.supportsBackgroundStart = supportsBackgroundStart
         self.canAcceptStartCommand = canAcceptStartCommand ?? (isActive && supportsBackgroundStart)
         self.inputLevel = min(max(inputLevel, 0), 1)
@@ -579,7 +576,6 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         case activeRequestID
         case phase
         case message
-        case sessionModeEnabled
         case supportsBackgroundStart
         case canAcceptStartCommand
         case inputLevel
@@ -592,21 +588,10 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         activeRequestID = try container.decodeIfPresent(UUID.self, forKey: .activeRequestID)
         phase = try container.decode(DictationPhase.self, forKey: .phase)
         message = try container.decodeIfPresent(String.self, forKey: .message)
-        sessionModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .sessionModeEnabled) ?? false
         supportsBackgroundStart = try container.decodeIfPresent(Bool.self, forKey: .supportsBackgroundStart) ?? false
         canAcceptStartCommand = try container.decodeIfPresent(Bool.self, forKey: .canAcceptStartCommand) ?? (isActive && supportsBackgroundStart)
         inputLevel = try container.decodeIfPresent(Double.self, forKey: .inputLevel) ?? 0
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-    }
-}
-
-struct KeyboardSessionPreference: Codable, Sendable, Equatable {
-    let isEnabled: Bool
-    let updatedAt: Date
-
-    init(isEnabled: Bool, updatedAt: Date = .now) {
-        self.isEnabled = isEnabled
-        self.updatedAt = updatedAt
     }
 }
 

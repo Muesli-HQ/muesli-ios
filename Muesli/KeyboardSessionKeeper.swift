@@ -217,42 +217,23 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
     }
 
     private func handle(buffer: AVAudioPCMBuffer, targetFormat: AVAudioFormat) {
-        markInputBufferReceived()
-
-        guard let monoBuffer = convert(buffer: buffer, targetFormat: targetFormat),
-              let floatData = monoBuffer.floatChannelData?[0]
-        else { return }
-
-        let frameCount = Int(monoBuffer.frameLength)
-        guard frameCount > 0 else { return }
-
-        var sumSquares: Float = 0
-        for index in 0..<frameCount {
-            let sample = floatData[index]
-            sumSquares += sample * sample
-        }
-        let rms = sqrt(sumSquares / Float(frameCount))
-        let powerDB = rms > 0.000_001 ? max(-160, min(0, 20 * log10(rms))) : -160
-
+        let powerDB = Self.powerDB(for: buffer)
+        let now = Date()
         let handler: (@Sendable (_ powerDB: Float, _ isCapturing: Bool) -> Void)?
         let shouldNotifyActivity: Bool
-        let isCapturing: Bool
-        let now = Date()
+        let file: AVAudioFile?
+        let segmentID: UUID?
 
         lock.lock()
-        if let file = state.activeFile,
-           let segmentID = state.activeSegmentID,
+        if let activeFile = state.activeFile,
+           let activeSegmentID = state.activeSegmentID,
            !state.isFinishingSegment
         {
-            enqueue(PendingFileWrite(
-                segmentID: segmentID,
-                file: file,
-                buffer: monoBuffer,
-                frameCount: frameCount
-            ))
-            isCapturing = true
+            file = activeFile
+            segmentID = activeSegmentID
         } else {
-            isCapturing = false
+            file = nil
+            segmentID = nil
         }
         state.latestPowerDB = powerDB
         state.lastInputBufferAt = now
@@ -263,8 +244,29 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         handler = inputActivityHandler
         lock.unlock()
 
+        if let file,
+           let segmentID,
+           let monoBuffer = convert(buffer: buffer, targetFormat: targetFormat)
+        {
+            let frameCount = Int(monoBuffer.frameLength)
+            if frameCount > 0 {
+                lock.lock()
+                let shouldWrite = state.activeSegmentID == segmentID && !state.isFinishingSegment
+                lock.unlock()
+
+                if shouldWrite {
+                    enqueue(PendingFileWrite(
+                        segmentID: segmentID,
+                        file: file,
+                        buffer: monoBuffer,
+                        frameCount: frameCount
+                    ))
+                }
+            }
+        }
+
         if shouldNotifyActivity {
-            handler?(powerDB, isCapturing)
+            handler?(powerDB, file != nil)
         }
     }
 
@@ -287,12 +289,6 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         lock.unlock()
     }
 
-    private func markInputBufferReceived() {
-        lock.lock()
-        state.lastInputBufferAt = Date()
-        lock.unlock()
-    }
-
     private func convert(buffer: AVAudioPCMBuffer, targetFormat: AVAudioFormat) -> AVAudioPCMBuffer? {
         guard let converter else {
             return copy(buffer)
@@ -302,18 +298,14 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         let frameCapacity = max(1, AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1)
         guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: frameCapacity) else { return nil }
 
-        let didProvideInput = OSAllocatedUnfairLock(initialState: false)
+        var didProvideInput = false
         var error: NSError?
         converter.convert(to: converted, error: &error) { _, outStatus in
-            let shouldProvideInput = didProvideInput.withLock { hasProvidedInput in
-                guard !hasProvidedInput else { return false }
-                hasProvidedInput = true
-                return true
-            }
-            guard shouldProvideInput else {
+            guard !didProvideInput else {
                 outStatus.pointee = .noDataNow
                 return nil
             }
+            didProvideInput = true
             outStatus.pointee = .haveData
             return buffer
         }
@@ -340,6 +332,22 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
             destination[channel].update(from: source[channel], count: frameLength)
         }
         return copy
+    }
+
+    private static func powerDB(for buffer: AVAudioPCMBuffer) -> Float {
+        guard let floatData = buffer.floatChannelData?[0] else { return -160 }
+
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return -160 }
+
+        var sumSquares: Float = 0
+        for index in 0..<frameCount {
+            let sample = floatData[index]
+            sumSquares += sample * sample
+        }
+
+        let rms = sqrt(sumSquares / Float(frameCount))
+        return rms > 0.000_001 ? max(-160, min(0, 20 * log10(rms))) : -160
     }
 
     private func cleanupAfterFailedStart() {

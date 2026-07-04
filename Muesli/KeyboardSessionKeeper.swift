@@ -79,7 +79,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
             let targetFormat = try Self.makeTargetFormat()
             let inputNode = engine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
-            converter = inputFormat.sampleRate != targetFormat.sampleRate || inputFormat.channelCount != targetFormat.channelCount
+            converter = Self.requiresConversion(from: inputFormat, to: targetFormat)
                 ? AVAudioConverter(from: inputFormat, to: targetFormat)
                 : nil
 
@@ -295,7 +295,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
 
     private func convert(buffer: AVAudioPCMBuffer, targetFormat: AVAudioFormat) -> AVAudioPCMBuffer? {
         guard let converter else {
-            return buffer
+            return copy(buffer)
         }
 
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
@@ -320,6 +320,26 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
 
         guard error == nil else { return nil }
         return converted
+    }
+
+    private func copy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else {
+            return nil
+        }
+        copy.frameLength = buffer.frameLength
+
+        guard let source = buffer.floatChannelData,
+              let destination = copy.floatChannelData
+        else {
+            return nil
+        }
+
+        let channelCount = Int(buffer.format.channelCount)
+        let frameLength = Int(buffer.frameLength)
+        for channel in 0..<channelCount {
+            destination[channel].update(from: source[channel], count: frameLength)
+        }
+        return copy
     }
 
     private func cleanupAfterFailedStart() {
@@ -402,5 +422,12 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
             throw AudioRecorder.RecordingError.startFailed(stage: "keyboard session format")
         }
         return format
+    }
+
+    private static func requiresConversion(from inputFormat: AVAudioFormat, to targetFormat: AVAudioFormat) -> Bool {
+        inputFormat.sampleRate != targetFormat.sampleRate
+            || inputFormat.channelCount != targetFormat.channelCount
+            || inputFormat.commonFormat != targetFormat.commonFormat
+            || inputFormat.isInterleaved != targetFormat.isInterleaved
     }
 }

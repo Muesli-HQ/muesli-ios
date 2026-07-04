@@ -6,7 +6,6 @@ enum MuesliPreferences {
     static let liveActivitiesForDictationsKey = "muesli.liveActivities.dictations"
     static let liveActivitiesForMeetingsKey = "muesli.liveActivities.meetings"
     static let keyboardSessionModeKey = "muesli.keyboardSession.enabled"
-    static let keyboardSessionTimeoutMinutesKey = "muesli.keyboardSession.timeoutMinutes"
     static let fillerWordRemovalKey = "muesli.transcription.fillerWordRemoval"
     static let customDictionaryKey = "muesli.transcription.customDictionary"
     static let transcriptionModelKey = "muesli.transcription.localModel"
@@ -43,11 +42,6 @@ enum MuesliPreferences {
 
     static var keyboardSessionModeEnabled: Bool {
         bool(for: keyboardSessionModeKey, defaultValue: false)
-    }
-
-    static var keyboardSessionTimeoutMinutes: Int {
-        let value = UserDefaults.standard.integer(forKey: keyboardSessionTimeoutMinutesKey)
-        return value == 0 ? 10 : min(max(value, 1), 30)
     }
 
     static var fillerWordRemovalEnabled: Bool {

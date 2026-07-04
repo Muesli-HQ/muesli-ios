@@ -260,13 +260,13 @@ struct SettingsView: View {
         let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !status.isEmpty, status != "Off" {
             switch status {
-            case "Ready", "Starting", "Recording", "Transcribing", "Timed out":
+            case "Ready", "Starting", "Recording", "Transcribing":
                 return "\(status). \(baseDetail)"
             default:
                 if status.hasPrefix("Retrying session standby") || status.hasPrefix("Session standby unavailable") {
                     return "\(status). \(baseDetail)"
                 }
-                return "Session standby needs attention. Tap Start to record normally, or toggle this off and on to retry."
+                return "\(status). Tap Start to record normally, or toggle this off and on to retry."
             }
         }
 

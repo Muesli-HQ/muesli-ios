@@ -395,10 +395,8 @@ final class KeyboardController {
         do {
             let runtimeStatus = try store.keyboardRuntimeStatus()
             latestRuntimeStatus = runtimeStatus
-            refreshKeyboardSessionPreference()
             apply(runtimeStatus: runtimeStatus)
         } catch {
-            refreshKeyboardSessionPreference()
             apply(runtimeStatus: latestRuntimeStatus)
             inputLevel = 0
         }
@@ -408,7 +406,6 @@ final class KeyboardController {
         do {
             let runtimeStatus = try store.keyboardRuntimeStatus()
             latestRuntimeStatus = runtimeStatus
-            refreshKeyboardSessionPreference()
             apply(runtimeStatus: runtimeStatus)
 
             let handoffState = try store.keyboardHandoffState()
@@ -445,15 +442,9 @@ final class KeyboardController {
                 statusText = "Latest ready"
             }
         } catch {
-            refreshKeyboardSessionPreference()
             apply(runtimeStatus: latestRuntimeStatus)
             statusText = "Waiting for Full Access"
         }
-    }
-
-    private func refreshKeyboardSessionPreference() {
-        // Preserve the shared-store read in case opening/reading the backing store has side effects.
-        _ = try? store.keyboardSessionPreference()
     }
 
     private func apply(handoffState: KeyboardHandoffState) {

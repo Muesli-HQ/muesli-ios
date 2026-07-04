@@ -14,7 +14,6 @@ private struct KeyboardSessionState: Equatable {
         case transcribing(UUID)
         case retrying(String)
         case failed(String)
-        case timedOut
     }
 
     var phase: Phase = .off
@@ -24,7 +23,7 @@ private struct KeyboardSessionState: Equatable {
         switch phase {
         case .ready, .handoff, .recording, .transcribing, .arming:
             sessionAvailable
-        case .off, .retrying, .failed, .timedOut:
+        case .off, .retrying, .failed:
             false
         }
     }
@@ -33,7 +32,7 @@ private struct KeyboardSessionState: Equatable {
         switch phase {
         case .handoff, .recording, .transcribing:
             true
-        case .off, .arming, .ready, .retrying, .failed, .timedOut:
+        case .off, .arming, .ready, .retrying, .failed:
             false
         }
     }
@@ -42,7 +41,7 @@ private struct KeyboardSessionState: Equatable {
         switch phase {
         case .handoff, .recording, .transcribing, .arming:
             true
-        case .off, .ready, .retrying, .failed, .timedOut:
+        case .off, .ready, .retrying, .failed:
             false
         }
     }
@@ -65,8 +64,6 @@ private struct KeyboardSessionState: Equatable {
             message
         case .failed(let message):
             message
-        case .timedOut:
-            "Timed out"
         }
     }
 }
@@ -86,7 +83,6 @@ private enum KeyboardSessionEvent {
 
 private enum KeyboardSessionStopReason: Equatable {
     case off
-    case timedOut
     case turnedOff
     case stopped
 
@@ -94,8 +90,6 @@ private enum KeyboardSessionStopReason: Equatable {
         switch self {
         case .off:
             "Off"
-        case .timedOut:
-            "Timed out"
         case .turnedOff:
             "Turned off"
         case .stopped:
@@ -129,8 +123,8 @@ private enum KeyboardSessionReducer {
                 phase: state.sessionAvailable ? .ready : .off,
                 sessionAvailable: state.sessionAvailable
             )
-        case .stop(let reason):
-            return KeyboardSessionState(phase: reason == .timedOut ? .timedOut : .off)
+        case .stop:
+            return KeyboardSessionState(phase: .off)
         }
     }
 }
@@ -161,7 +155,6 @@ final class DictationCoordinator {
     private var commandPollingTask: Task<Void, Never>?
     private var keyboardRuntimePollingTask: Task<Void, Never>?
     private var keyboardRuntimeTickInProgress = false
-    private var keyboardSessionTimeoutTask: Task<Void, Never>?
     private var keyboardSessionRetryTask: Task<Void, Never>?
     private var keyboardSessionRetryAttempt = 0
     private var keyboardSessionLiveActivityRequestIDs = Set<UUID>()
@@ -904,11 +897,6 @@ final class DictationCoordinator {
         }
     }
 
-    func refreshKeyboardSessionTimeout() {
-        keyboardSessionTimeoutTask?.cancel()
-        keyboardSessionTimeoutTask = nil
-    }
-
     func startKeyboardSessionMode() async {
         guard !isKeyboardSessionArmed else {
             prewarmModelIfNeeded(reason: "keyboard_session")
@@ -980,8 +968,6 @@ final class DictationCoordinator {
     }
 
     private func stopKeyboardSessionMode(reason: KeyboardSessionStopReason = .stopped) {
-        keyboardSessionTimeoutTask?.cancel()
-        keyboardSessionTimeoutTask = nil
         keyboardSessionRetryTask?.cancel()
         keyboardSessionRetryTask = nil
         keyboardSessionRetryAttempt = 0
@@ -2991,11 +2977,6 @@ final class DictationCoordinator {
 
     private func clearKeyboardLiveTranscript() {
         try? store.clearKeyboardLiveTranscript()
-    }
-
-    private func scheduleKeyboardSessionTimeout() {
-        keyboardSessionTimeoutTask?.cancel()
-        keyboardSessionTimeoutTask = nil
     }
 
     private func scheduleKeyboardSessionRetry(attempt: Int? = nil) {

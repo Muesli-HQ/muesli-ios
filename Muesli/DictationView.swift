@@ -231,8 +231,6 @@ struct DictationView: View {
             return "Keyboard dictation is listening."
         case "Transcribing":
             return "Preparing text for insertion."
-        case "Timed out":
-            return "Timed out. Toggle off and on to restart standby."
         default:
             return "\(status)."
         }

@@ -64,6 +64,7 @@ struct SettingsView: View {
                 coordinator.applyLiveActivityPreferences()
             }
             .onChange(of: keyboardSessionMode) { _, enabled in
+                guard isActive else { return }
                 coordinator.setKeyboardSessionModeEnabled(enabled)
             }
             .onChange(of: microphonePreference) { _, newValue in

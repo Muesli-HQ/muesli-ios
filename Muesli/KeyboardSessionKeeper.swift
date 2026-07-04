@@ -3,6 +3,10 @@ import Foundation
 import os
 
 final class KeyboardSessionKeeper: @unchecked Sendable {
+    private final class ConverterInputState: @unchecked Sendable {
+        var didProvideInput = false
+    }
+
     private struct FileState {
         var activeFile: AVAudioFile?
         var activeURL: URL?
@@ -73,6 +77,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         }
 
         do {
+            // Standby captures real keyboard dictation segments, so it must honor the selected route.
             _ = try AudioInputRouteManager.configureForRecording(stage: "keyboard session")
             prepareForStart()
 
@@ -298,14 +303,14 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         let frameCapacity = max(1, AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1)
         guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: frameCapacity) else { return nil }
 
-        var didProvideInput = false
+        let inputState = ConverterInputState()
         var error: NSError?
         converter.convert(to: converted, error: &error) { _, outStatus in
-            guard !didProvideInput else {
+            guard !inputState.didProvideInput else {
                 outStatus.pointee = .noDataNow
                 return nil
             }
-            didProvideInput = true
+            inputState.didProvideInput = true
             outStatus.pointee = .haveData
             return buffer
         }

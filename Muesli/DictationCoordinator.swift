@@ -3058,8 +3058,13 @@ final class DictationCoordinator {
         let delay = Self.keyboardSessionRetryBaseDelaySeconds * pow(2, Double(retryAttempt - 1))
         keyboardSessionRetryTask?.cancel()
         keyboardSessionRetryTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
             guard let self,
+                  !Task.isCancelled,
                   MuesliPreferences.keyboardSessionModeEnabled,
                   !self.keyboardSessionKeeper.canAcceptStartCommand
             else { return }

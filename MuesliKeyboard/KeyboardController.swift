@@ -22,7 +22,6 @@ final class KeyboardController {
     private var insertedRequestIDs = Set<UUID>()
     private var cancelledRequestIDs = Set<UUID>()
     private var lastRuntimeLevelUpdateAt = Date.distantPast
-    private var isKeyboardSessionModeEnabled = false
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -386,10 +385,10 @@ final class KeyboardController {
         do {
             let runtimeStatus = try store.keyboardRuntimeStatus()
             latestRuntimeStatus = runtimeStatus
-            refreshKeyboardSessionPreference(runtimeStatus: runtimeStatus)
+            refreshKeyboardSessionPreference()
             apply(runtimeStatus: runtimeStatus)
         } catch {
-            refreshKeyboardSessionPreference(runtimeStatus: latestRuntimeStatus)
+            refreshKeyboardSessionPreference()
             apply(runtimeStatus: latestRuntimeStatus)
             inputLevel = 0
         }
@@ -399,7 +398,7 @@ final class KeyboardController {
         do {
             let runtimeStatus = try store.keyboardRuntimeStatus()
             latestRuntimeStatus = runtimeStatus
-            refreshKeyboardSessionPreference(runtimeStatus: runtimeStatus)
+            refreshKeyboardSessionPreference()
             apply(runtimeStatus: runtimeStatus)
 
             let handoffState = try store.keyboardHandoffState()
@@ -436,18 +435,15 @@ final class KeyboardController {
                 statusText = "Latest ready"
             }
         } catch {
-            refreshKeyboardSessionPreference(runtimeStatus: latestRuntimeStatus)
+            refreshKeyboardSessionPreference()
             apply(runtimeStatus: latestRuntimeStatus)
             statusText = "Waiting for Full Access"
         }
     }
 
-    private func refreshKeyboardSessionPreference(runtimeStatus: KeyboardRuntimeStatus?) {
-        if let preference = try? store.keyboardSessionPreference() {
-            isKeyboardSessionModeEnabled = preference.isEnabled
-        } else if runtimeStatus?.sessionModeEnabled == true {
-            isKeyboardSessionModeEnabled = true
-        }
+    private func refreshKeyboardSessionPreference() {
+        // Preserve the shared-store read in case opening/reading the backing store has side effects.
+        _ = try? store.keyboardSessionPreference()
     }
 
     private func apply(handoffState: KeyboardHandoffState) {

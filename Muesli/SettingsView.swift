@@ -10,7 +10,6 @@ struct SettingsView: View {
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
-    @AppStorage(MuesliPreferences.keyboardSessionTimeoutMinutesKey) private var keyboardSessionTimeoutMinutes = 10
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @AppStorage(MuesliPreferences.keepDictationAudioRecordingsKey) private var keepDictationAudioRecordings = false
     @AppStorage(MuesliPreferences.keepMeetingAudioRecordingsKey) private var keepMeetingAudioRecordings = false
@@ -65,10 +64,8 @@ struct SettingsView: View {
                 coordinator.applyLiveActivityPreferences()
             }
             .onChange(of: keyboardSessionMode) { _, enabled in
+                guard isActive else { return }
                 coordinator.setKeyboardSessionModeEnabled(enabled)
-            }
-            .onChange(of: keyboardSessionTimeoutMinutes) { _, _ in
-                coordinator.refreshKeyboardSessionTimeout()
             }
             .onChange(of: microphonePreference) { _, newValue in
                 guard isActive else { return }
@@ -234,26 +231,11 @@ struct SettingsView: View {
                     SettingsToggleRow(
                         icon: "keyboard.badge.ellipsis",
                         title: "Keyboard Session Mode",
-                        detail: "Keep Muesli ready for longer voice notes from the keyboard with a visible microphone session.",
+                        detail: keyboardSessionModeDetail,
                         isOn: $keyboardSessionMode
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsRow(
-                        icon: "waveform.badge.mic",
-                        title: "Session",
-                        value: coordinator.keyboardSessionStatusText
-                    )
-                    Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsMicrophonePicker(selection: $microphonePreference)
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    Stepper(value: $keyboardSessionTimeoutMinutes, in: 1...30, step: 1) {
-                        SettingsRow(
-                            icon: "timer",
-                            title: "Timeout",
-                            value: "\(keyboardSessionTimeoutMinutes) min"
-                        )
-                    }
-                    .disabled(!keyboardSessionMode)
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsToggleRow(
                         icon: "waveform.badge.mic",
@@ -272,6 +254,28 @@ struct SettingsView: View {
                 .padding(MuesliTheme.spacing16)
             }
         }
+    }
+
+    private var keyboardSessionModeDetail: String {
+        let baseDetail = "Keeps an app-owned microphone session live so the keyboard can start and stop voice notes without reopening Muesli."
+        let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !status.isEmpty, status != "Off" {
+            switch status {
+            case "Ready", "Starting", "Recording", "Transcribing":
+                return "\(status). \(baseDetail)"
+            default:
+                if status.hasPrefix("Retrying session standby") || status.hasPrefix("Session standby unavailable") {
+                    return "\(status). \(baseDetail)"
+                }
+                return "\(status). Tap Start to record normally, or toggle this off and on to retry."
+            }
+        }
+
+        guard keyboardSessionMode else {
+            return "When off, keyboard Start opens Muesli because iOS keyboards cannot own microphone access."
+        }
+
+        return "Starting. \(baseDetail)"
     }
 
     private var meetingSettings: some View {

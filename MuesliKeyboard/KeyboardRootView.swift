@@ -1,16 +1,21 @@
 import SwiftUI
 
 struct KeyboardRootView: View {
+    private static let recorderBodyHeight: CGFloat = 84
+    private static let activeStatusWidth: CGFloat = 84
+    private static let activeControlButtonWidth: CGFloat = 120
+    private static let activeWaveformBarCount = 34
+
     @Bindable var controller: KeyboardController
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 5) {
             keyboardDeck
             helperKeys
         }
-        .padding(.horizontal, 10)
-        .padding(.top, MuesliTheme.spacing8)
-        .padding(.bottom, 10)
+        .padding(.horizontal, MuesliTheme.spacing8)
+        .padding(.top, 4)
+        .padding(.bottom, 5)
         .background(
             LinearGradient(
                 colors: [
@@ -27,11 +32,10 @@ struct KeyboardRootView: View {
     }
 
     private var keyboardDeck: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 7) {
             Capsule()
                 .fill(MuesliTheme.textSecondary.opacity(0.7))
-                .frame(width: 44, height: 4)
-                .padding(.top, 2)
+                .frame(width: 40, height: 4)
 
             header
 
@@ -43,24 +47,25 @@ struct KeyboardRootView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
-        .padding(MuesliTheme.spacing12)
+        .padding(.horizontal, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
         .muesliKeyboardDeckSurface()
         .animation(.snappy(duration: 0.22), value: controller.showsActiveWaveform)
         .animation(.snappy(duration: 0.22), value: controller.primaryButtonRole)
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            MuesliWaveformView(
-                isActive: false,
-                color: MuesliTheme.recording,
-                barCount: 13,
-                spacing: 1.4
-            )
-            .frame(width: 34, height: 24)
+        HStack(spacing: MuesliTheme.spacing8) {
+            Image("MuesliAppIcon")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .accessibilityHidden(true)
 
             Text("muesli")
-                .font(.system(size: 22, weight: .bold))
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(MuesliTheme.textPrimary)
 
             Spacer()
@@ -80,14 +85,8 @@ struct KeyboardRootView: View {
     }
 
     private var readyRecorder: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: MuesliTheme.spacing8) {
             primaryActionButton(isProminent: true)
-
-            Text(readyHint)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
 
             if controller.canInsertLatest {
                 Button {
@@ -97,60 +96,23 @@ struct KeyboardRootView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(MuesliTheme.recording)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 36)
+                        .frame(height: 32)
                         .background(MuesliTheme.recording.opacity(0.14), in: Capsule())
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+            } else {
+                Color.clear
+                    .frame(height: 32)
             }
         }
+        .frame(height: Self.recorderBodyHeight)
     }
 
     private var activeRecorder: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(activeStatusColor)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: activeStatusColor.opacity(0.75), radius: 5)
-
-                Text(activeStatusText)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(activeStatusColor)
-                    .lineLimit(1)
-            }
-
-            ZStack {
-                MuesliInlineWaveformView(
-                    mode: controller.waveformMode,
-                    color: activeStatusColor,
-                    level: controller.waveformLevel,
-                    barCount: 24,
-                    spacing: 2.5,
-                    framesPerSecond: 18
-                )
-                .frame(height: 68)
-                .shadow(color: activeStatusColor.opacity(0.36), radius: 12)
-
-                if controller.dictationPhase == .transcribing {
-                    ProgressView()
-                        .tint(activeStatusColor)
-                        .controlSize(.small)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, MuesliTheme.spacing4)
-
-            if controller.showsLiveTranscript {
-                Text(controller.liveTranscript)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, MuesliTheme.spacing4)
-            }
-
-            HStack(spacing: MuesliTheme.spacing12) {
+        VStack(spacing: MuesliTheme.spacing8) {
+            activeWaveformStrip
+            HStack(spacing: MuesliTheme.spacing8) {
                 Group {
                     if controller.canCancelActiveDictation {
                         KeyboardControlButton(
@@ -160,31 +122,80 @@ struct KeyboardRootView: View {
                         )
                     } else {
                         Color.clear
-                            .frame(height: 44)
+                            .frame(height: 40)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: Self.activeControlButtonWidth)
 
                 primaryActionButton(isProminent: false)
-                    .frame(maxWidth: .infinity)
+                    .frame(width: Self.activeControlButtonWidth)
             }
         }
+        .frame(height: Self.recorderBodyHeight)
+    }
+
+    private var activeWaveformStrip: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(activeStatusColor)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: activeStatusColor.opacity(0.75), radius: 5)
+
+                Text(activeStatusText)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(activeStatusColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .frame(width: Self.activeStatusWidth, alignment: .leading)
+
+            ZStack {
+                MuesliInlineWaveformView(
+                    mode: controller.waveformMode,
+                    color: activeStatusColor,
+                    level: controller.waveformLevel,
+                    barCount: Self.activeWaveformBarCount,
+                    spacing: 2.2,
+                    framesPerSecond: 18
+                )
+                .frame(height: 24)
+                .shadow(color: activeStatusColor.opacity(0.28), radius: 8)
+
+                if controller.dictationPhase == .transcribing {
+                    ProgressView()
+                        .tint(activeStatusColor)
+                        .controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .frame(height: 36)
+        .padding(.horizontal, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(MuesliTheme.surfacePrimary.opacity(0.30))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(activeStatusColor.opacity(0.12), lineWidth: 1)
+        )
     }
 
     private var helperKeys: some View {
-        VStack(spacing: MuesliTheme.spacing8) {
-            HStack(spacing: MuesliTheme.spacing8) {
+        VStack(spacing: 5) {
+            HStack(spacing: 5) {
                 KeyboardTextKey(".") { controller.insertTextKey(".") }
                 KeyboardTextKey(",") { controller.insertTextKey(",") }
                 KeyboardTextKey("?") { controller.insertTextKey("?") }
                 KeyboardTextKey("!") { controller.insertTextKey("!") }
                 KeyboardTextKey("'") { controller.insertTextKey("'") }
-                KeyboardTextKey(systemImage: "delete.left", accessibilityLabel: "Delete") {
+                KeyboardRepeatingTextKey(systemImage: "delete.left", accessibilityLabel: "Delete") {
                     controller.deleteBackward()
                 }
             }
 
-            HStack(spacing: MuesliTheme.spacing8) {
+            HStack(spacing: 5) {
                 KeyboardTextKey(systemImage: "globe", accessibilityLabel: "Next keyboard") {
                     controller.switchInputMode()
                 }
@@ -232,10 +243,12 @@ struct KeyboardRootView: View {
                 .font(.system(size: isProminent ? 21 : 15, weight: .bold))
             Text(primaryActionTitle)
                 .font(.system(size: isProminent ? 19 : 16, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
         }
         .foregroundStyle(primaryForeground)
         .frame(maxWidth: .infinity)
-        .frame(height: isProminent ? 54 : 44)
+        .frame(height: isProminent ? 44 : 36)
         .background(primaryBackground, in: RoundedRectangle(cornerRadius: isProminent ? 15 : 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: isProminent ? 15 : 12, style: .continuous)
@@ -244,18 +257,6 @@ struct KeyboardRootView: View {
         .shadow(color: primaryShadow, radius: isProminent ? 12 : 8, x: 0, y: 5)
         .opacity(controller.isPrimaryButtonDisabled ? 0.55 : 1)
         .contentShape(RoundedRectangle(cornerRadius: isProminent ? 15 : 12, style: .continuous))
-    }
-
-    private var readyHint: String {
-        if controller.isRecoveryRequested {
-            return "Open Muesli to recover this voice note"
-        }
-
-        if controller.opensMuesliFromPrimaryButton {
-            return "Tap Start, then return here to stop and insert"
-        }
-
-        return controller.canInsertLatest ? "Tap Start or insert your latest voice note" : "Tap Start to begin dictating"
     }
 
     private var activeStatusText: String {
@@ -335,7 +336,7 @@ private struct KeyboardControlButton: View {
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(tint)
                 .frame(maxWidth: .infinity)
-                .frame(height: 44)
+                .frame(height: 36)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(tint.opacity(0.10))
@@ -371,16 +372,16 @@ private struct KeyboardIconLabel: View {
         Image(systemName: systemImage)
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(MuesliTheme.textPrimary)
-            .frame(width: 44, height: 44)
+            .frame(width: 34, height: 34)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(MuesliTheme.surfacePrimary.opacity(0.76))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -414,6 +415,49 @@ private struct KeyboardTextKey: View {
     }
 }
 
+private struct KeyboardRepeatingTextKey: View {
+    let systemImage: String
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    @State private var repeatTask: Task<Void, Never>?
+
+    var body: some View {
+        KeyboardTextKeyLabel(title: nil, systemImage: systemImage)
+            .muesliKeyboardKeySurface()
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                action()
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in startRepeatingIfNeeded() }
+                    .onEnded { _ in stopRepeating() }
+            )
+            .onDisappear {
+                stopRepeating()
+            }
+    }
+
+    private func startRepeatingIfNeeded() {
+        guard repeatTask == nil else { return }
+        action()
+        repeatTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(360))
+            while !Task.isCancelled {
+                action()
+                try? await Task.sleep(for: .milliseconds(65))
+            }
+        }
+    }
+
+    private func stopRepeating() {
+        repeatTask?.cancel()
+        repeatTask = nil
+    }
+}
+
 private struct KeyboardTextKeyLabel: View {
     var title: String?
     var systemImage: String?
@@ -431,7 +475,7 @@ private struct KeyboardTextKeyLabel: View {
         }
         .foregroundStyle(MuesliTheme.textPrimary)
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 44)
+        .frame(minHeight: 38)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 

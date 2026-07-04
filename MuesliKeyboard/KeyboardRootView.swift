@@ -424,9 +424,12 @@ private struct KeyboardRepeatingTextKey: View {
 
     var body: some View {
         KeyboardTextKeyLabel(title: nil, systemImage: systemImage)
-            .buttonStyle(.plain)
             .muesliKeyboardKeySurface()
             .accessibilityLabel(accessibilityLabel)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                action()
+            }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in startRepeatingIfNeeded() }

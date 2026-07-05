@@ -636,7 +636,7 @@ private struct SharedStoreDatabase {
             let dictationRows = try queryRows(
                 """
                 SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
-                       deleted_at, session_id, cloud_change_tag
+                       deleted_at, session_id, cloud_change_tag, payload
                 FROM result_history
                 WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL
                 ORDER BY updated_at DESC
@@ -646,7 +646,9 @@ private struct SharedStoreDatabase {
             ) { statement in
                 try bind(limit, to: statement, at: 1)
             } read: { statement in
-                SyncTextRecord(
+                let payload = sqliteColumnData(statement, 8)
+                let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
+                return SyncTextRecord(
                     id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
                     kind: .dictation,
                     title: nil,
@@ -654,7 +656,7 @@ private struct SharedStoreDatabase {
                     speakerTranscript: nil,
                     summaryText: nil,
                     manualNotes: nil,
-                    source: "ios",
+                    source: Self.syncSource(result?.source),
                     engineIdentifier: sqliteColumnString(statement, 2),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
                     updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
@@ -675,7 +677,7 @@ private struct SharedStoreDatabase {
                 """
                 SELECT s.cloud_record_name, s.id, s.title, s.kind, s.phase, s.created_at,
                        s.started_at, s.ended_at, s.engine_identifier, s.error_message,
-                       s.updated_at, s.deleted_at, s.cloud_change_tag,
+                       s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
                        t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
                        t.summary_model, t.updated_at, t.deleted_at
                 FROM recording_sessions s
@@ -693,18 +695,20 @@ private struct SharedStoreDatabase {
             } read: { statement in
                 let started = Self.optionalDate(statement, 6)
                 let ended = Self.optionalDate(statement, 7)
-                let text = sqliteColumnString(statement, 13) ?? ""
-                let summary = sqliteColumnString(statement, 15)
-                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 18))
+                let text = sqliteColumnString(statement, 14) ?? ""
+                let summary = sqliteColumnString(statement, 16)
+                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19))
+                let payload = sqliteColumnData(statement, 13)
+                let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
                 return SyncTextRecord(
                     id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
                     kind: .meeting,
                     title: sqliteColumnString(statement, 2),
                     text: text,
-                    speakerTranscript: sqliteColumnString(statement, 14),
+                    speakerTranscript: sqliteColumnString(statement, 15),
                     summaryText: summary,
                     manualNotes: nil,
-                    source: "ios",
+                    source: Self.syncSource(session?.source),
                     engineIdentifier: sqliteColumnString(statement, 8),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
                     updatedAt: Date(timeIntervalSince1970: updated),
@@ -712,7 +716,7 @@ private struct SharedStoreDatabase {
                     endedAt: ended,
                     durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
                     wordCount: Self.wordCount(text + " " + (summary ?? "")),
-                    isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 19) != SQLITE_NULL,
+                    isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 20) != SQLITE_NULL,
                     cloudChangeTag: sqliteColumnString(statement, 12)
                 )
             }
@@ -727,7 +731,7 @@ private struct SharedStoreDatabase {
             let dictationRows = try queryRows(
                 """
                 SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
-                       deleted_at, session_id, cloud_change_tag
+                       deleted_at, session_id, cloud_change_tag, payload
                 FROM result_history
                 WHERE cloud_record_name IS NOT NULL
                 ORDER BY updated_at DESC
@@ -737,7 +741,9 @@ private struct SharedStoreDatabase {
             ) { statement in
                 try bind(limit, to: statement, at: 1)
             } read: { statement in
-                SyncTextRecord(
+                let payload = sqliteColumnData(statement, 8)
+                let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
+                return SyncTextRecord(
                     id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
                     kind: .dictation,
                     title: nil,
@@ -745,7 +751,7 @@ private struct SharedStoreDatabase {
                     speakerTranscript: nil,
                     summaryText: nil,
                     manualNotes: nil,
-                    source: "ios",
+                    source: Self.syncSource(result?.source),
                     engineIdentifier: sqliteColumnString(statement, 2),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
                     updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
@@ -766,7 +772,7 @@ private struct SharedStoreDatabase {
                 """
                 SELECT s.cloud_record_name, s.id, s.title, s.kind, s.phase, s.created_at,
                        s.started_at, s.ended_at, s.engine_identifier, s.error_message,
-                       s.updated_at, s.deleted_at, s.cloud_change_tag,
+                       s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
                        t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
                        t.summary_model, t.updated_at, t.deleted_at
                 FROM recording_sessions s
@@ -783,18 +789,20 @@ private struct SharedStoreDatabase {
             } read: { statement in
                 let started = Self.optionalDate(statement, 6)
                 let ended = Self.optionalDate(statement, 7)
-                let text = sqliteColumnString(statement, 13) ?? ""
-                let summary = sqliteColumnString(statement, 15)
-                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 18))
+                let text = sqliteColumnString(statement, 14) ?? ""
+                let summary = sqliteColumnString(statement, 16)
+                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19))
+                let payload = sqliteColumnData(statement, 13)
+                let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
                 return SyncTextRecord(
                     id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
                     kind: .meeting,
                     title: sqliteColumnString(statement, 2),
                     text: text,
-                    speakerTranscript: sqliteColumnString(statement, 14),
+                    speakerTranscript: sqliteColumnString(statement, 15),
                     summaryText: summary,
                     manualNotes: nil,
-                    source: "ios",
+                    source: Self.syncSource(session?.source),
                     engineIdentifier: sqliteColumnString(statement, 8),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
                     updatedAt: Date(timeIntervalSince1970: updated),
@@ -802,7 +810,7 @@ private struct SharedStoreDatabase {
                     endedAt: ended,
                     durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
                     wordCount: Self.wordCount(text + " " + (summary ?? "")),
-                    isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 19) != SQLITE_NULL,
+                    isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 20) != SQLITE_NULL,
                     cloudChangeTag: sqliteColumnString(statement, 12)
                 )
             }
@@ -1864,6 +1872,14 @@ private struct SharedStoreDatabase {
 
     private static func wordCount(_ text: String) -> Int {
         text.split(whereSeparator: \.isWhitespace).count
+    }
+
+    private static func syncSource(_ source: String?, fallback: String = "ios") -> String {
+        guard let normalized = source?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !normalized.isEmpty else {
+            return fallback
+        }
+        return normalized
     }
 
     private static let schemaSQL = """

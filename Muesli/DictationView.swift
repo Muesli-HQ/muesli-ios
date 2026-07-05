@@ -1208,16 +1208,16 @@ private enum DictationSyncOrigin: Equatable {
 
 private extension RecordingSession {
     var syncOrigin: DictationSyncOrigin {
-        let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedSource = source.normalizedSyncOriginSource
         if let normalizedSource, normalizedSource == "ios" {
             return .thisIPhone
         }
 
-        if let normalizedSource, !normalizedSource.isEmpty {
+        if normalizedSource != nil {
             return .fromMac
         }
 
-        if normalizedSource == nil && engineIdentifier?.lowercased() == "icloud" {
+        if engineIdentifier?.lowercased() == "icloud" {
             return .fromMac
         }
 
@@ -1227,22 +1227,32 @@ private extension RecordingSession {
 
 private extension DictationResult {
     var syncOrigin: DictationSyncOrigin {
-        let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedSource = source.normalizedSyncOriginSource
         if let normalizedSource, normalizedSource == "ios" {
             return .thisIPhone
         }
 
-        if let normalizedSource, !normalizedSource.isEmpty {
+        if normalizedSource != nil {
             return .fromMac
         }
 
         // Older synced rows were stored before source was persisted and used
         // the fallback engine label. Treat those as Mac-origin cloud imports.
-        if normalizedSource == nil && engineIdentifier.lowercased() == "icloud" {
+        if engineIdentifier.lowercased() == "icloud" {
             return .fromMac
         }
 
         return .thisIPhone
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var normalizedSyncOriginSource: String? {
+        guard let source = self?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !source.isEmpty else {
+            return nil
+        }
+        return source
     }
 }
 

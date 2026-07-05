@@ -12,6 +12,7 @@ struct LaunchWarmupContainer<Content: View>: View {
 
             if isShowingWarmup && coordinator.shouldShowLaunchWarmup {
                 LaunchWarmupView(
+                    phase: coordinator.modelPreparation.phase,
                     status: coordinator.modelPreparation.status,
                     detail: coordinator.modelPreparation.detail,
                     modelName: coordinator.selectedTranscriptionModel.shortName
@@ -60,6 +61,7 @@ struct LaunchWarmupContainer<Content: View>: View {
 }
 
 private struct LaunchWarmupView: View {
+    let phase: ModelPreparationPhase
     let status: String
     let detail: String
     let modelName: String
@@ -86,13 +88,19 @@ private struct LaunchWarmupView: View {
                     .font(MuesliTheme.caption())
                     .foregroundStyle(.white.opacity(0.24))
                     .padding(.bottom, 18)
+                    .accessibilityHidden(true)
             }
             .ignoresSafeArea(.keyboard)
         }
         .task {
+            guard phase.isLaunchWarmupActive else { return }
             withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
                 isAnimating = true
             }
+        }
+        .onChange(of: phase) { _, newPhase in
+            guard !newPhase.isLaunchWarmupActive else { return }
+            isAnimating = false
         }
     }
 
@@ -139,9 +147,14 @@ private struct LaunchWarmupView: View {
     private var warmupStatus: some View {
         VStack(spacing: MuesliTheme.spacing16) {
             HStack(spacing: MuesliTheme.spacing12) {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(MuesliTheme.syncGreen)
+                if phase == .failed {
+                    Image(systemName: "pause.circle")
+                        .foregroundStyle(.white.opacity(0.68))
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(MuesliTheme.syncGreen)
+                }
 
                 Text(displayStatus)
                     .font(MuesliTheme.callout())
@@ -168,6 +181,9 @@ private struct LaunchWarmupView: View {
         if trimmedStatus.localizedCaseInsensitiveContains("ready") {
             return "Transcription engine ready"
         }
+        if phase == .failed {
+            return trimmedStatus.isEmpty ? "Warmup paused" : trimmedStatus
+        }
         return "Warming up the transcription engine..."
     }
 
@@ -185,6 +201,12 @@ private struct LaunchWarmupView: View {
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1"
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
         return build.isEmpty ? "v\(version)" : "v\(version) (\(build))"
+    }
+}
+
+private extension ModelPreparationPhase {
+    var isLaunchWarmupActive: Bool {
+        self == .downloading || self == .preparing
     }
 }
 

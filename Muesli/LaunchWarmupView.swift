@@ -92,14 +92,17 @@ private struct LaunchWarmupView: View {
             }
             .ignoresSafeArea(.keyboard)
         }
-        .task {
-            guard phase.isLaunchWarmupActive else { return }
+        .task(id: phase) {
+            updateAnimation(for: phase)
+        }
+    }
+
+    private func updateAnimation(for phase: ModelPreparationPhase) {
+        if phase.isLaunchWarmupActive {
             withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
                 isAnimating = true
             }
-        }
-        .onChange(of: phase) { _, newPhase in
-            guard !newPhase.isLaunchWarmupActive else { return }
+        } else {
             isAnimating = false
         }
     }

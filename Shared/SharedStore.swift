@@ -1550,6 +1550,7 @@ private struct SharedStoreDatabase {
             keepsAudioRecording: false,
             transcriptID: transcriptID,
             engineIdentifier: record.engineIdentifier,
+            source: record.source,
             errorMessage: nil
         )
         let transcript = Transcript(

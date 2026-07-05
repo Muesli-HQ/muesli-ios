@@ -310,6 +310,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var keepsAudioRecording: Bool
     var transcriptID: UUID?
     var engineIdentifier: String?
+    var source: String?
     var errorMessage: String?
 
     init(
@@ -325,6 +326,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         keepsAudioRecording: Bool = false,
         transcriptID: UUID? = nil,
         engineIdentifier: String? = nil,
+        source: String? = nil,
         errorMessage: String? = nil
     ) {
         self.id = id
@@ -339,6 +341,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.keepsAudioRecording = keepsAudioRecording
         self.transcriptID = transcriptID
         self.engineIdentifier = engineIdentifier
+        self.source = source
         self.errorMessage = errorMessage
     }
 
@@ -360,6 +363,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         case keepsAudioRecording
         case transcriptID
         case engineIdentifier
+        case source
         case errorMessage
     }
 
@@ -377,6 +381,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         keepsAudioRecording = try container.decodeIfPresent(Bool.self, forKey: .keepsAudioRecording) ?? false
         transcriptID = try container.decodeIfPresent(UUID.self, forKey: .transcriptID)
         engineIdentifier = try container.decodeIfPresent(String.self, forKey: .engineIdentifier)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
         errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
     }
 }

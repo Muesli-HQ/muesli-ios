@@ -67,6 +67,10 @@ struct DictationView: View {
                 guard isActive else { return }
                 updateDashboardStats()
             }
+            .onChange(of: sourceFilter) { _, _ in
+                guard isActive else { return }
+                updateDashboardStats()
+            }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active, isActive else { return }
                 refreshVisibleStateIfNeeded()
@@ -103,30 +107,30 @@ struct DictationView: View {
                 value: stats.streak,
                 label: "streak",
                 systemImage: "flame.fill",
-                tint: Color(hex: 0xFF9F2D)
+                tint: sourceFilter.statTint(default: Color(hex: 0xFF9F2D))
             )
             DictationHomeStatTile(
                 value: stats.words,
                 label: "words",
                 systemImage: "waveform",
-                tint: MuesliTheme.accent
+                tint: sourceFilter.statTint(default: MuesliTheme.accent)
             )
             DictationHomeStatTile(
                 value: stats.wpm,
                 label: "WPM",
                 systemImage: "speedometer",
-                tint: MuesliTheme.success
+                tint: sourceFilter.statTint(default: MuesliTheme.success)
             )
             DictationHomeStatTile(
                 value: stats.meetings,
                 label: "meetings",
                 systemImage: "person.2",
-                tint: MuesliTheme.accent
+                tint: sourceFilter.statTint(default: MuesliTheme.accent)
             )
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "Stats: \(stats.streak) day streak, \(stats.words) words, \(stats.wpm) words per minute, \(stats.meetings) meetings"
+            "\(sourceFilter.title) stats: \(stats.streak) day streak, \(stats.words) words, \(stats.wpm) words per minute, \(stats.meetings) meetings"
         )
     }
 
@@ -152,15 +156,8 @@ struct DictationView: View {
     }
 
     private func updateDashboardStats() {
-        #if DEBUG
-        if shouldUseMockDictations {
-            dashboardStats = DictationDashboardStats(words: "61.0k", wpm: "152", meetings: "135", streak: "3")
-            return
-        }
-        #endif
-
-        let history = displayHistory
-        let sessions = coordinator.recordingSessions
+        let history = statsHistory
+        let sessions = statsSessions
         dashboardStats = DictationDashboardStats(
             words: formattedCompactCount(totalDictationWords(in: history)),
             wpm: formattedAverageWPM(history: history, sessions: sessions),
@@ -590,6 +587,14 @@ struct DictationView: View {
         displayHistory.filter { sourceFilter.includes($0.syncOrigin) }
     }
 
+    private var statsHistory: [DictationResult] {
+        displayHistory.filter { sourceFilter.includes($0.syncOrigin) }
+    }
+
+    private var statsSessions: [RecordingSession] {
+        coordinator.recordingSessions.filter { sourceFilter.includes($0.syncOrigin) }
+    }
+
     private var displayHistory: [DictationResult] {
         #if DEBUG
         if shouldUseMockDictations {
@@ -819,16 +824,16 @@ private struct DictationHomeStatTile: View {
     let tint: Color
 
     var body: some View {
-        VStack(spacing: MuesliTheme.spacing8) {
+        VStack(spacing: MuesliTheme.spacing4) {
             Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(tint)
-                .frame(height: 20)
+                .frame(height: 17)
 
             VStack(spacing: 1) {
                 Text(value)
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .font(.system(size: 21, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .minimumScaleFactor(0.76)
                     .lineLimit(1)
@@ -842,8 +847,9 @@ private struct DictationHomeStatTile: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 72)
-        .padding(.horizontal, MuesliTheme.spacing8)
+        .frame(height: 68)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
         .background {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                 .fill(
@@ -1146,6 +1152,17 @@ private enum DictationSourceFilter: String, CaseIterable, Identifiable {
             origin == .fromMac
         }
     }
+
+    func statTint(default tint: Color) -> Color {
+        switch self {
+        case .all:
+            tint
+        case .thisIPhone:
+            MuesliTheme.accent
+        case .fromMac:
+            MuesliTheme.success
+        }
+    }
 }
 
 private enum DictationSyncOrigin: Equatable {
@@ -1186,6 +1203,25 @@ private enum DictationSyncOrigin: Equatable {
         case .fromMac:
             MuesliTheme.success
         }
+    }
+}
+
+private extension RecordingSession {
+    var syncOrigin: DictationSyncOrigin {
+        let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let normalizedSource, normalizedSource == "ios" {
+            return .thisIPhone
+        }
+
+        if let normalizedSource, !normalizedSource.isEmpty {
+            return .fromMac
+        }
+
+        if normalizedSource == nil && engineIdentifier?.lowercased() == "icloud" {
+            return .fromMac
+        }
+
+        return .thisIPhone
     }
 }
 

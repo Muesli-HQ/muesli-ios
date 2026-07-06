@@ -40,11 +40,10 @@ struct LaunchWarmupContainer<Content: View>: View {
 
         while !Task.isCancelled {
             let elapsed = startedAt.duration(to: .now)
-            let minimumDisplaySatisfied = elapsed >= .milliseconds(1400)
-            let maximumDisplayReached = elapsed >= .seconds(20)
+            let maximumDisplayReached = elapsed >= .seconds(5)
             let warmupFinished = !coordinator.isModelPrewarmInProgress && !coordinator.modelPreparation.isPreparing
 
-            if minimumDisplaySatisfied && (warmupFinished || maximumDisplayReached) {
+            if warmupFinished || maximumDisplayReached {
                 break
             }
 

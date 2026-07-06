@@ -12,7 +12,9 @@ struct MuesliApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(coordinator: coordinator)
+            LaunchWarmupContainer(coordinator: coordinator) {
+                RootView(coordinator: coordinator)
+            }
                 .onOpenURL { url in
                     coordinator.handleOpenURL(url)
                 }

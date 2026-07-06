@@ -178,6 +178,13 @@ final class DictationCoordinator {
     private var stopKeyboardSessionAfterCurrentRequest = false
     var isKeyboardHandoffActive: Bool { keyboardSessionState.isKeyboardHandoffActive }
     var isKeyboardSessionArmed: Bool { keyboardSessionState.isArmed }
+    var isModelPrewarmInProgress: Bool { modelPrewarmTask != nil }
+    var shouldShowLaunchWarmup: Bool {
+        #if DEBUG
+        guard !Self.shouldSkipModelPrewarmForTesting() else { return false }
+        #endif
+        return hasCompletedOnboarding
+    }
     private var isKeyboardHotMicEngineReady: Bool {
         isKeyboardSessionArmed && keyboardSessionKeeper.canAcceptStartCommand
     }
@@ -1182,6 +1189,12 @@ final class DictationCoordinator {
         guard !isRecording, !isMeetingRecording else { return }
 
         let model = selectedTranscriptionModel
+        modelPreparation = ModelPreparationState(
+            phase: .preparing,
+            progress: nil,
+            status: "Warming up the transcription engine...",
+            detail: model.shortName
+        )
         let coordinator = self
         modelPrewarmTask = Task { [engine, model] in
             do {
@@ -1203,7 +1216,11 @@ final class DictationCoordinator {
                     "model_prewarm_started",
                     parameters: ["engine": model.engineIdentifier, "reason": reason]
                 )
-                try await engine.prepare()
+                try await engine.prepare { progress, status in
+                    Task { @MainActor in
+                        coordinator.applyModelPreparationProgress(progress, status: status)
+                    }
+                }
 
                 await MainActor.run {
                     coordinator.modelPrewarmTask = nil
@@ -1225,6 +1242,12 @@ final class DictationCoordinator {
             } catch {
                 await MainActor.run {
                     coordinator.modelPrewarmTask = nil
+                    coordinator.modelPreparation = ModelPreparationState(
+                        phase: .failed,
+                        progress: nil,
+                        status: "Warmup paused",
+                        detail: "Muesli will try again when you record"
+                    )
                     AppTelemetry.signal(
                         "model_prewarm_failed",
                         parameters: [

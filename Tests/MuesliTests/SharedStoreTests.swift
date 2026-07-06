@@ -316,6 +316,26 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertGreaterThan(try sqliteDouble("SELECT updated_at FROM result_history LIMIT 1", in: directory), 0)
     }
 
+    func testDirtyDictationSyncRecordPreservesPayloadSource() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let result = DictationResult(
+            id: UUID(),
+            requestID: UUID(),
+            text: "synced mac edit",
+            createdAt: Date(timeIntervalSince1970: 123),
+            engineIdentifier: "icloud",
+            source: "macos"
+        )
+
+        try store.saveResult(result)
+
+        let record = try XCTUnwrap(try store.textRecordsNeedingSync().first { $0.kind == .dictation })
+        XCTAssertEqual(record.source, "macos")
+    }
+
     func testSyncedDictationPreservesLocalSessionLink() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -540,6 +560,39 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try sqliteString("SELECT summary_model FROM transcripts LIMIT 1", in: directory), "gpt-5.4-mini")
         XCTAssertEqual(try sqliteString("SELECT cloud_record_name FROM transcripts LIMIT 1", in: directory), transcript.id.uuidString)
         XCTAssertEqual(try sqliteInt("SELECT sync_dirty FROM transcripts LIMIT 1", in: directory), 1)
+    }
+
+    func testDirtyMeetingSyncRecordPreservesPayloadSource() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let session = RecordingSession(
+            id: UUID(),
+            requestID: UUID(),
+            kind: .meeting,
+            title: "Mac meeting",
+            createdAt: Date(timeIntervalSince1970: 100),
+            startedAt: Date(timeIntervalSince1970: 90),
+            endedAt: Date(timeIntervalSince1970: 150),
+            phase: .completed,
+            transcriptID: UUID(),
+            engineIdentifier: "icloud",
+            source: "macos"
+        )
+        let transcript = Transcript(
+            id: try XCTUnwrap(session.transcriptID),
+            sessionID: session.id,
+            text: "meeting transcript",
+            createdAt: Date(timeIntervalSince1970: 151),
+            engineIdentifier: "icloud"
+        )
+
+        try store.saveSession(session)
+        try store.saveTranscript(transcript)
+
+        let record = try XCTUnwrap(try store.textRecordsNeedingSync().first { $0.kind == .meeting })
+        XCTAssertEqual(record.source, "macos")
     }
 
     func testRecordingSessionDecodesLegacyPayloadWithoutAudioRetentionFlag() throws {

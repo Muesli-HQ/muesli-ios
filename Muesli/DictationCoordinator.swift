@@ -1721,28 +1721,11 @@ final class DictationCoordinator {
                         )
                     }
                 ) { [weak self] in
-                    guard let self else { return }
-                    let message = "Transcription stalled. Open Muesli to try again."
-                    var failedSession = session
-                    failedSession.phase = .failed
-                    failedSession.errorMessage = message
-                    try? self.store.saveSession(failedSession)
-                    self.activeRequest = nil
-                    self.activeSession = nil
-                    self.statusText = message
-                    try? self.store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
-                    self.saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
-                    self.saveKeyboardRuntimeStatus(
-                        isActive: self.canStartKeyboardRequestsInBackground,
-                        activeRequestID: nil,
-                        phase: .failed,
-                        message: message,
-                        supportsBackgroundStart: self.canStartKeyboardRequestsInBackground
-                    )
-                    self.refreshHistory()
-                    AppTelemetry.signal(
-                        "keyboard_transcription_recovery_failed",
-                        parameters: ["reason": "timeout"]
+                    self?.handleKeyboardTranscriptionTimeout(
+                        request: request,
+                        session: session,
+                        startedFromKeyboard: true,
+                        source: .recovery
                     )
                 } operation: { [engine] progress in
                     try await engine.transcribe(audioURL: audioURL, progress: progress)
@@ -2877,8 +2860,9 @@ final class DictationCoordinator {
                         try? await Task.sleep(for: .seconds(2))
                         guard !Task.isCancelled else { return }
                         if await tracker.hasNoProgress(for: timeout) {
+                            guard control.claimTimeout() else { return }
                             await onTimeout()
-                            control.timeout()
+                            control.completeTimeout()
                             return
                         }
                     }
@@ -2939,7 +2923,8 @@ final class DictationCoordinator {
     private func handleKeyboardTranscriptionTimeout(
         request: DictationRequest,
         session: RecordingSession?,
-        startedFromKeyboard: Bool
+        startedFromKeyboard: Bool,
+        source: KeyboardTranscriptionTimeoutSource = .activeDictation
     ) {
         let message = "Transcription stalled. Open Muesli to try again."
         if var failedSession = activeSession ?? session {
@@ -2976,13 +2961,21 @@ final class DictationCoordinator {
         }
         clearKeyboardSessionLiveActivityRoute(for: request.id)
         refreshHistory()
-        AppTelemetry.signal(
-            "dictation_failed",
-            parameters: [
-                "stage": "transcription_timeout",
-                "engine": engine.identifier
-            ]
-        )
+        switch source {
+        case .activeDictation:
+            AppTelemetry.signal(
+                "dictation_failed",
+                parameters: [
+                    "stage": "transcription_timeout",
+                    "engine": engine.identifier
+                ]
+            )
+        case .recovery:
+            AppTelemetry.signal(
+                "keyboard_transcription_recovery_failed",
+                parameters: ["reason": "timeout"]
+            )
+        }
     }
 
     private func cleanupNonRetainedAudio(for session: inout RecordingSession) {
@@ -3548,6 +3541,11 @@ private enum OfflineTranscriptionJobOutcome<Output: Sendable>: Sendable {
     case timedOut
 }
 
+private enum KeyboardTranscriptionTimeoutSource {
+    case activeDictation
+    case recovery
+}
+
 private final class OfflineTranscriptionJobControl<Output: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<OfflineTranscriptionJobOutcome<Output>, Error>?
@@ -3605,12 +3603,42 @@ private final class OfflineTranscriptionJobControl<Output: Sendable>: @unchecked
         finish(.failure(error), cancelTranscription: false)
     }
 
-    func timeout() {
-        finish(.success(.timedOut), cancelTranscription: true)
+    func claimTimeout() -> Bool {
+        lock.lock()
+        guard !didFinish else {
+            lock.unlock()
+            return false
+        }
+        didFinish = true
+        let transcriptionTask = transcriptionTask
+        self.transcriptionTask = nil
+        let watchdogTask = watchdogTask
+        self.watchdogTask = nil
+        lock.unlock()
+
+        watchdogTask?.cancel()
+        transcriptionTask?.cancel()
+        return true
+    }
+
+    func completeTimeout() {
+        completeClaimedFinish(.success(.timedOut))
     }
 
     func cancel() {
         finish(.failure(CancellationError()), cancelTranscription: true)
+    }
+
+    private func completeClaimedFinish(_ result: Result<OfflineTranscriptionJobOutcome<Output>, Error>) {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingCompletion = result
+        }
+        lock.unlock()
+
+        continuation?.resume(with: result)
     }
 
     private func finish(

@@ -49,19 +49,48 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         }
     }
 
-    func transcribe(audioURL: URL) async throws -> String {
-        let result = try await transcribeDetailed(audioURL: audioURL)
+    func transcribe(
+        audioURL: URL,
+        progress: (@Sendable (TranscriptionProgressUpdate) -> Void)? = nil
+    ) async throws -> String {
+        let result = try await transcribeDetailed(audioURL: audioURL, progress: progress)
         return result.text
     }
 
-    func transcribeDetailed(audioURL: URL) async throws -> DetailedTranscriptionResult {
+    func transcribeDetailed(
+        audioURL: URL,
+        progress: (@Sendable (TranscriptionProgressUpdate) -> Void)? = nil
+    ) async throws -> DetailedTranscriptionResult {
         if selectedModel.supportsRealtimeStreaming {
-            return try await transcribeWithStreamingManager(audioURL: audioURL)
+            return try await transcribeWithStreamingManager(audioURL: audioURL, progress: progress)
         }
 
-        let manager = try await loadedManager(progress: nil)
+        let manager = try await loadedManager { fraction, status in
+            progress?(.init(fractionCompleted: fraction, message: status))
+        }
+        progress?(.init(fractionCompleted: 0, message: "Transcribing"))
+        let progressTask: Task<Void, Never>? = Self.shouldObserveOfflineProgress(for: audioURL)
+            ? Task {
+                let stream = await manager.transcriptionProgressStream
+                do {
+                    for try await fraction in stream {
+                        try Task.checkCancellation()
+                        progress?(.init(fractionCompleted: fraction, message: "Transcribing"))
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    return
+                }
+            }
+            : nil
+        defer {
+            progressTask?.cancel()
+        }
+
         var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let result = try await manager.transcribe(audioURL, decoderState: &decoderState)
+        progress?(.init(fractionCompleted: 1, message: "Transcription complete"))
         return DetailedTranscriptionResult(
             text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
             duration: result.duration,
@@ -185,7 +214,10 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         return manager
     }
 
-    private func transcribeWithStreamingManager(audioURL: URL) async throws -> DetailedTranscriptionResult {
+    private func transcribeWithStreamingManager(
+        audioURL: URL,
+        progress: (@Sendable (TranscriptionProgressUpdate) -> Void)? = nil
+    ) async throws -> DetailedTranscriptionResult {
         let manager = try await loadedStreamingManager(progress: nil)
         await manager.reset()
 
@@ -209,10 +241,15 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             try audioFile.read(into: buffer, frameCount: framesToRead)
             guard buffer.frameLength > 0 else { break }
             _ = try await manager.process(audioBuffer: buffer)
+            let fraction = audioFile.length > 0
+                ? Double(audioFile.framePosition) / Double(audioFile.length)
+                : nil
+            progress?(.init(fractionCompleted: fraction, message: "Processing audio"))
             try Task.checkCancellation()
         }
 
         let text = try await manager.finish()
+        progress?(.init(fractionCompleted: 1, message: "Transcription complete"))
         return DetailedTranscriptionResult(
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
             duration: duration,
@@ -245,6 +282,14 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         case .compiling:
             return "Compiling CoreML model..."
         }
+    }
+
+    private nonisolated static func shouldObserveOfflineProgress(for audioURL: URL) -> Bool {
+        guard let audioFile = try? AVAudioFile(forReading: audioURL),
+              audioFile.fileFormat.sampleRate > 0 else {
+            return true
+        }
+        return Double(audioFile.length) / audioFile.fileFormat.sampleRate > 15
     }
 }
 

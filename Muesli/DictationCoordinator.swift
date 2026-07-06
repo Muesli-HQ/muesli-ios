@@ -2953,19 +2953,28 @@ final class DictationCoordinator {
         realtimeDictationCommittedText = ""
         clearKeyboardLiveTranscript()
         statusText = message
+        let completedDeferredStop = completeDeferredKeyboardSessionStopIfNeeded()
         try? store.clearPendingRequest()
         try? store.clearPendingCommand()
         try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
         if startedFromKeyboard {
             saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
-            saveKeyboardRuntimeStatus(
-                isActive: canStartKeyboardRequestsInBackground,
-                activeRequestID: nil,
-                phase: .failed,
-                message: message,
-                supportsBackgroundStart: canStartKeyboardRequestsInBackground
-            )
+            if !completedDeferredStop {
+                saveKeyboardRuntimeStatus(
+                    isActive: canStartKeyboardRequestsInBackground,
+                    activeRequestID: nil,
+                    phase: .failed,
+                    message: message,
+                    supportsBackgroundStart: canStartKeyboardRequestsInBackground
+                )
+            }
         }
+        transitionKeyboardSession(.requestFinished)
+        if !completedDeferredStop {
+            resumeKeyboardSessionKeeperIfNeeded()
+            publishKeyboardSessionReadyIfAvailable()
+        }
+        clearKeyboardSessionLiveActivityRoute(for: request.id)
         refreshHistory()
         AppTelemetry.signal(
             "dictation_failed",

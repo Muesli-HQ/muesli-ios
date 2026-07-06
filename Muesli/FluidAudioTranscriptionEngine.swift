@@ -174,6 +174,13 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         }
         progress?(1.0, "Preparing model for this iPhone...")
         let manager = AsrManager(config: .default)
+        let loadHeartbeat = Self.modelLoadHeartbeatTask(
+            progress: progress,
+            message: "Preparing model for this iPhone..."
+        )
+        defer {
+            loadHeartbeat?.cancel()
+        }
         try await manager.loadModels(models)
         self.manager = manager
         progress?(1.0, "\(model.shortName) ready")
@@ -218,7 +225,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         audioURL: URL,
         progress: (@Sendable (TranscriptionProgressUpdate) -> Void)? = nil
     ) async throws -> DetailedTranscriptionResult {
-        let manager = try await loadedStreamingManager(progress: nil)
+        let manager = try await loadedStreamingManager { fraction, status in
+            progress?(.init(fractionCompleted: fraction, message: status))
+        }
         await manager.reset()
 
         let audioFile = try AVAudioFile(forReading: audioURL)
@@ -281,6 +290,20 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             return "Downloading model • \(percent)%"
         case .compiling:
             return "Compiling CoreML model..."
+        }
+    }
+
+    private nonisolated static func modelLoadHeartbeatTask(
+        progress: (@Sendable (Double, String?) -> Void)?,
+        message: String
+    ) -> Task<Void, Never>? {
+        guard let progress else { return nil }
+        return Task.detached(priority: .utility) {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled else { return }
+                progress(1, message)
+            }
         }
     }
 

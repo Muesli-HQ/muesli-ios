@@ -52,14 +52,6 @@ struct MeetingsView: View {
         MeetingTemplatePreset(rawValue: selectedMeetingTemplate) ?? .general
     }
 
-    private var meetingsWithNotesCount: Int {
-        meetingSessions.filter { session in
-            let transcript = coordinator.transcript(for: session)
-            return session.manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                || transcript?.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        }.count
-    }
-
     private var browserResultSummary: String {
         guard !meetingSessions.isEmpty else { return "No saved meetings" }
         if filteredMeetingSessions.count == meetingSessions.count {
@@ -78,7 +70,7 @@ struct MeetingsView: View {
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)
                 .padding(.top, MuesliTheme.spacing24)
-                .padding(.bottom, MuesliTheme.spacing24)
+                .padding(.bottom, 112)
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
@@ -139,46 +131,23 @@ struct MeetingsView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                Text("MEETINGS")
-                    .font(MuesliTheme.captionMedium())
-                    .tracking(1.4)
-                    .foregroundStyle(MuesliTheme.textTertiary)
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            Text("MEETINGS")
+                .font(MuesliTheme.captionMedium())
+                .tracking(1.4)
+                .foregroundStyle(MuesliTheme.textTertiary)
 
-                Text("Record, write, review")
-                    .font(.system(.largeTitle, design: .default, weight: .bold))
-                    .tracking(-0.7)
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.82)
+            Text("Record, write, review")
+                .font(.system(.largeTitle, design: .default, weight: .bold))
+                .tracking(-0.7)
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
 
-                Text("Local-first meeting capture with notes that sync across Muesli.")
-                    .font(MuesliTheme.callout())
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack(spacing: MuesliTheme.spacing8) {
-                MeetingHeaderMetric(
-                    value: "\(meetingSessions.count)",
-                    label: "Saved",
-                    systemImage: "tray.full",
-                    tint: MuesliTheme.accent
-                )
-                MeetingHeaderMetric(
-                    value: "\(meetingsWithNotesCount)",
-                    label: "With Notes",
-                    systemImage: "square.and.pencil",
-                    tint: MuesliTheme.syncGreen
-                )
-                MeetingHeaderMetric(
-                    value: coordinator.hasMeetingRecordingInProgress ? "Live" : "Ready",
-                    label: "Recorder",
-                    systemImage: coordinator.hasMeetingRecordingInProgress ? "waveform" : "checkmark",
-                    tint: statusColor
-                )
-            }
+            Text("Local-first meeting capture with notes that sync across Muesli.")
+                .font(MuesliTheme.callout())
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -671,46 +640,6 @@ private enum MeetingSortOrder: String, CaseIterable, Identifiable {
     }
 }
 
-private struct MeetingHeaderMetric: View {
-    let value: String
-    let label: String
-    let systemImage: String
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: MuesliTheme.spacing8) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(tint)
-                .frame(width: 24, height: 24)
-                .background(tint.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(value)
-                    .font(MuesliTheme.captionMedium())
-                    .tracking(-0.15)
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Text(label)
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-        }
-        .padding(.horizontal, MuesliTheme.spacing8)
-        .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
-        .background(MuesliTheme.surfacePrimary.opacity(0.70))
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-        )
-    }
-}
-
 private struct MeetingRowBadge: View {
     let title: String
     let systemImage: String
@@ -869,7 +798,7 @@ private struct MeetingSessionDetailView: View {
             }
             .padding(.horizontal, MuesliTheme.spacing20)
             .padding(.top, MuesliTheme.spacing16)
-            .padding(.bottom, MuesliTheme.spacing24)
+            .padding(.bottom, 112)
         }
         .background(MuesliTheme.backgroundBase)
         .navigationTitle("Meeting")

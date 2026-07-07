@@ -247,7 +247,7 @@ struct MeetingsView: View {
                         .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                     }
                     .buttonStyle(.plain)
-                    .disabled(coordinator.isMeetingTranscribing)
+                    .disabled(isPrimaryMeetingActionDisabled)
                     .sensoryFeedback(.impact, trigger: coordinator.hasMeetingRecordingInProgress)
                     .accessibilityIdentifier("meetings.primaryButton")
 
@@ -537,6 +537,10 @@ struct MeetingsView: View {
     private var meetingPrimaryButtonBorder: some View {
         RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
             .strokeBorder(.clear, lineWidth: 1)
+    }
+
+    private var isPrimaryMeetingActionDisabled: Bool {
+        coordinator.isMeetingTranscribing && !coordinator.hasMeetingRecordingInProgress
     }
 
     private func copyText(for session: RecordingSession) -> String {

@@ -192,7 +192,7 @@ final class DictationCoordinator {
     private var canStartKeyboardRequestsInBackground: Bool {
         isKeyboardHotMicEngineReady
             && !isRecording
-            && !isMeetingRecording
+            && !hasMeetingRecordingInProgress
             && activeRequest == nil
             && statusText != "Transcribing"
     }
@@ -943,7 +943,7 @@ final class DictationCoordinator {
     func startKeyboardSessionMode() async {
         guard !isKeyboardSessionArmed else {
             prewarmModelIfNeeded(reason: "keyboard_session")
-            if !isRecording, !isMeetingRecording, activeRequest == nil {
+            if !isRecording, !hasMeetingRecordingInProgress, activeRequest == nil {
                 _ = await ensureKeyboardSessionKeeperRunning(publishReady: true)
             }
             let isReady = canStartKeyboardRequestsInBackground
@@ -1206,7 +1206,7 @@ final class DictationCoordinator {
         guard hasCompletedOnboarding else { return }
         guard modelPrewarmTask == nil else { return }
         guard modelPreparationTask == nil, !modelPreparation.isPreparing else { return }
-        guard !isRecording, !isMeetingRecording else { return }
+        guard !isRecording, !hasMeetingRecordingInProgress else { return }
 
         let model = selectedTranscriptionModel
         modelPreparation = ModelPreparationState(
@@ -1546,7 +1546,7 @@ final class DictationCoordinator {
     }
 
     private func startRecording(for request: DictationRequest, source: String) {
-        guard !isRecording, !isMeetingRecording, statusText != "Transcribing" else {
+        guard !isRecording, !hasMeetingRecordingInProgress, statusText != "Transcribing" else {
             if source == "keyboard" {
                 if refreshActiveKeyboardRequestIfNeeded(request) {
                     return
@@ -2164,7 +2164,12 @@ final class DictationCoordinator {
 
     @discardableResult
     func startMeetingRecording(title: String = "Untitled Meeting") -> UUID? {
-        guard !isRecording, !isMeetingRecording, !isMeetingTranscribing, activeSession?.kind != .meeting, statusText != "Transcribing" else { return nil }
+        guard !isRecording,
+              !hasMeetingRecordingInProgress,
+              !isMeetingTranscribing,
+              activeRequest == nil,
+              statusText != "Transcribing"
+        else { return nil }
         MuesliHaptics.dictationStart()
         activeMeetingTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Untitled Meeting"
@@ -2201,6 +2206,13 @@ final class DictationCoordinator {
                 guard !discardedMeetingSessionIDs.contains(session.id) else {
                     abortDiscardedMeetingStartup(session)
                     return
+                }
+
+                if keyboardSessionKeeper.isRunning {
+                    keyboardSessionKeeper.stop(deactivateSession: true)
+                    transitionKeyboardSession(.requestFinished)
+                    try? store.clearKeyboardRuntimeStatus()
+                    try? await Task.sleep(for: .milliseconds(150))
                 }
 
                 let vadManager = try await VadManager()
@@ -2272,7 +2284,9 @@ final class DictationCoordinator {
             return
         }
 
-        guard var session = persistedRecordingMeetingSession else { return }
+        guard var session = activeSession ?? persistedRecordingMeetingSession,
+              session.kind == .meeting
+        else { return }
         session.endedAt = .now
 
         guard session.audioFileName != nil else {
@@ -2287,6 +2301,12 @@ final class DictationCoordinator {
             return
         }
 
+        isMeetingRecording = false
+        isMeetingTranscribing = false
+        meetingRecorder = nil
+        meetingVadController = nil
+        activeSession = nil
+        stopMetering()
         session.phase = .transcriptionQueued
         session.errorMessage = nil
         try? store.saveSession(session)
@@ -2536,7 +2556,7 @@ final class DictationCoordinator {
     }
 
     func transcribeSession(_ session: RecordingSession) {
-        guard !isRecording, !isMeetingRecording, !isMeetingTranscribing else { return }
+        guard !isRecording, !hasMeetingRecordingInProgress, !isMeetingTranscribing else { return }
         guard let audioFileName = session.audioFileName else { return }
         var session = session
         session.phase = .transcribing
@@ -3121,7 +3141,7 @@ final class DictationCoordinator {
         if isKeyboardSessionArmed,
            !keyboardSessionKeeper.isRunning,
            !isRecording,
-           !isMeetingRecording,
+           !hasMeetingRecordingInProgress,
            activeRequest == nil
         {
             _ = await ensureKeyboardSessionKeeperRunning(publishReady: false)
@@ -3160,7 +3180,7 @@ final class DictationCoordinator {
             return
         }
 
-        guard !isRecording, !isMeetingRecording, statusText != "Transcribing" else {
+        guard !isRecording, !hasMeetingRecordingInProgress, statusText != "Transcribing" else {
             saveKeyboardHandoff(
                 requestID: command.requestID,
                 phase: .failed,
@@ -3223,12 +3243,12 @@ final class DictationCoordinator {
     private func ensureKeyboardSessionKeeperRunning(publishReady: Bool = true) async -> Bool {
         guard MuesliPreferences.keyboardSessionModeEnabled, isKeyboardSessionArmed else { return false }
         if keyboardSessionKeeper.canAcceptStartCommand {
-            if publishReady, !isRecording, !isMeetingRecording, activeRequest == nil {
+            if publishReady, !isRecording, !hasMeetingRecordingInProgress, activeRequest == nil {
                 publishKeyboardSessionReadyIfAvailable()
             }
             return true
         }
-        guard !isRecording, !isMeetingRecording else { return false }
+        guard !isRecording, !hasMeetingRecordingInProgress else { return false }
         if keyboardSessionKeeper.isRunning {
             let becameReady = await keyboardSessionKeeper.waitUntilCanAcceptStartCommand(timeout: 0.75)
             if becameReady {
@@ -3399,7 +3419,7 @@ final class DictationCoordinator {
 
             guard !self.keyboardSessionState.isWorkflowActive,
                   !self.isRecording,
-                  !self.isMeetingRecording,
+                  !self.hasMeetingRecordingInProgress,
                   self.activeRequest == nil
             else {
                 self.scheduleKeyboardSessionRetry(attempt: retryAttempt)
@@ -3411,7 +3431,11 @@ final class DictationCoordinator {
     }
 
     private func resumeKeyboardSessionKeeperIfNeeded() {
-        guard MuesliPreferences.keyboardSessionModeEnabled, isKeyboardSessionArmed, !isRecording, !isMeetingRecording else { return }
+        guard MuesliPreferences.keyboardSessionModeEnabled,
+              isKeyboardSessionArmed,
+              !isRecording,
+              !hasMeetingRecordingInProgress
+        else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.ensureKeyboardSessionKeeperRunning()

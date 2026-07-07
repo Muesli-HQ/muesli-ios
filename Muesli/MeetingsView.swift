@@ -12,8 +12,6 @@ struct MeetingsView: View {
     @State private var selectedFilter: MeetingBrowserFilter = .all
     @State private var selectedSort: MeetingSortOrder = .newest
     @AppStorage(MuesliPreferences.meetingTemplateKey) private var selectedMeetingTemplate = MeetingTemplatePreset.general.rawValue
-    @AppStorage(MuesliPreferences.meetingSummariesEnabledKey) private var meetingSummariesEnabled = false
-    @AppStorage(MuesliPreferences.meetingSummaryBackendKey) private var meetingSummaryBackend = MeetingSummaryBackend.openRouter.rawValue
 
     private var meetingSessions: [RecordingSession] {
         coordinator.recordingSessions
@@ -228,7 +226,6 @@ struct MeetingsView: View {
                         .disabled(coordinator.isMeetingTranscribing)
 
                     meetingTemplatePicker
-                    summaryBackendPicker
 
                     Button {
                         if let sessionID = coordinator.startMeetingRecording(title: meetingTitle) {
@@ -302,27 +299,6 @@ struct MeetingsView: View {
         }
         .buttonStyle(.plain)
         .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)
-    }
-
-    private var summaryBackendPicker: some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-            Toggle(isOn: $meetingSummariesEnabled) {
-                Label("Generate Meeting Notes", systemImage: "sparkles")
-                    .font(MuesliTheme.headline())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-            }
-            .tint(MuesliTheme.accent)
-
-            Picker("Summary Backend", selection: $meetingSummaryBackend) {
-                ForEach(MeetingSummaryBackend.allCases) { backend in
-                    Text(backend.label).tag(backend.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-            .disabled(!meetingSummariesEnabled)
-        }
-        .padding(MuesliTheme.spacing12)
-        .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
     }
 
     @ViewBuilder
@@ -805,16 +781,25 @@ private struct MeetingSessionDetailView: View {
     @State private var manualNotesSaveState: ManualNotesSaveState = .saved
     @State private var manualNotesSaveTask: Task<Void, Never>?
     @State private var recordingPulse = false
+    @State private var isEditingCompletedManualNotes = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                 detailHeader
-                captureStatusSection
-                manualNotesSection
-                contentSection
-                retainedAudioSection
-                detailActions
+                if isCompletedMeeting {
+                    contentSection
+                    transcriptActionsSection
+                    manualNotesSection
+                    retainedAudioSection
+                    deleteActionSection
+                } else {
+                    captureStatusSection
+                    manualNotesSection
+                    contentSection
+                    retainedAudioSection
+                    detailActions
+                }
             }
             .padding(.horizontal, MuesliTheme.spacing20)
             .padding(.top, MuesliTheme.spacing16)
@@ -1042,44 +1027,88 @@ private struct MeetingSessionDetailView: View {
 
                     Spacer()
 
-                    Text(manualNotesSaveState.label)
-                        .font(MuesliTheme.captionMedium())
-                        .foregroundStyle(manualNotesSaveState.tint)
-                        .padding(.horizontal, MuesliTheme.spacing8)
-                        .frame(height: 26)
-                        .background(manualNotesSaveState.tint.opacity(0.10))
-                        .clipShape(Capsule())
+                    manualNotesHeaderAccessory
                 }
 
-                ZStack(alignment: .topLeading) {
-                    TextEditor(text: $manualNotesDraft)
-                        .font(MuesliTheme.body())
-                        .foregroundStyle(MuesliTheme.textPrimary)
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: session.phase == .recording ? 220 : 140)
-                        .padding(MuesliTheme.spacing8)
-                        .accessibilityLabel("Meeting manual notes")
-                        .onChange(of: manualNotesDraft) { _, _ in
-                            scheduleManualNotesSave()
-                        }
+                manualNotesBody
+            }
+            .padding(MuesliTheme.spacing16)
+        }
+    }
 
-                    if manualNotesDraft.isEmpty {
-                        Text("Start typing meeting notes...")
-                            .font(MuesliTheme.body())
-                            .foregroundStyle(MuesliTheme.textTertiary)
-                            .padding(.horizontal, MuesliTheme.spacing12)
-                            .padding(.vertical, MuesliTheme.spacing16)
-                            .allowsHitTesting(false)
+    @ViewBuilder
+    private var manualNotesHeaderAccessory: some View {
+        if isCompletedMeeting {
+            Button {
+                if isEditingCompletedManualNotes {
+                    persistManualNotesIfChanged()
+                }
+                isEditingCompletedManualNotes.toggle()
+            } label: {
+                Text(isEditingCompletedManualNotes ? "Done" : "Edit")
+                    .font(MuesliTheme.captionMedium())
+                    .foregroundStyle(MuesliTheme.accent)
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(MuesliTheme.accentSubtle)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isEditingCompletedManualNotes ? "Finish editing manual notes" : "Edit manual notes")
+        } else if canEditManualNotes {
+            Text(manualNotesSaveState.label)
+                .font(MuesliTheme.captionMedium())
+                .foregroundStyle(manualNotesSaveState.tint)
+                .padding(.horizontal, MuesliTheme.spacing8)
+                .frame(height: 26)
+                .background(manualNotesSaveState.tint.opacity(0.10))
+                .clipShape(Capsule())
+        }
+    }
+
+    @ViewBuilder
+    private var manualNotesBody: some View {
+        if canEditManualNotes {
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $manualNotesDraft)
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: session.phase == .recording ? 220 : 140)
+                    .padding(MuesliTheme.spacing8)
+                    .accessibilityLabel("Meeting manual notes")
+                    .onChange(of: manualNotesDraft) { _, _ in
+                        scheduleManualNotesSave()
                     }
+
+                if manualNotesDraft.isEmpty {
+                    Text("Start typing meeting notes...")
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .padding(.vertical, MuesliTheme.spacing16)
+                        .allowsHitTesting(false)
                 }
-                .background(MuesliTheme.backgroundRaised.opacity(0.62))
+            }
+            .background(MuesliTheme.backgroundRaised.opacity(0.62))
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
+                    .strokeBorder(MuesliTheme.accent.opacity(0.18), lineWidth: 1)
+            )
+        } else {
+            Text(manualNotesDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No manual notes." : manualNotesDraft)
+                .font(MuesliTheme.body())
+                .foregroundStyle(manualNotesDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(MuesliTheme.spacing16)
+                .background(MuesliTheme.backgroundRaised.opacity(0.48))
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
-                        .strokeBorder(MuesliTheme.accent.opacity(0.18), lineWidth: 1)
+                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 )
-            }
-            .padding(MuesliTheme.spacing16)
         }
     }
 
@@ -1149,7 +1178,16 @@ private struct MeetingSessionDetailView: View {
                     .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
-        } else if shouldShowPostMeetingArtifacts, let transcript {
+        } else {
+            transcriptActionsSection
+        }
+
+        deleteActionSection
+    }
+
+    @ViewBuilder
+    private var transcriptActionsSection: some View {
+        if shouldShowPostMeetingArtifacts, let transcript {
             VStack(spacing: MuesliTheme.spacing8) {
                 Button {
                     onCopy(copyText(for: transcript), resolvedContent(for: transcript))
@@ -1186,7 +1224,10 @@ private struct MeetingSessionDetailView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
 
+    @ViewBuilder
+    private var deleteActionSection: some View {
         if !isActiveRecording && !isProcessingCurrentMeeting {
             Button {
                 isConfirmingDelete = true
@@ -1249,6 +1290,17 @@ private struct MeetingSessionDetailView: View {
 
     private var shouldShowPostMeetingArtifacts: Bool {
         !isActiveRecording && !isProcessingCurrentMeeting && session.phase != .recording && session.phase != .transcribing
+    }
+
+    private var isCompletedMeeting: Bool {
+        session.phase == .completed
+    }
+
+    private var canEditManualNotes: Bool {
+        isActiveRecording
+            || isProcessingCurrentMeeting
+            || session.phase == .transcriptionQueued
+            || isEditingCompletedManualNotes
     }
 
     private var contentSectionTitle: String {

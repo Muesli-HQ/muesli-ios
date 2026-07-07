@@ -52,7 +52,11 @@ enum MeetingSummaryClient {
         }
     }
 
-    static func summarize(transcript: String, meetingTitle: String) async throws -> MeetingSummaryResult {
+    static func summarize(
+        transcript: String,
+        meetingTitle: String,
+        manualNotesToRetain: String? = nil
+    ) async throws -> MeetingSummaryResult {
         let backend = MuesliPreferences.meetingSummaryBackend
         switch backend {
         case .openRouter:
@@ -60,6 +64,7 @@ enum MeetingSummaryClient {
             let notes = try await summarizeWithOpenRouter(
                 transcript: transcript,
                 meetingTitle: meetingTitle,
+                manualNotesToRetain: manualNotesToRetain,
                 model: model
             )
             let title = await generateTitleWithOpenRouter(transcript: transcript, model: model) ?? meetingTitle
@@ -69,6 +74,7 @@ enum MeetingSummaryClient {
             let notes = try await summarizeWithChatGPT(
                 transcript: transcript,
                 meetingTitle: meetingTitle,
+                manualNotesToRetain: manualNotesToRetain,
                 model: model
             )
             let title = await generateTitleWithChatGPT(transcript: transcript, model: model) ?? meetingTitle
@@ -76,8 +82,20 @@ enum MeetingSummaryClient {
         }
     }
 
-    static func failureNotes(transcript: String, meetingTitle: String, error: Error) -> String {
+    static func failureNotes(
+        transcript: String,
+        meetingTitle: String,
+        error: Error,
+        manualNotes: String? = nil
+    ) -> String {
+        let trimmedManualNotes = manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let writtenNotesSection = trimmedManualNotes.isEmpty ? "" : """
+
+        ## Written Notes
+
+        \(trimmedManualNotes)
         """
+        return """
         ## Summary failed
 
         Meeting: \(meetingTitle)
@@ -85,6 +103,7 @@ enum MeetingSummaryClient {
         Muesli could not generate structured meeting notes.
 
         \(error.localizedDescription)
+        \(writtenNotesSection)
 
         ## Raw Transcript
 
@@ -95,6 +114,7 @@ enum MeetingSummaryClient {
     private static func summarizeWithOpenRouter(
         transcript: String,
         meetingTitle: String,
+        manualNotesToRetain: String?,
         model: String
     ) async throws -> String {
         let apiKey = storedOpenRouterAPIKey()
@@ -107,7 +127,11 @@ enum MeetingSummaryClient {
             apiKey: apiKey,
             model: model,
             systemPrompt: baseSummaryInstructions,
-            userPrompt: summaryPrompt(transcript: transcript, meetingTitle: meetingTitle),
+            userPrompt: summaryPrompt(
+                transcript: transcript,
+                meetingTitle: meetingTitle,
+                manualNotesToRetain: manualNotesToRetain
+            ),
             maxTokens: maxOutputTokens,
             extraHeaders: ["X-OpenRouter-Title": "Muesli"]
         )
@@ -116,12 +140,17 @@ enum MeetingSummaryClient {
     private static func summarizeWithChatGPT(
         transcript: String,
         meetingTitle: String,
+        manualNotesToRetain: String?,
         model: String
     ) async throws -> String {
         do {
             let text = try await callWHAM(
                 systemPrompt: baseSummaryInstructions,
-                userPrompt: summaryPrompt(transcript: transcript, meetingTitle: meetingTitle),
+                userPrompt: summaryPrompt(
+                    transcript: transcript,
+                    meetingTitle: meetingTitle,
+                    manualNotesToRetain: manualNotesToRetain
+                ),
                 model: model
             )
             guard !text.isEmpty else {
@@ -136,8 +165,18 @@ enum MeetingSummaryClient {
         }
     }
 
-    private static func summaryPrompt(transcript: String, meetingTitle: String) -> String {
+    private static func summaryPrompt(
+        transcript: String,
+        meetingTitle: String,
+        manualNotesToRetain: String?
+    ) -> String {
         let template = MuesliPreferences.meetingTemplate
+        let trimmedManualNotes = manualNotesToRetain?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let manualNotesSection = trimmedManualNotes.isEmpty ? "" : """
+
+        User-written notes to retain:
+        \(trimmedManualNotes)
+        """
         return """
         Meeting title: \(meetingTitle)
 
@@ -145,6 +184,7 @@ enum MeetingSummaryClient {
 
         Template guidance:
         \(template.instructions)
+        \(manualNotesSection)
 
         Raw transcript:
         \(transcript)

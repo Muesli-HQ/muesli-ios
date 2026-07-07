@@ -7,10 +7,45 @@ struct MeetingsView: View {
     var isActive = true
     @State private var meetingTitle = ""
     @State private var sessionPendingDelete: RecordingSession?
+    @State private var navigationPath: [UUID] = []
+    @State private var searchText = ""
+    @State private var selectedFilter: MeetingBrowserFilter = .all
+    @State private var selectedSort: MeetingSortOrder = .newest
     @AppStorage(MuesliPreferences.meetingTemplateKey) private var selectedMeetingTemplate = MeetingTemplatePreset.general.rawValue
 
     private var meetingSessions: [RecordingSession] {
-        coordinator.recordingSessions.filter { $0.kind == .meeting }
+        coordinator.recordingSessions
+            .filter { $0.kind == .meeting }
+            .sorted { lhs, rhs in
+                switch selectedSort {
+                case .newest:
+                    lhs.createdAt > rhs.createdAt
+                case .oldest:
+                    lhs.createdAt < rhs.createdAt
+                }
+            }
+    }
+
+    private var filteredMeetingSessions: [RecordingSession] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return meetingSessions.filter { session in
+            guard selectedFilter.includes(session) else { return false }
+            guard !query.isEmpty else { return true }
+            let transcript = coordinator.transcript(for: session)
+            let haystack = [
+                session.title ?? "",
+                session.phase.title,
+                session.sourceDisplayName,
+                session.manualNotes ?? "",
+                transcript?.summaryText ?? "",
+                transcript?.speakerTranscript ?? "",
+                transcript?.text ?? "",
+                session.errorMessage ?? ""
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            return haystack.contains(query)
+        }
     }
 
     private var meetingTemplate: MeetingTemplatePreset {
@@ -18,7 +53,7 @@ struct MeetingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                     header
@@ -56,6 +91,9 @@ struct MeetingsView: View {
                         },
                         onRename: { title in
                             coordinator.updateMeetingTitle(sessionID: session.id, title: title)
+                        },
+                        onManualNotesChange: { notes in
+                            coordinator.updateMeetingManualNotes(sessionID: session.id, notes: notes)
                         }
                     )
                 } else {
@@ -157,7 +195,10 @@ struct MeetingsView: View {
                         if coordinator.hasMeetingRecordingInProgress {
                             coordinator.stopCurrentMeetingRecording()
                         } else {
-                            coordinator.startMeetingRecording(title: meetingTitle)
+                            if let sessionID = coordinator.startMeetingRecording(title: meetingTitle) {
+                                navigationPath.append(sessionID)
+                                meetingTitle = ""
+                            }
                         }
                     } label: {
                         Label(
@@ -271,11 +312,15 @@ struct MeetingsView: View {
                 }
             }
 
+            browserControls
+
             if meetingSessions.isEmpty {
                 emptyState
+            } else if filteredMeetingSessions.isEmpty {
+                emptySearchState
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
-                    ForEach(meetingSessions) { session in
+                    ForEach(filteredMeetingSessions) { session in
                         MuesliSwipeActionRow(
                             leadingAction: .init(
                                 title: "Delete",
@@ -310,6 +355,74 @@ struct MeetingsView: View {
         }
     }
 
+    private var browserControls: some View {
+        VStack(spacing: MuesliTheme.spacing12) {
+            HStack(spacing: MuesliTheme.spacing8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                TextField("Search meetings", text: $searchText)
+                    .font(MuesliTheme.body())
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear meeting search")
+                }
+            }
+            .padding(.horizontal, MuesliTheme.spacing12)
+            .frame(height: 42)
+            .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: MuesliTheme.spacing8) {
+                    ForEach(MeetingBrowserFilter.allCases) { filter in
+                        Button {
+                            selectedFilter = filter
+                        } label: {
+                            Label(filter.label, systemImage: filter.systemImage)
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(selectedFilter == filter ? MuesliTheme.backgroundBase : MuesliTheme.textSecondary)
+                                .padding(.horizontal, MuesliTheme.spacing12)
+                                .frame(height: 34)
+                                .background(selectedFilter == filter ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Menu {
+                        ForEach(MeetingSortOrder.allCases) { sort in
+                            Button {
+                                selectedSort = sort
+                            } label: {
+                                Label(sort.label, systemImage: selectedSort == sort ? "checkmark" : sort.systemImage)
+                            }
+                        }
+                    } label: {
+                        Label(selectedSort.label, systemImage: "arrow.up.arrow.down")
+                            .font(MuesliTheme.captionMedium())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .padding(.horizontal, MuesliTheme.spacing12)
+                            .frame(height: 34)
+                            .background(MuesliTheme.surfacePrimary)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
     private func refreshVisibleStateIfNeeded() {
         guard isActive else { return }
         coordinator.refreshHistory()
@@ -330,6 +443,24 @@ struct MeetingsView: View {
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    private var emptySearchState: some View {
+        MuesliSurface {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                Text("No matches")
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text("Adjust the search or filter to find another meeting.")
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textSecondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(MuesliTheme.spacing16)
@@ -368,6 +499,9 @@ struct MeetingsView: View {
         if let summary = transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
             return summary
         }
+        if let manualNotes = session.manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines), !manualNotes.isEmpty {
+            return manualNotes
+        }
         if let speakerTranscript = transcript.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines), !speakerTranscript.isEmpty {
             return speakerTranscript
         }
@@ -375,6 +509,86 @@ struct MeetingsView: View {
             return transcript.text
         }
         return session.errorMessage ?? session.phase.description
+    }
+}
+
+private enum MeetingBrowserFilter: String, CaseIterable, Identifiable {
+    case all
+    case thisIPhone
+    case fromMac
+    case processing
+    case needsAttention
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all:
+            "All"
+        case .thisIPhone:
+            "This iPhone"
+        case .fromMac:
+            "From Mac"
+        case .processing:
+            "Processing"
+        case .needsAttention:
+            "Needs Review"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all:
+            "tray.full"
+        case .thisIPhone:
+            "iphone"
+        case .fromMac:
+            "desktopcomputer"
+        case .processing:
+            "waveform.badge.magnifyingglass"
+        case .needsAttention:
+            "exclamationmark.triangle"
+        }
+    }
+
+    func includes(_ session: RecordingSession) -> Bool {
+        switch self {
+        case .all:
+            true
+        case .thisIPhone:
+            session.isFromThisIPhone
+        case .fromMac:
+            session.isFromMac
+        case .processing:
+            session.phase == .recording || session.phase == .transcriptionQueued || session.phase == .transcribing
+        case .needsAttention:
+            session.phase == .failed || session.phase == .cancelled
+        }
+    }
+}
+
+private enum MeetingSortOrder: String, CaseIterable, Identifiable {
+    case newest
+    case oldest
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .newest:
+            "Newest"
+        case .oldest:
+            "Oldest"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .newest:
+            "arrow.down"
+        case .oldest:
+            "arrow.up"
+        }
     }
 }
 
@@ -396,6 +610,9 @@ private struct MeetingSessionRow: View {
                         Text(session.phase.title)
                             .font(MuesliTheme.caption())
                             .foregroundStyle(session.phase.tint)
+                        Label(session.sourceDisplayName, systemImage: session.sourceSystemImage)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
                         if session.hasRetainedAudio {
                             Label("Audio saved", systemImage: "waveform.path.ecg.rectangle")
                                 .font(MuesliTheme.caption())
@@ -430,6 +647,9 @@ private struct MeetingSessionRow: View {
         if let summary = transcript?.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
             return summary.replacingOccurrences(of: "\n", with: " ")
         }
+        if let manualNotes = session.manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines), !manualNotes.isEmpty {
+            return manualNotes.replacingOccurrences(of: "\n", with: " ")
+        }
         if let speakerTranscript = transcript?.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines), !speakerTranscript.isEmpty {
             return speakerTranscript.replacingOccurrences(of: "\n", with: " ")
         }
@@ -462,6 +682,7 @@ private struct MeetingSessionDetailView: View {
     let onCopy: (String, MeetingContentTab) -> Void
     let onDelete: () -> Void
     let onRename: (String) -> Void
+    let onManualNotesChange: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selectedContent: MeetingContentTab = .notes
     @State private var sharePayload: MeetingSharePayload?
@@ -469,11 +690,15 @@ private struct MeetingSessionDetailView: View {
     @State private var editedTitle: String?
     @State private var titleDraft = ""
     @State private var isEditingTitle = false
+    @State private var manualNotesDraft = ""
+    @State private var manualNotesSaveState: ManualNotesSaveState = .saved
+    @State private var manualNotesSaveTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                 detailHeader
+                manualNotesSection
                 retainedAudioSection
                 detailActions
                 contentSection
@@ -511,6 +736,17 @@ private struct MeetingSessionDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes the meeting, transcript, notes, and any retained audio from local history.")
+        }
+        .onAppear {
+            manualNotesDraft = session.manualNotes ?? ""
+        }
+        .onChange(of: session.manualNotes ?? "") { _, newValue in
+            guard manualNotesSaveState != .saving else { return }
+            manualNotesDraft = newValue
+        }
+        .onDisappear {
+            manualNotesSaveTask?.cancel()
+            persistManualNotesIfChanged()
         }
     }
 
@@ -572,6 +808,41 @@ private struct MeetingSessionDetailView: View {
                         detailBadge("Notes", systemImage: "sparkles")
                     }
                 }
+            }
+            .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    @ViewBuilder
+    private var manualNotesSection: some View {
+        MuesliSurface(cornerRadius: MuesliTheme.cornerLarge, tint: MuesliTheme.accent) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Live Notes", systemImage: "square.and.pencil")
+                        .font(MuesliTheme.title3())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Spacer()
+                    Text(manualNotesSaveState.label)
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(manualNotesSaveState.tint)
+                }
+
+                TextEditor(text: $manualNotesDraft)
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: session.phase == .recording ? 220 : 140)
+                    .padding(MuesliTheme.spacing8)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
+                            .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                    )
+                    .accessibilityLabel("Meeting live notes")
+                    .onChange(of: manualNotesDraft) { _, _ in
+                        scheduleManualNotesSave()
+                    }
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -755,6 +1026,28 @@ private struct MeetingSessionDetailView: View {
         AppTelemetry.signal("meeting_\(kind.telemetryName)_shared")
     }
 
+    private func scheduleManualNotesSave() {
+        guard manualNotesDraft != (session.manualNotes ?? "") else {
+            manualNotesSaveState = .saved
+            return
+        }
+        manualNotesSaveState = .saving
+        manualNotesSaveTask?.cancel()
+        let draft = manualNotesDraft
+        manualNotesSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            guard !Task.isCancelled else { return }
+            onManualNotesChange(draft)
+            manualNotesSaveState = .saved
+        }
+    }
+
+    private func persistManualNotesIfChanged() {
+        guard manualNotesDraft != (session.manualNotes ?? "") else { return }
+        onManualNotesChange(manualNotesDraft)
+        manualNotesSaveState = .saved
+    }
+
     private var displayTitle: String {
         resolvedTitle(editedTitle ?? session.title ?? session.kind.title)
     }
@@ -875,6 +1168,29 @@ private struct MeetingShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
+private enum ManualNotesSaveState {
+    case saved
+    case saving
+
+    var label: String {
+        switch self {
+        case .saved:
+            "Saved"
+        case .saving:
+            "Saving"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .saved:
+            MuesliTheme.success
+        case .saving:
+            MuesliTheme.textTertiary
+        }
+    }
+}
+
 private enum MeetingExportFormatter {
     static func text(
         for kind: MeetingShareKind,
@@ -893,12 +1209,30 @@ private enum MeetingExportFormatter {
     }
 
     private static func notes(session: RecordingSession, transcript: Transcript, titleOverride: String?) -> String {
-        """
+        let generatedNotes = transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let writtenNotes = session.manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let body: String
+        if !generatedNotes.isEmpty, !writtenNotes.isEmpty {
+            body = """
+            \(generatedNotes)
+
+            ## Written Notes
+            \(writtenNotes)
+            """
+        } else if !generatedNotes.isEmpty {
+            body = generatedNotes
+        } else if !writtenNotes.isEmpty {
+            body = writtenNotes
+        } else {
+            body = "No meeting notes available."
+        }
+
+        return """
         # \(titleOverride ?? title(for: session))
 
         \(dateString(for: session))
 
-        \(transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "No meeting notes available.")
+        \(body)
         """
     }
 
@@ -917,6 +1251,7 @@ private enum MeetingExportFormatter {
 
     private static func fullMeeting(session: RecordingSession, transcript: Transcript, titleOverride: String?) -> String {
         let notes = transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let manualNotes = session.manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines)
         let speakers = transcript.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines)
         return """
         # \(titleOverride ?? title(for: session))
@@ -925,6 +1260,9 @@ private enum MeetingExportFormatter {
 
         ## Notes
         \(notes?.isEmpty == false ? notes! : "None available.")
+
+        ## Written Notes
+        \(manualNotes?.isEmpty == false ? manualNotes! : "None available.")
 
         ## Speaker Transcript
         \(speakers?.isEmpty == false ? speakers! : "None available.")
@@ -944,6 +1282,28 @@ private enum MeetingExportFormatter {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return "Recorded \(formatter.string(from: session.createdAt))"
+    }
+}
+
+private extension RecordingSession {
+    var normalizedSource: String {
+        source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
+    var isFromMac: Bool {
+        normalizedSource.contains("mac")
+    }
+
+    var isFromThisIPhone: Bool {
+        !isFromMac
+    }
+
+    var sourceDisplayName: String {
+        isFromMac ? "From Mac" : "This iPhone"
+    }
+
+    var sourceSystemImage: String {
+        isFromMac ? "desktopcomputer" : "iphone"
     }
 }
 

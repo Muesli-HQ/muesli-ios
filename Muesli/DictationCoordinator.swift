@@ -727,6 +727,25 @@ final class DictationCoordinator {
         }
     }
 
+    func updateMeetingManualNotes(sessionID: UUID, notes: String) {
+        do {
+            try store.updateMeetingManualNotes(sessionID: sessionID, manualNotes: notes)
+            if activeSession?.id == sessionID {
+                activeSession?.manualNotes = notes
+            }
+            if let index = recordingSessions.firstIndex(where: { $0.id == sessionID }) {
+                recordingSessions[index].manualNotes = notes
+            } else {
+                refreshHistory()
+            }
+            scheduleICloudSyncAfterLocalChange(reason: "meeting_manual_notes_updated")
+            AppTelemetry.signal("meeting_manual_notes_updated")
+        } catch {
+            clipboardStatusText = "Notes save failed"
+            clearClipboardStatusSoon()
+        }
+    }
+
     func copyTranscript(_ transcript: Transcript) {
         UIPasteboard.general.string = transcript.text
         clipboardStatusText = "Copied"
@@ -2143,8 +2162,9 @@ final class DictationCoordinator {
         }
     }
 
-    func startMeetingRecording(title: String = "Untitled Meeting") {
-        guard !isRecording, !isMeetingRecording, !isMeetingTranscribing, activeSession?.kind != .meeting, statusText != "Transcribing" else { return }
+    @discardableResult
+    func startMeetingRecording(title: String = "Untitled Meeting") -> UUID? {
+        guard !isRecording, !isMeetingRecording, !isMeetingTranscribing, activeSession?.kind != .meeting, statusText != "Transcribing" else { return nil }
         MuesliHaptics.dictationStart()
         activeMeetingTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Untitled Meeting"
@@ -2152,6 +2172,9 @@ final class DictationCoordinator {
         var session = RecordingSession(kind: .meeting, title: activeMeetingTitle)
         session.keepsAudioRecording = true
         activeSession = session
+        if !recordingSessions.contains(where: { $0.id == session.id }) {
+            recordingSessions.insert(session, at: 0)
+        }
         meetingStatusText = "Preparing"
 
         Task {
@@ -2240,6 +2263,7 @@ final class DictationCoordinator {
                 AppTelemetry.signal("meeting_recording_failed", parameters: ["stage": "recording"])
             }
         }
+        return session.id
     }
 
     func stopCurrentMeetingRecording() {
@@ -2436,6 +2460,9 @@ final class DictationCoordinator {
 
                 let mergedTranscription = MeetingChunkTranscriptMerger.merge(meetingChunkTranscriptions)
                 let text = postProcessTranscript(mergedTranscription.text)
+                if let latestSession = try? store.recordingSession(id: session.id) {
+                    session.manualNotes = latestSession.manualNotes
+                }
                 let audioURL = try session.audioFileName.map { try store.audioFileURL(fileName: $0) }
                 let finalTranscript = try await finalizeMeetingTranscript(
                     session: session,
@@ -2569,6 +2596,9 @@ final class DictationCoordinator {
                 }
                 guard case .completed(let detailedTranscription) = outcome else { return }
                 let text = postProcessTranscript(detailedTranscription.text)
+                if let latestSession = try? store.recordingSession(id: session.id) {
+                    session.manualNotes = latestSession.manualNotes
+                }
                 let finalTranscript = try await finalizeMeetingTranscript(
                     session: session,
                     text: text,
@@ -2666,7 +2696,8 @@ final class DictationCoordinator {
             do {
                 let summary = try await MeetingSummaryClient.summarize(
                     transcript: summarySource,
-                    meetingTitle: session.title ?? session.kind.title
+                    meetingTitle: session.title ?? session.kind.title,
+                    manualNotesToRetain: session.manualNotes
                 )
                 summaryText = summary.notes
                 summaryState = .completed
@@ -2679,7 +2710,8 @@ final class DictationCoordinator {
                 summaryText = MeetingSummaryClient.failureNotes(
                     transcript: summarySource,
                     meetingTitle: session.title ?? session.kind.title,
-                    error: error
+                    error: error,
+                    manualNotes: session.manualNotes
                 )
                 summaryState = .failed
                 summaryBackend = MuesliPreferences.meetingSummaryBackend.rawValue

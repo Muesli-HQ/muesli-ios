@@ -710,6 +710,44 @@ final class DictationCoordinator {
         }
     }
 
+    @discardableResult
+    func deleteMeetingAudio(for session: RecordingSession) -> Bool {
+        do {
+            guard var storedSession = try? store.activeRecordingSession(id: session.id),
+                  storedSession.kind == .meeting,
+                  let audioFileName = storedSession.audioFileName
+            else {
+                clipboardStatusText = "Audio already removed"
+                clearClipboardStatusSoon()
+                return true
+            }
+
+            try store.deleteAudioFile(fileName: audioFileName)
+            storedSession.audioFileName = nil
+            storedSession.keepsAudioRecording = false
+            try store.saveSession(storedSession)
+
+            if activeSession?.id == storedSession.id {
+                activeSession = storedSession
+            }
+            if let index = recordingSessions.firstIndex(where: { $0.id == storedSession.id }) {
+                recordingSessions[index] = storedSession
+            } else {
+                refreshHistory()
+            }
+
+            clipboardStatusText = "Audio deleted"
+            AppTelemetry.signal("meeting_audio_deleted")
+            clearClipboardStatusSoon()
+            scheduleICloudSyncAfterLocalChange(reason: "meeting_audio_deleted")
+            return true
+        } catch {
+            clipboardStatusText = "Audio delete failed"
+            clearClipboardStatusSoon()
+            return false
+        }
+    }
+
     func updateMeetingTitle(sessionID: UUID, title: String) {
         do {
             guard var session = try store.activeRecordingSession(id: sessionID),
@@ -2182,7 +2220,7 @@ final class DictationCoordinator {
             ? "Untitled Meeting"
             : title.trimmingCharacters(in: .whitespacesAndNewlines)
         var session = RecordingSession(kind: .meeting, title: activeMeetingTitle)
-        session.keepsAudioRecording = true
+        session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
         activeSession = session
         if !recordingSessions.contains(where: { $0.id == session.id }) {
             recordingSessions.insert(session, at: 0)
@@ -2375,7 +2413,7 @@ final class DictationCoordinator {
                 scheduleMeetingChunkTranscription(finalChunk, sessionID: session.id)
             }
             session.audioFileName = session.audioFileName ?? stoppedAudio?.retainedAudioURL?.lastPathComponent
-            session.keepsAudioRecording = true
+            session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
             session.endedAt = .now
             session.phase = .transcribing
             try store.saveSession(session)
@@ -2513,6 +2551,7 @@ final class DictationCoordinator {
                 session.transcriptID = finalTranscript.transcript.id
                 session.engineIdentifier = engine.identifier
                 session.errorMessage = nil
+                cleanupNonRetainedAudio(for: &session)
                 guard try saveActiveMeetingSession(session) else {
                     meetingStatusText = "Ready"
                     cleanupMeetingChunks()
@@ -2544,6 +2583,7 @@ final class DictationCoordinator {
 
                 session.phase = .failed
                 session.errorMessage = error.localizedDescription
+                cleanupNonRetainedAudio(for: &session)
                 _ = try? saveActiveMeetingSession(session)
                 cleanupMeetingChunks()
                 meetingStatusText = error.localizedDescription
@@ -2568,7 +2608,6 @@ final class DictationCoordinator {
         var session = session
         session.phase = .transcribing
         session.errorMessage = nil
-        session.keepsAudioRecording = true
         try? store.saveSession(session)
         refreshHistory()
         isMeetingTranscribing = true
@@ -2603,6 +2642,7 @@ final class DictationCoordinator {
                     var failedSession = session
                     failedSession.phase = .failed
                     failedSession.errorMessage = message
+                    self.cleanupNonRetainedAudio(for: &failedSession)
                     try? self.store.saveSession(failedSession)
                     self.meetingStatusText = message
                     self.isMeetingTranscribing = false
@@ -2641,6 +2681,7 @@ final class DictationCoordinator {
                 session.transcriptID = finalTranscript.transcript.id
                 session.engineIdentifier = engine.identifier
                 session.errorMessage = nil
+                cleanupNonRetainedAudio(for: &session)
                 try store.saveSession(session)
                 scheduleICloudSyncAfterLocalChange(reason: "meeting_completed")
                 meetingStatusText = "Ready"
@@ -2659,6 +2700,7 @@ final class DictationCoordinator {
             } catch {
                 session.phase = .failed
                 session.errorMessage = error.localizedDescription
+                cleanupNonRetainedAudio(for: &session)
                 try? store.saveSession(session)
                 meetingStatusText = error.localizedDescription
                 refreshHistory()

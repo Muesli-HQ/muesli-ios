@@ -106,6 +106,9 @@ struct MeetingsView: View {
                         onDelete: {
                             coordinator.deleteMeeting(session)
                         },
+                        onDeleteAudio: {
+                            coordinator.deleteMeetingAudio(for: session)
+                        },
                         onRename: { title in
                             coordinator.updateMeetingTitle(sessionID: session.id, title: title)
                         },
@@ -785,6 +788,7 @@ private struct MeetingSessionDetailView: View {
     let onDiscardRecording: () -> Void
     let onCopy: (String, MeetingContentTab) -> Void
     let onDelete: () -> Void
+    let onDeleteAudio: () -> Void
     let onRename: (String) -> Void
     let onManualNotesChange: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -958,17 +962,21 @@ private struct MeetingSessionDetailView: View {
                         Spacer()
 
                         if isActiveRecording {
-                            Button(action: onStopRecording) {
-                                Image(systemName: "stop.fill")
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 42, height: 42)
-                                    .background(MuesliTheme.destructive.opacity(0.86))
+                            Button(role: .destructive, action: onDiscardRecording) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(MuesliTheme.destructive)
+                                    .frame(width: 38, height: 38)
+                                    .background(MuesliTheme.destructive.opacity(0.10))
                                     .clipShape(Circle())
+                                    .overlay(
+                                        Circle()
+                                            .strokeBorder(MuesliTheme.destructive.opacity(0.26), lineWidth: 1)
+                                    )
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Stop meeting")
-                            .accessibilityIdentifier("meetingDetail.stopButton")
+                            .accessibilityLabel("Discard meeting")
+                            .accessibilityIdentifier("meetingDetail.discardButton")
                         }
                     }
 
@@ -991,22 +999,18 @@ private struct MeetingSessionDetailView: View {
                     )
 
                     if isActiveRecording {
-                        Button(role: .destructive, action: onDiscardRecording) {
-                            Label("Discard Meeting", systemImage: "trash")
+                        Button(action: onStopRecording) {
+                            Label("Stop Meeting", systemImage: "stop.fill")
                                 .font(MuesliTheme.headline())
-                                .foregroundStyle(MuesliTheme.destructive)
+                                .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
-                                .frame(height: 44)
-                                .background(MuesliTheme.destructive.opacity(0.06))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                                        .strokeBorder(MuesliTheme.destructive.opacity(0.32), lineWidth: 1)
-                                )
+                                .frame(height: 48)
+                                .background(MuesliTheme.destructive.opacity(0.88))
                                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                                 .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                         }
                         .buttonStyle(.plain)
-                        .accessibilityIdentifier("meetingDetail.discardButton")
+                        .accessibilityIdentifier("meetingDetail.stopButton")
                     }
                 }
                 .padding(MuesliTheme.spacing16)
@@ -1139,20 +1143,34 @@ private struct MeetingSessionDetailView: View {
 
                     SavedAudioPlayerView(audioURL: audioURL)
 
-                    Button {
-                        sharePayload = MeetingSharePayload(items: [audioURL])
-                        AppTelemetry.signal("meeting_audio_shared")
-                    } label: {
-                        Label("Export Audio to Files", systemImage: "square.and.arrow.up")
-                            .font(MuesliTheme.headline())
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                            .foregroundStyle(MuesliTheme.accent)
-                            .background(MuesliTheme.accentSubtle)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Button {
+                            sharePayload = MeetingSharePayload(items: [audioURL])
+                            AppTelemetry.signal("meeting_audio_shared")
+                        } label: {
+                            Label("Export Audio", systemImage: "square.and.arrow.up")
+                                .font(MuesliTheme.headline())
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 44)
+                                .foregroundStyle(MuesliTheme.accent)
+                                .background(MuesliTheme.accentSubtle)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(role: .destructive, action: onDeleteAudio) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(MuesliTheme.destructive)
+                                .frame(width: 48, height: 44)
+                                .background(MuesliTheme.destructive.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Delete meeting audio")
                     }
-                    .buttonStyle(.plain)
                 }
                 .padding(MuesliTheme.spacing16)
             }
@@ -2231,6 +2249,6 @@ private extension RecordingSessionPhase {
 
 private extension RecordingSession {
     var hasRetainedAudio: Bool {
-        kind == .meeting && audioFileName != nil
+        kind == .meeting && keepsAudioRecording && audioFileName != nil
     }
 }

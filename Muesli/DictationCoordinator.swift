@@ -2282,6 +2282,13 @@ final class DictationCoordinator {
                 refreshAudioInputRoute()
                 vadController.start()
 
+                guard !discardedMeetingSessionIDs.contains(session.id) else {
+                    vadController.stop()
+                    streamingRecorder.cancel()
+                    abortDiscardedMeetingStartup(session)
+                    return
+                }
+
                 meetingRecorder = streamingRecorder
                 meetingVadController = vadController
                 meetingChunksDirectory = chunksDirectory

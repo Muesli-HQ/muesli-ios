@@ -142,7 +142,9 @@ struct MeetingsView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(spacing: MuesliTheme.spacing8) {
-                MuesliMiniLogoMark()
+                Image("MuesliAppIcon")
+                    .resizable()
+                    .scaledToFit()
                     .frame(width: 26, height: 26)
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 Text("muesli")
@@ -679,22 +681,6 @@ private struct MeetingInputSurfaceModifier: ViewModifier {
 private extension View {
     func meetingInputSurface(tint: Color? = nil) -> some View {
         modifier(MeetingInputSurfaceModifier(tint: tint))
-    }
-}
-
-private struct MuesliMiniLogoMark: View {
-    private let bars: [CGFloat] = [0.40, 0.62, 0.86, 0.70, 0.48, 0.78, 0.92, 0.58]
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 1.5) {
-            ForEach(Array(bars.enumerated()), id: \.offset) { _, height in
-                Capsule()
-                    .fill(MuesliTheme.brandBlue)
-                    .frame(width: 2, height: 18 * height)
-            }
-        }
-        .frame(width: 26, height: 26)
-        .background(MuesliTheme.backgroundRaised)
     }
 }
 

@@ -513,25 +513,21 @@ private struct MeetingBrowserItem: Identifiable {
         .joined(separator: " ")
         .lowercased()
 
-        if let transcript {
-            copyText = Self.preferredCopyText(for: session, transcript: transcript)
-        } else {
-            copyText = session.errorMessage ?? session.phase.description
-        }
+        copyText = Self.preferredCopyText(for: session, transcript: transcript)
     }
 
-    private static func preferredCopyText(for session: RecordingSession, transcript: Transcript) -> String {
-        if let summary = transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+    private static func preferredCopyText(for session: RecordingSession, transcript: Transcript?) -> String {
+        if let summary = transcript?.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
             return summary
         }
         if let manualNotes = session.manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines), !manualNotes.isEmpty {
             return manualNotes
         }
-        if let speakerTranscript = transcript.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines), !speakerTranscript.isEmpty {
+        if let speakerTranscript = transcript?.speakerTranscript?.trimmingCharacters(in: .whitespacesAndNewlines), !speakerTranscript.isEmpty {
             return speakerTranscript
         }
-        if !transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return transcript.text
+        if let text = transcript?.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return text
         }
         return session.errorMessage ?? session.phase.description
     }
@@ -1435,18 +1431,20 @@ private struct MeetingSessionDetailView: View {
     }
 
     private func scheduleManualNotesSave() {
+        manualNotesSaveTask?.cancel()
         guard manualNotesDraft != (session.manualNotes ?? "") else {
             manualNotesSaveState = .saved
+            manualNotesSaveTask = nil
             return
         }
         manualNotesSaveState = .saving
-        manualNotesSaveTask?.cancel()
         let draft = manualNotesDraft
         manualNotesSaveTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 650_000_000)
             guard !Task.isCancelled else { return }
             onManualNotesChange(draft)
             manualNotesSaveState = .saved
+            manualNotesSaveTask = nil
         }
     }
 

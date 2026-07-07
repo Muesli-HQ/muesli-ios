@@ -88,13 +88,11 @@ enum MeetingSummaryClient {
         error: Error,
         manualNotes: String? = nil
     ) -> String {
-        let trimmedManualNotes = manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let writtenNotesSection = trimmedManualNotes.isEmpty ? "" : """
-
-        ## Written Notes
-
-        \(trimmedManualNotes)
-        """
+        let writtenNotesSection = optionalNotesSection(
+            header: "## Written Notes",
+            notes: manualNotes,
+            separatesHeaderAndBody: true
+        )
         return """
         ## Summary failed
 
@@ -171,12 +169,10 @@ enum MeetingSummaryClient {
         manualNotesToRetain: String?
     ) -> String {
         let template = MuesliPreferences.meetingTemplate
-        let trimmedManualNotes = manualNotesToRetain?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let manualNotesSection = trimmedManualNotes.isEmpty ? "" : """
-
-        User-written notes to retain:
-        \(trimmedManualNotes)
-        """
+        let manualNotesSection = optionalNotesSection(
+            header: "User-written notes to retain:",
+            notes: manualNotesToRetain
+        )
         return """
         Meeting title: \(meetingTitle)
 
@@ -188,6 +184,20 @@ enum MeetingSummaryClient {
 
         Raw transcript:
         \(transcript)
+        """
+    }
+
+    private static func optionalNotesSection(
+        header: String,
+        notes: String?,
+        separatesHeaderAndBody: Bool = false
+    ) -> String {
+        let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedNotes.isEmpty else { return "" }
+        let separator = separatesHeaderAndBody ? "\n\n" : "\n"
+        return """
+
+        \(header)\(separator)\(trimmedNotes)
         """
     }
 

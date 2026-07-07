@@ -26,25 +26,12 @@ struct MeetingsView: View {
             }
     }
 
-    private var filteredMeetingSessions: [RecordingSession] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return meetingSessions.filter { session in
-            guard selectedFilter.includes(session) else { return false }
-            guard !query.isEmpty else { return true }
-            let transcript = coordinator.transcript(for: session)
-            let haystack = [
-                session.title ?? "",
-                session.phase.title,
-                session.sourceDisplayName,
-                session.manualNotes ?? "",
-                transcript?.summaryText ?? "",
-                transcript?.speakerTranscript ?? "",
-                transcript?.text ?? "",
-                session.errorMessage ?? ""
-            ]
-            .joined(separator: " ")
-            .lowercased()
-            return haystack.contains(query)
+    private var meetingBrowserItems: [MeetingBrowserItem] {
+        meetingSessions.map { session in
+            MeetingBrowserItem(
+                session: session,
+                transcript: coordinator.transcript(for: session)
+            )
         }
     }
 
@@ -52,12 +39,21 @@ struct MeetingsView: View {
         MeetingTemplatePreset(rawValue: selectedMeetingTemplate) ?? .general
     }
 
-    private var browserResultSummary: String {
+    private func filteredMeetingItems(from items: [MeetingBrowserItem]) -> [MeetingBrowserItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return items.filter { item in
+            guard selectedFilter.includes(item.session) else { return false }
+            guard !query.isEmpty else { return true }
+            return item.searchableText.contains(query)
+        }
+    }
+
+    private func browserResultSummary(filteredCount: Int) -> String {
         guard !meetingSessions.isEmpty else { return "No saved meetings" }
-        if filteredMeetingSessions.count == meetingSessions.count {
+        if filteredCount == meetingSessions.count {
             return "\(meetingSessions.count) saved"
         }
-        return "\(filteredMeetingSessions.count) of \(meetingSessions.count)"
+        return "\(filteredCount) of \(meetingSessions.count)"
     }
 
     var body: some View {
@@ -286,13 +282,15 @@ struct MeetingsView: View {
 
     @ViewBuilder
     private var sessionsSection: some View {
+        let browserItems = filteredMeetingItems(from: meetingBrowserItems)
+
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                     Text("Recent Meetings")
                         .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text(browserResultSummary)
+                    Text(browserResultSummary(filteredCount: browserItems.count))
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }
@@ -310,17 +308,17 @@ struct MeetingsView: View {
 
             if meetingSessions.isEmpty {
                 emptyState
-            } else if filteredMeetingSessions.isEmpty {
+            } else if browserItems.isEmpty {
                 emptySearchState
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
-                    ForEach(filteredMeetingSessions) { session in
+                    ForEach(browserItems) { item in
                         MuesliSwipeActionRow(
                             leadingAction: .init(
                                 title: "Delete",
                                 systemImage: "trash",
                                 tint: MuesliTheme.destructive,
-                                perform: { sessionPendingDelete = session }
+                                perform: { sessionPendingDelete = item.session }
                             ),
                             trailingAction: .init(
                                 title: "Copy",
@@ -328,16 +326,16 @@ struct MeetingsView: View {
                                 tint: MuesliTheme.success,
                                 perform: {
                                     coordinator.copyText(
-                                        copyText(for: session),
+                                        item.copyText,
                                         telemetryName: "meeting_row_copied"
                                     )
                                 }
                             )
                         ) {
-                            NavigationLink(value: session.id) {
+                            NavigationLink(value: item.session.id) {
                                 MeetingSessionRow(
-                                    session: session,
-                                    transcript: coordinator.transcript(for: session)
+                                    session: item.session,
+                                    transcript: item.transcript
                                 )
                             }
                             .buttonStyle(.plain)
@@ -489,11 +487,40 @@ struct MeetingsView: View {
         navigationPath.append(sessionID)
     }
 
-    private func copyText(for session: RecordingSession) -> String {
-        guard let transcript = coordinator.transcript(for: session) else {
-            return session.errorMessage ?? session.phase.description
-        }
+}
 
+private struct MeetingBrowserItem: Identifiable {
+    let session: RecordingSession
+    let transcript: Transcript?
+    let searchableText: String
+    let copyText: String
+
+    var id: UUID { session.id }
+
+    init(session: RecordingSession, transcript: Transcript?) {
+        self.session = session
+        self.transcript = transcript
+        searchableText = [
+            session.title ?? "",
+            session.phase.title,
+            session.sourceDisplayName,
+            session.manualNotes ?? "",
+            transcript?.summaryText ?? "",
+            transcript?.speakerTranscript ?? "",
+            transcript?.text ?? "",
+            session.errorMessage ?? ""
+        ]
+        .joined(separator: " ")
+        .lowercased()
+
+        if let transcript {
+            copyText = Self.preferredCopyText(for: session, transcript: transcript)
+        } else {
+            copyText = session.errorMessage ?? session.phase.description
+        }
+    }
+
+    private static func preferredCopyText(for session: RecordingSession, transcript: Transcript) -> String {
         if let summary = transcript.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
             return summary
         }
@@ -864,8 +891,7 @@ private struct MeetingSessionDetailView: View {
             manualNotesDraft = newValue
         }
         .onDisappear {
-            manualNotesSaveTask?.cancel()
-            persistManualNotesIfChanged()
+            flushPendingManualNotes()
         }
     }
 
@@ -999,7 +1025,10 @@ private struct MeetingSessionDetailView: View {
                     )
 
                     if isActiveRecording {
-                        Button(action: onStopRecording) {
+                        Button {
+                            flushPendingManualNotes()
+                            onStopRecording()
+                        } label: {
                             Label("Stop Meeting", systemImage: "stop.fill")
                                 .font(MuesliTheme.headline())
                                 .foregroundStyle(.white)
@@ -1045,7 +1074,7 @@ private struct MeetingSessionDetailView: View {
         if isCompletedMeeting {
             Button {
                 if isEditingCompletedManualNotes {
-                    persistManualNotesIfChanged()
+                    flushPendingManualNotes()
                 }
                 isEditingCompletedManualNotes.toggle()
             } label: {
@@ -1404,6 +1433,11 @@ private struct MeetingSessionDetailView: View {
             onManualNotesChange(draft)
             manualNotesSaveState = .saved
         }
+    }
+
+    private func flushPendingManualNotes() {
+        manualNotesSaveTask?.cancel()
+        persistManualNotesIfChanged()
     }
 
     private func persistManualNotesIfChanged() {

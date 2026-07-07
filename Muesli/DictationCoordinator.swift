@@ -713,7 +713,7 @@ final class DictationCoordinator {
     @discardableResult
     func deleteMeetingAudio(for session: RecordingSession) -> Bool {
         do {
-            guard var storedSession = try? store.activeRecordingSession(id: session.id),
+            guard var storedSession = try store.activeRecordingSession(id: session.id),
                   storedSession.kind == .meeting,
                   let audioFileName = storedSession.audioFileName
             else {

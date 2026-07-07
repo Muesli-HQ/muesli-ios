@@ -52,6 +52,22 @@ struct MeetingsView: View {
         MeetingTemplatePreset(rawValue: selectedMeetingTemplate) ?? .general
     }
 
+    private var meetingsWithNotesCount: Int {
+        meetingSessions.filter { session in
+            let transcript = coordinator.transcript(for: session)
+            return session.manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                || transcript?.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }.count
+    }
+
+    private var browserResultSummary: String {
+        guard !meetingSessions.isEmpty else { return "No saved meetings" }
+        if filteredMeetingSessions.count == meetingSessions.count {
+            return "\(meetingSessions.count) saved"
+        }
+        return "\(filteredMeetingSessions.count) of \(meetingSessions.count)"
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
@@ -123,14 +139,46 @@ struct MeetingsView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-            Text("Meetings")
-                .font(MuesliTheme.title1())
-                .foregroundStyle(MuesliTheme.textPrimary)
-            Text("Record offline conversations and turn them into local notes.")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                Text("MEETINGS")
+                    .font(MuesliTheme.captionMedium())
+                    .tracking(1.4)
+                    .foregroundStyle(MuesliTheme.textTertiary)
+
+                Text("Record, write, review")
+                    .font(.system(.largeTitle, design: .default, weight: .bold))
+                    .tracking(-0.7)
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+
+                Text("Local-first meeting capture with notes that sync across Muesli.")
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: MuesliTheme.spacing8) {
+                MeetingHeaderMetric(
+                    value: "\(meetingSessions.count)",
+                    label: "Saved",
+                    systemImage: "tray.full",
+                    tint: MuesliTheme.accent
+                )
+                MeetingHeaderMetric(
+                    value: "\(meetingsWithNotesCount)",
+                    label: "With Notes",
+                    systemImage: "square.and.pencil",
+                    tint: MuesliTheme.syncGreen
+                )
+                MeetingHeaderMetric(
+                    value: coordinator.hasMeetingRecordingInProgress ? "Live" : "Ready",
+                    label: "Recorder",
+                    systemImage: coordinator.hasMeetingRecordingInProgress ? "waveform" : "checkmark",
+                    tint: statusColor
+                )
+            }
         }
     }
 
@@ -140,22 +188,37 @@ struct MeetingsView: View {
             tint: statusColor,
             isInteractive: true
         ) {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
+                            .fill(statusColor.opacity(0.14))
+                        Image(systemName: coordinator.hasMeetingRecordingInProgress ? "stop.fill" : "mic.fill")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(statusColor)
+                    }
+                    .frame(width: 48, height: 48)
+
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Meeting Recorder")
+                        Text("Recorder")
                             .font(MuesliTheme.title3())
+                            .tracking(-0.25)
                             .foregroundStyle(MuesliTheme.textPrimary)
                         Text(coordinator.effectiveMeetingStatusText)
-                            .font(MuesliTheme.callout())
+                            .font(MuesliTheme.captionMedium())
                             .foregroundStyle(statusColor)
                     }
 
                     Spacer()
 
-                    Image(systemName: coordinator.hasMeetingRecordingInProgress ? "stop.circle.fill" : "mic.circle.fill")
-                        .font(.system(size: 30, weight: .semibold))
+                    Text(coordinator.hasMeetingRecordingInProgress ? "LIVE" : "LOCAL")
+                        .font(MuesliTheme.captionMedium())
+                        .tracking(1.1)
                         .foregroundStyle(statusColor)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .frame(height: 28)
+                        .background(statusColor.opacity(0.12))
+                        .clipShape(Capsule())
                 }
 
                 TextField("Meeting title", text: $meetingTitle)
@@ -241,7 +304,7 @@ struct MeetingsView: View {
                     }
                 }
             }
-            .padding(MuesliTheme.spacing16)
+            .padding(MuesliTheme.spacing20)
         }
         .accessibilityIdentifier("meetings.recorderPanel")
     }
@@ -298,7 +361,7 @@ struct MeetingsView: View {
                     Text("Meeting Sessions")
                         .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("\(meetingSessions.count) saved")
+                    Text(browserResultSummary)
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }
@@ -356,70 +419,86 @@ struct MeetingsView: View {
     }
 
     private var browserControls: some View {
-        VStack(spacing: MuesliTheme.spacing12) {
-            HStack(spacing: MuesliTheme.spacing8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                TextField("Search meetings", text: $searchText)
-                    .font(MuesliTheme.body())
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(MuesliTheme.textTertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear meeting search")
-                }
-            }
-            .padding(.horizontal, MuesliTheme.spacing12)
-            .frame(height: 42)
-            .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium)
-
-            ScrollView(.horizontal, showsIndicators: false) {
+        MuesliSurface(cornerRadius: MuesliTheme.cornerLarge, tint: MuesliTheme.accent) {
+            VStack(spacing: MuesliTheme.spacing12) {
                 HStack(spacing: MuesliTheme.spacing8) {
-                    ForEach(MeetingBrowserFilter.allCases) { filter in
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                    TextField("Search meetings", text: $searchText)
+                        .font(MuesliTheme.body())
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    if !searchText.isEmpty {
                         Button {
-                            selectedFilter = filter
+                            searchText = ""
                         } label: {
-                            Label(filter.label, systemImage: filter.systemImage)
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(MuesliTheme.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear meeting search")
+                    }
+                }
+                .padding(.horizontal, MuesliTheme.spacing12)
+                .frame(height: 42)
+                .background(MuesliTheme.backgroundRaised.opacity(0.55))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
+                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                )
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        ForEach(MeetingBrowserFilter.allCases) { filter in
+                            Button {
+                                selectedFilter = filter
+                            } label: {
+                                Label(filter.label, systemImage: filter.systemImage)
+                                    .font(MuesliTheme.captionMedium())
+                                    .foregroundStyle(selectedFilter == filter ? MuesliTheme.accent : MuesliTheme.textSecondary)
+                                    .padding(.horizontal, MuesliTheme.spacing12)
+                                    .frame(height: 34)
+                                    .background(selectedFilter == filter ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary.opacity(0.72))
+                                    .overlay(
+                                        Capsule()
+                                            .strokeBorder(selectedFilter == filter ? MuesliTheme.accent.opacity(0.32) : MuesliTheme.surfaceBorder, lineWidth: 1)
+                                    )
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Menu {
+                            ForEach(MeetingSortOrder.allCases) { sort in
+                                Button {
+                                    selectedSort = sort
+                                } label: {
+                                    Label(sort.label, systemImage: selectedSort == sort ? "checkmark" : sort.systemImage)
+                                }
+                            }
+                        } label: {
+                            Label(selectedSort.label, systemImage: "arrow.up.arrow.down")
                                 .font(MuesliTheme.captionMedium())
-                                .foregroundStyle(selectedFilter == filter ? MuesliTheme.backgroundBase : MuesliTheme.textSecondary)
+                                .foregroundStyle(MuesliTheme.textSecondary)
                                 .padding(.horizontal, MuesliTheme.spacing12)
                                 .frame(height: 34)
-                                .background(selectedFilter == filter ? MuesliTheme.accent : MuesliTheme.surfacePrimary)
+                                .background(MuesliTheme.surfacePrimary.opacity(0.72))
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                                )
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
                     }
-
-                    Menu {
-                        ForEach(MeetingSortOrder.allCases) { sort in
-                            Button {
-                                selectedSort = sort
-                            } label: {
-                                Label(sort.label, systemImage: selectedSort == sort ? "checkmark" : sort.systemImage)
-                            }
-                        }
-                    } label: {
-                        Label(selectedSort.label, systemImage: "arrow.up.arrow.down")
-                            .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                            .padding(.horizontal, MuesliTheme.spacing12)
-                            .frame(height: 34)
-                            .background(MuesliTheme.surfacePrimary)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+                    .padding(.vertical, 2)
                 }
-                .padding(.vertical, 2)
             }
+            .padding(MuesliTheme.spacing12)
         }
     }
 
@@ -592,52 +671,137 @@ private enum MeetingSortOrder: String, CaseIterable, Identifiable {
     }
 }
 
+private struct MeetingHeaderMetric: View {
+    let value: String
+    let label: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 24, height: 24)
+                .background(tint.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(MuesliTheme.captionMedium())
+                    .tracking(-0.15)
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(label)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .padding(.horizontal, MuesliTheme.spacing8)
+        .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
+        .background(MuesliTheme.surfacePrimary.opacity(0.70))
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+}
+
+private struct MeetingRowBadge: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(MuesliTheme.captionMedium())
+            .foregroundStyle(tint)
+            .lineLimit(1)
+            .padding(.horizontal, MuesliTheme.spacing8)
+            .frame(height: 26)
+            .background(tint.opacity(0.10))
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(tint.opacity(0.20), lineWidth: 1)
+            )
+    }
+}
+
 private struct MeetingSessionRow: View {
     let session: RecordingSession
     let transcript: Transcript?
 
     var body: some View {
-        MuesliSurface {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text(session.title ?? session.kind.title)
-                            .font(MuesliTheme.headline())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                        Text(session.createdAt, formatter: Self.dateFormatter)
-                            .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                        Text(session.phase.title)
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(session.phase.tint)
-                        Label(session.sourceDisplayName, systemImage: session.sourceSystemImage)
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textTertiary)
-                        if session.hasRetainedAudio {
-                            Label("Audio saved", systemImage: "waveform.path.ecg.rectangle")
-                                .font(MuesliTheme.caption())
-                                .foregroundStyle(MuesliTheme.textTertiary)
+        MuesliSurface(cornerRadius: MuesliTheme.cornerLarge, tint: session.phase.tint, isInteractive: true) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(session.phase.tint)
+                    .frame(width: 3, height: 76)
+                    .opacity(0.85)
+
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                            Text(session.title ?? session.kind.title)
+                                .font(MuesliTheme.headline())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                                .lineLimit(2)
+                            Text(session.createdAt, formatter: Self.dateFormatter)
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(MuesliTheme.textSecondary)
                         }
-                        if let transcript, transcript.diarizationState == .completed {
-                            Label("Speakers separated", systemImage: "person.2.wave.2")
-                                .font(MuesliTheme.caption())
-                                .foregroundStyle(MuesliTheme.textTertiary)
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .frame(width: 30, height: 30)
+                            .background(MuesliTheme.surfacePrimary.opacity(0.70))
+                            .clipShape(Circle())
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: MuesliTheme.spacing8) {
+                            MeetingRowBadge(
+                                title: session.phase.title,
+                                systemImage: session.phase.systemImage,
+                                tint: session.phase.tint
+                            )
+                            MeetingRowBadge(
+                                title: session.sourceDisplayName,
+                                systemImage: session.sourceSystemImage,
+                                tint: MuesliTheme.accent
+                            )
+                            if session.hasRetainedAudio {
+                                MeetingRowBadge(
+                                    title: "Audio",
+                                    systemImage: "waveform.path.ecg.rectangle",
+                                    tint: MuesliTheme.syncGreen
+                                )
+                            }
+                            if let transcript, transcript.diarizationState == .completed {
+                                MeetingRowBadge(
+                                    title: "Speakers",
+                                    systemImage: "person.2.wave.2",
+                                    tint: MuesliTheme.textSecondary
+                                )
+                            }
                         }
                     }
 
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .frame(width: 32, height: 32)
+                    Text(previewText)
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(previewColor)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, MuesliTheme.spacing4)
                 }
-
-                Text(previewText)
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(previewColor)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -798,6 +962,7 @@ private struct MeetingSessionDetailView: View {
                 }
 
                 HStack(spacing: MuesliTheme.spacing8) {
+                    detailBadge(session.sourceDisplayName, systemImage: session.sourceSystemImage)
                     if session.hasRetainedAudio {
                         detailBadge("Audio saved", systemImage: "waveform.path.ecg.rectangle")
                     }
@@ -817,32 +982,57 @@ private struct MeetingSessionDetailView: View {
     private var manualNotesSection: some View {
         MuesliSurface(cornerRadius: MuesliTheme.cornerLarge, tint: MuesliTheme.accent) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                HStack(alignment: .firstTextBaseline) {
-                    Label("Live Notes", systemImage: "square.and.pencil")
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .frame(width: 34, height: 34)
+                        .background(MuesliTheme.accentSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+
+                    Text("Live Notes")
                         .font(MuesliTheme.title3())
+                        .tracking(-0.15)
                         .foregroundStyle(MuesliTheme.textPrimary)
+
                     Spacer()
+
                     Text(manualNotesSaveState.label)
                         .font(MuesliTheme.captionMedium())
                         .foregroundStyle(manualNotesSaveState.tint)
+                        .padding(.horizontal, MuesliTheme.spacing8)
+                        .frame(height: 26)
+                        .background(manualNotesSaveState.tint.opacity(0.10))
+                        .clipShape(Capsule())
                 }
 
-                TextEditor(text: $manualNotesDraft)
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: session.phase == .recording ? 220 : 140)
-                    .padding(MuesliTheme.spacing8)
-                    .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous)
-                            .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                    )
-                    .accessibilityLabel("Meeting live notes")
-                    .onChange(of: manualNotesDraft) { _, _ in
-                        scheduleManualNotesSave()
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $manualNotesDraft)
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: session.phase == .recording ? 220 : 140)
+                        .padding(MuesliTheme.spacing8)
+                        .accessibilityLabel("Meeting live notes")
+                        .onChange(of: manualNotesDraft) { _, _ in
+                            scheduleManualNotesSave()
+                        }
+
+                    if manualNotesDraft.isEmpty {
+                        Text("Start typing notes...")
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .padding(.horizontal, MuesliTheme.spacing12)
+                            .padding(.vertical, MuesliTheme.spacing16)
+                            .allowsHitTesting(false)
                     }
+                }
+                .background(MuesliTheme.backgroundRaised.opacity(0.62))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
+                        .strokeBorder(MuesliTheme.accent.opacity(0.18), lineWidth: 1)
+                )
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -1815,6 +2005,23 @@ private extension RecordingSessionPhase {
             "Transcription failed."
         case .cancelled:
             "Recording was cancelled."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .recording:
+            "mic.fill"
+        case .transcriptionQueued:
+            "clock"
+        case .transcribing:
+            "waveform.badge.magnifyingglass"
+        case .completed:
+            "checkmark"
+        case .failed:
+            "exclamationmark.triangle"
+        case .cancelled:
+            "xmark"
         }
     }
 

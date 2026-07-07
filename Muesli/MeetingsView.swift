@@ -12,6 +12,8 @@ struct MeetingsView: View {
     @State private var selectedFilter: MeetingBrowserFilter = .all
     @State private var selectedSort: MeetingSortOrder = .newest
     @AppStorage(MuesliPreferences.meetingTemplateKey) private var selectedMeetingTemplate = MeetingTemplatePreset.general.rawValue
+    @AppStorage(MuesliPreferences.meetingSummariesEnabledKey) private var meetingSummariesEnabled = false
+    @AppStorage(MuesliPreferences.meetingSummaryBackendKey) private var meetingSummaryBackend = MeetingSummaryBackend.openRouter.rawValue
 
     private var meetingSessions: [RecordingSession] {
         coordinator.recordingSessions
@@ -65,7 +67,7 @@ struct MeetingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                     header
-                    recorderPanel
+                    startMeetingPanel
                     sessionsSection
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)
@@ -87,7 +89,16 @@ struct MeetingsView: View {
                         session: session,
                         transcript: coordinator.transcript(for: session),
                         audioURL: coordinator.audioFileURL(for: session),
+                        isActiveRecording: coordinator.activeMeetingSessionID == session.id && coordinator.hasMeetingRecordingInProgress,
+                        isProcessingCurrentMeeting: session.phase == .transcribing,
+                        inputLevel: coordinator.inputLevel,
+                        statusText: coordinator.activeMeetingSessionID == session.id ? coordinator.effectiveMeetingStatusText : session.phase.title,
                         onTranscribe: { coordinator.transcribeSession(session) },
+                        onStopRecording: { coordinator.stopCurrentMeetingRecording() },
+                        onDiscardRecording: {
+                            coordinator.cancelCurrentMeetingRecording()
+                            navigationPath.removeAll { $0 == session.id }
+                        },
                         onCopy: { text, tab in
                             coordinator.copyText(
                                 text,
@@ -151,7 +162,7 @@ struct MeetingsView: View {
         }
     }
 
-    private var recorderPanel: some View {
+    private var startMeetingPanel: some View {
         MuesliSurface(
             cornerRadius: MuesliTheme.cornerLarge,
             tint: statusColor,
@@ -162,7 +173,7 @@ struct MeetingsView: View {
                     ZStack {
                         RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
                             .fill(statusColor.opacity(0.14))
-                        Image(systemName: coordinator.hasMeetingRecordingInProgress ? "stop.fill" : "mic.fill")
+                        Image(systemName: coordinator.hasMeetingRecordingInProgress ? "arrow.up.forward.square" : "mic.fill")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(statusColor)
                     }
@@ -173,7 +184,7 @@ struct MeetingsView: View {
                             .font(MuesliTheme.title3())
                             .tracking(-0.25)
                             .foregroundStyle(MuesliTheme.textPrimary)
-                        Text(coordinator.effectiveMeetingStatusText)
+                        Text(coordinator.hasMeetingRecordingInProgress ? "Live meeting open in detail" : coordinator.effectiveMeetingStatusText)
                             .font(MuesliTheme.captionMedium())
                             .foregroundStyle(statusColor)
                     }
@@ -190,52 +201,44 @@ struct MeetingsView: View {
                         .clipShape(Capsule())
                 }
 
-                TextField("Meeting title", text: $meetingTitle)
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                    .padding(.horizontal, MuesliTheme.spacing12)
-                    .frame(height: 44)
-                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium)
-                    .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)
-
-                meetingTemplatePicker
-
-                if coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing {
-                    VStack(spacing: MuesliTheme.spacing8) {
-                        MuesliInlineWaveformView(
-                            mode: coordinator.isMeetingRecording ? .level : .waiting,
-                            color: statusColor,
-                            level: coordinator.isMeetingRecording ? coordinator.inputLevel : nil,
-                            isActive: isActive,
-                            barCount: 32
-                        )
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 54)
-                        .padding(.horizontal, MuesliTheme.spacing16)
-
-                        Text(coordinator.hasMeetingRecordingInProgress ? "Recording" : "Processing")
-                            .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, MuesliTheme.spacing16)
-                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: statusColor)
-                }
-
-                VStack(spacing: MuesliTheme.spacing8) {
+                if coordinator.hasMeetingRecordingInProgress {
                     Button {
-                        if coordinator.hasMeetingRecordingInProgress {
-                            coordinator.stopCurrentMeetingRecording()
-                        } else {
-                            if let sessionID = coordinator.startMeetingRecording(title: meetingTitle) {
-                                navigationPath.append(sessionID)
-                                meetingTitle = ""
-                            }
+                        if let sessionID = coordinator.activeMeetingSessionID {
+                            openMeeting(sessionID)
+                        }
+                    } label: {
+                        Label("Open Live Meeting", systemImage: "arrow.up.forward.square")
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .foregroundStyle(.white)
+                            .background(statusColor)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(coordinator.activeMeetingSessionID == nil)
+                } else {
+                    TextField("Meeting title", text: $meetingTitle)
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .frame(height: 44)
+                        .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium)
+                        .disabled(coordinator.isMeetingTranscribing)
+
+                    meetingTemplatePicker
+                    summaryBackendPicker
+
+                    Button {
+                        if let sessionID = coordinator.startMeetingRecording(title: meetingTitle) {
+                            openMeeting(sessionID)
+                            meetingTitle = ""
                         }
                     } label: {
                         Label(
-                            coordinator.hasMeetingRecordingInProgress ? "Stop Meeting" : "Start Meeting",
-                            systemImage: coordinator.hasMeetingRecordingInProgress ? "stop.fill" : "mic.fill"
+                            "Start Meeting",
+                            systemImage: "mic.fill"
                         )
                         .font(MuesliTheme.headline())
                         .frame(maxWidth: .infinity)
@@ -250,32 +253,11 @@ struct MeetingsView: View {
                     .disabled(isPrimaryMeetingActionDisabled)
                     .sensoryFeedback(.impact, trigger: coordinator.hasMeetingRecordingInProgress)
                     .accessibilityIdentifier("meetings.primaryButton")
-
-                    if coordinator.hasMeetingRecordingInProgress {
-                        Button(role: .destructive) {
-                            coordinator.cancelCurrentMeetingRecording()
-                        } label: {
-                            Label("Discard Meeting", systemImage: "xmark")
-                                .font(MuesliTheme.captionMedium())
-                                .foregroundStyle(MuesliTheme.destructive)
-                                .frame(maxWidth: .infinity)
-                                .frame(minHeight: 44)
-                                .background(MuesliTheme.destructive.opacity(0.07))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                                        .strokeBorder(MuesliTheme.destructive.opacity(0.22), lineWidth: 1)
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("meetings.discardButton")
-                    }
                 }
             }
             .padding(MuesliTheme.spacing20)
         }
-        .accessibilityIdentifier("meetings.recorderPanel")
+        .accessibilityIdentifier("meetings.startMeetingPanel")
     }
 
     private var meetingTemplatePicker: some View {
@@ -320,6 +302,27 @@ struct MeetingsView: View {
         }
         .buttonStyle(.plain)
         .disabled(coordinator.hasMeetingRecordingInProgress || coordinator.isMeetingTranscribing)
+    }
+
+    private var summaryBackendPicker: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            Toggle(isOn: $meetingSummariesEnabled) {
+                Label("Generate Meeting Notes", systemImage: "sparkles")
+                    .font(MuesliTheme.headline())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+            }
+            .tint(MuesliTheme.accent)
+
+            Picker("Summary Backend", selection: $meetingSummaryBackend) {
+                ForEach(MeetingSummaryBackend.allCases) { backend in
+                    Text(backend.label).tag(backend.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!meetingSummariesEnabled)
+        }
+        .padding(MuesliTheme.spacing12)
+        .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
     }
 
     @ViewBuilder
@@ -541,6 +544,11 @@ struct MeetingsView: View {
 
     private var isPrimaryMeetingActionDisabled: Bool {
         coordinator.isMeetingTranscribing && !coordinator.hasMeetingRecordingInProgress
+    }
+
+    private func openMeeting(_ sessionID: UUID) {
+        guard navigationPath.last != sessionID else { return }
+        navigationPath.append(sessionID)
     }
 
     private func copyText(for session: RecordingSession) -> String {
@@ -775,7 +783,13 @@ private struct MeetingSessionDetailView: View {
     let session: RecordingSession
     let transcript: Transcript?
     let audioURL: URL?
+    let isActiveRecording: Bool
+    let isProcessingCurrentMeeting: Bool
+    let inputLevel: Double
+    let statusText: String
     let onTranscribe: () -> Void
+    let onStopRecording: () -> Void
+    let onDiscardRecording: () -> Void
     let onCopy: (String, MeetingContentTab) -> Void
     let onDelete: () -> Void
     let onRename: (String) -> Void
@@ -790,15 +804,17 @@ private struct MeetingSessionDetailView: View {
     @State private var manualNotesDraft = ""
     @State private var manualNotesSaveState: ManualNotesSaveState = .saved
     @State private var manualNotesSaveTask: Task<Void, Never>?
+    @State private var recordingPulse = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                 detailHeader
+                captureStatusSection
                 manualNotesSection
+                contentSection
                 retainedAudioSection
                 detailActions
-                contentSection
             }
             .padding(.horizontal, MuesliTheme.spacing20)
             .padding(.top, MuesliTheme.spacing16)
@@ -896,7 +912,7 @@ private struct MeetingSessionDetailView: View {
 
                 HStack(spacing: MuesliTheme.spacing8) {
                     detailBadge(session.sourceDisplayName, systemImage: session.sourceSystemImage)
-                    if session.hasRetainedAudio {
+                    if shouldShowPostMeetingArtifacts, session.hasRetainedAudio {
                         detailBadge("Audio saved", systemImage: "waveform.path.ecg.rectangle")
                     }
                     if transcript?.diarizationState == .completed {
@@ -912,6 +928,102 @@ private struct MeetingSessionDetailView: View {
     }
 
     @ViewBuilder
+    private var captureStatusSection: some View {
+        if isActiveRecording || isProcessingCurrentMeeting {
+            MuesliSurface(
+                cornerRadius: MuesliTheme.cornerLarge,
+                tint: captureTint,
+                isInteractive: true
+            ) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                    HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                        ZStack {
+                            Circle()
+                                .fill(captureTint.opacity(0.16))
+                            Circle()
+                                .fill(captureTint)
+                                .frame(width: 12, height: 12)
+                                .opacity(isActiveRecording ? (recordingPulse ? 0.95 : 0.32) : 0.45)
+                                .animation(
+                                    isActiveRecording
+                                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                                        : .default,
+                                    value: recordingPulse
+                                )
+                        }
+                        .frame(width: 42, height: 42)
+                        .onAppear {
+                            recordingPulse = isActiveRecording
+                        }
+                        .onChange(of: isActiveRecording) { _, isRecording in
+                            recordingPulse = isRecording
+                        }
+
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                            Text(isActiveRecording ? "Recording" : "Processing")
+                                .font(MuesliTheme.headline())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                            Text(statusText)
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(captureTint)
+                        }
+
+                        Spacer()
+                    }
+
+                    MuesliInlineWaveformView(
+                        mode: isActiveRecording ? .level : .waiting,
+                        color: captureTint,
+                        level: isActiveRecording ? inputLevel : nil,
+                        isActive: isActiveRecording || isProcessingCurrentMeeting,
+                        barCount: 34
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 58)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .padding(.vertical, MuesliTheme.spacing12)
+                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: captureTint)
+
+                    if isActiveRecording {
+                        VStack(spacing: MuesliTheme.spacing8) {
+                            Button(action: onStopRecording) {
+                                Label("Stop Meeting", systemImage: "stop.fill")
+                                    .font(MuesliTheme.headline())
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 48)
+                                    .foregroundStyle(.white)
+                                    .background(MuesliTheme.destructive)
+                                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("meetingDetail.stopButton")
+
+                            Button(role: .destructive, action: onDiscardRecording) {
+                                Label("Discard Meeting", systemImage: "xmark")
+                                    .font(MuesliTheme.captionMedium())
+                                    .foregroundStyle(MuesliTheme.destructive)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(minHeight: 44)
+                                    .background(MuesliTheme.destructive.opacity(0.07))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                            .strokeBorder(MuesliTheme.destructive.opacity(0.24), lineWidth: 1)
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("meetingDetail.discardButton")
+                        }
+                    }
+                }
+                .padding(MuesliTheme.spacing16)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var manualNotesSection: some View {
         MuesliSurface(cornerRadius: MuesliTheme.cornerLarge, tint: MuesliTheme.accent) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
@@ -923,7 +1035,7 @@ private struct MeetingSessionDetailView: View {
                         .background(MuesliTheme.accentSubtle)
                         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
 
-                    Text("Live Notes")
+                    Text("Manual Notes")
                         .font(MuesliTheme.title3())
                         .tracking(-0.15)
                         .foregroundStyle(MuesliTheme.textPrimary)
@@ -946,13 +1058,13 @@ private struct MeetingSessionDetailView: View {
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: session.phase == .recording ? 220 : 140)
                         .padding(MuesliTheme.spacing8)
-                        .accessibilityLabel("Meeting live notes")
+                        .accessibilityLabel("Meeting manual notes")
                         .onChange(of: manualNotesDraft) { _, _ in
                             scheduleManualNotesSave()
                         }
 
                     if manualNotesDraft.isEmpty {
-                        Text("Start typing notes...")
+                        Text("Start typing meeting notes...")
                             .font(MuesliTheme.body())
                             .foregroundStyle(MuesliTheme.textTertiary)
                             .padding(.horizontal, MuesliTheme.spacing12)
@@ -973,7 +1085,7 @@ private struct MeetingSessionDetailView: View {
 
     @ViewBuilder
     private var retainedAudioSection: some View {
-        if session.hasRetainedAudio, let audioURL {
+        if shouldShowPostMeetingArtifacts, session.hasRetainedAudio, let audioURL {
             MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                     HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
@@ -1023,7 +1135,9 @@ private struct MeetingSessionDetailView: View {
 
     @ViewBuilder
     private var detailActions: some View {
-        if session.phase == .transcriptionQueued {
+        if isActiveRecording || isProcessingCurrentMeeting {
+            EmptyView()
+        } else if session.phase == .transcriptionQueued {
             Button(action: onTranscribe) {
                 Label("Transcribe Meeting", systemImage: "waveform.badge.magnifyingglass")
                     .font(MuesliTheme.headline())
@@ -1035,7 +1149,7 @@ private struct MeetingSessionDetailView: View {
                     .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
-        } else if let transcript {
+        } else if shouldShowPostMeetingArtifacts, let transcript {
             VStack(spacing: MuesliTheme.spacing8) {
                 Button {
                     onCopy(copyText(for: transcript), resolvedContent(for: transcript))
@@ -1073,26 +1187,28 @@ private struct MeetingSessionDetailView: View {
             }
         }
 
-        Button {
-            isConfirmingDelete = true
-        } label: {
-            Label("Delete Meeting", systemImage: "trash")
-            .font(MuesliTheme.headline())
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .foregroundStyle(MuesliTheme.destructive)
-            .background(MuesliTheme.destructive.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        if !isActiveRecording && !isProcessingCurrentMeeting {
+            Button {
+                isConfirmingDelete = true
+            } label: {
+                Label("Delete Meeting", systemImage: "trash")
+                .font(MuesliTheme.headline())
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .foregroundStyle(MuesliTheme.destructive)
+                .background(MuesliTheme.destructive.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private var contentSection: some View {
         MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                Text("Meeting Note")
+                Text(contentSectionTitle)
                     .font(MuesliTheme.title3())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
@@ -1107,7 +1223,7 @@ private struct MeetingSessionDetailView: View {
                         .foregroundStyle(MuesliTheme.destructive)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text(session.phase.description)
+                    Text(contentPlaceholder)
                         .font(MuesliTheme.body())
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1125,6 +1241,34 @@ private struct MeetingSessionDetailView: View {
             .padding(.vertical, MuesliTheme.spacing4)
             .background(MuesliTheme.surfacePrimary)
             .clipShape(Capsule())
+    }
+
+    private var captureTint: Color {
+        isActiveRecording ? MuesliTheme.recording : MuesliTheme.transcribing
+    }
+
+    private var shouldShowPostMeetingArtifacts: Bool {
+        !isActiveRecording && !isProcessingCurrentMeeting && session.phase != .recording && session.phase != .transcribing
+    }
+
+    private var contentSectionTitle: String {
+        if transcript?.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return "Generated Notes"
+        }
+        if isActiveRecording || isProcessingCurrentMeeting || transcript != nil {
+            return "Live Meeting Notes"
+        }
+        return "Meeting Notes"
+    }
+
+    private var contentPlaceholder: String {
+        if isActiveRecording {
+            return "Recording is in progress. Transcript and generated notes will appear here as the meeting is processed."
+        }
+        if isProcessingCurrentMeeting {
+            return "Processing meeting audio into transcript and notes."
+        }
+        return session.phase.description
     }
 
     private func resolvedContent(for transcript: Transcript) -> MeetingContentTab {

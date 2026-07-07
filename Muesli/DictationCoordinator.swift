@@ -266,6 +266,13 @@ final class DictationCoordinator {
         isMeetingRecording || activeSession?.kind == .meeting || persistedRecordingMeetingSession != nil
     }
 
+    var activeMeetingSessionID: UUID? {
+        if activeSession?.kind == .meeting {
+            return activeSession?.id
+        }
+        return persistedRecordingMeetingSession?.id
+    }
+
     var effectiveMeetingStatusText: String {
         if isMeetingRecording || persistedRecordingMeetingSession != nil {
             "Recording"

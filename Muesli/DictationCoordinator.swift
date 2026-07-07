@@ -2335,14 +2335,7 @@ final class DictationCoordinator {
         session.endedAt = .now
 
         guard session.audioFileName != nil else {
-            session.phase = .failed
-            session.errorMessage = "Muesli found a recording session without an active recorder or saved audio."
-            try? store.saveSession(session)
-            meetingStatusText = session.errorMessage ?? "Recording recovery failed"
-            refreshHistory()
-            AppTelemetry.signal("meeting_recording_recovery_failed", parameters: [
-                "reason": "missing_audio"
-            ])
+            stopMeetingStartup(session)
             return
         }
 
@@ -2358,6 +2351,20 @@ final class DictationCoordinator {
         refreshHistory()
         AppTelemetry.signal("meeting_recording_recovered_for_transcription")
         transcribeSession(session)
+    }
+
+    private func stopMeetingStartup(_ session: RecordingSession) {
+        MuesliHaptics.dictationStop()
+        discardedMeetingSessionIDs.insert(session.id)
+        abortDiscardedMeetingStartup(session)
+        Task {
+            await liveActivityController.end(
+                phase: "Stopped",
+                detail: "Meeting recording stopped before audio capture",
+                session: session
+            )
+        }
+        AppTelemetry.signal("meeting_recording_startup_stopped")
     }
 
     func cancelCurrentMeetingRecording() {

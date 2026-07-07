@@ -135,6 +135,7 @@ final class DictationCoordinator {
     private static let onboardingCompletedKey = "muesli.onboarding.completed"
     private static let userNameKey = "muesli.onboarding.userName"
     private static let useCaseKey = "muesli.onboarding.useCase"
+    private static let offlineTranscriptionNoProgressTimeout: TimeInterval = 90
 
     private let store = SharedStore()
     private let engine = FluidAudioTranscriptionEngine()
@@ -1296,8 +1297,23 @@ final class DictationCoordinator {
         Task {
             do {
                 let audioURL = try recorder.stop()
-                let text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                let outcome = try await runOfflineTranscriptionJob(
+                    audioURL: audioURL
+                ) { [weak self] in
+                    guard let self else { return }
+                    self.isOnboardingTestTranscribing = false
+                    self.onboardingTestError = "Transcription stalled. Try again."
+                    AppTelemetry.signal(
+                        "onboarding_test_failed",
+                        parameters: ["stage": "transcription_timeout"]
+                    )
+                } operation: { [engine] progress in
+                    try await engine.transcribe(audioURL: audioURL, progress: progress)
+                }
+                guard case .completed(let rawText) = outcome else { return }
+                let text = postProcessTranscript(rawText)
                 isOnboardingTestTranscribing = false
+                onboardingTestError = nil
                 if text.isEmpty {
                     onboardingTestError = "No speech detected. Try again."
                     AppTelemetry.signal("onboarding_test_empty", parameters: ["engine": engine.identifier])
@@ -1688,7 +1704,34 @@ final class DictationCoordinator {
                     phase: .transcribingStarted,
                     message: "Recovering transcription"
                 )
-                let text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                let outcome = try await runOfflineTranscriptionJob(
+                    audioURL: audioURL,
+                    onProgress: { [weak self] update in
+                        guard let self else { return }
+                        let message = self.transcriptionStatusMessage(for: update)
+                        self.statusText = message
+                        try? self.store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: message))
+                        self.saveKeyboardHandoff(requestID: request.id, phase: .transcribingStarted, message: message)
+                        self.saveKeyboardRuntimeStatus(
+                            isActive: true,
+                            activeRequestID: request.id,
+                            phase: .transcribing,
+                            message: message,
+                            supportsBackgroundStart: self.canStartKeyboardRequestsInBackground
+                        )
+                    }
+                ) { [weak self] in
+                    self?.handleKeyboardTranscriptionTimeout(
+                        request: request,
+                        session: session,
+                        startedFromKeyboard: true,
+                        source: .recovery
+                    )
+                } operation: { [engine] progress in
+                    try await engine.transcribe(audioURL: audioURL, progress: progress)
+                }
+                guard case .completed(let rawText) = outcome else { return }
+                let text = postProcessTranscript(rawText)
                 let savedTranscript = Transcript(
                     sessionID: session.id,
                     text: text,
@@ -1869,7 +1912,14 @@ final class DictationCoordinator {
                             message: "Transcribing"
                         )
                     }
-                    text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                    let outcome = try await runKeyboardTranscriptionJob(
+                        audioURL: audioURL,
+                        request: request,
+                        session: session,
+                        startedFromKeyboard: startedFromKeyboard
+                    )
+                    guard case .completed(let rawText) = outcome else { return }
+                    text = postProcessTranscript(rawText)
                 } else if usesRealtimeStreaming {
                     let stoppedAudio = realtimeDictationRecorder?.stop()
                     realtimeDictationRecorder = nil
@@ -1894,7 +1944,14 @@ final class DictationCoordinator {
                     }
                     text = postProcessTranscript(try await engine.finishRealtimeSession())
                     if text.isEmpty {
-                        text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                        let outcome = try await runKeyboardTranscriptionJob(
+                            audioURL: audioURL,
+                            request: request,
+                            session: session,
+                            startedFromKeyboard: startedFromKeyboard
+                        )
+                        guard case .completed(let rawText) = outcome else { return }
+                        text = postProcessTranscript(rawText)
                     }
                     liveDictationTranscript = text
                 } else {
@@ -1906,7 +1963,14 @@ final class DictationCoordinator {
                             message: "Transcribing"
                         )
                     }
-                    text = postProcessTranscript(try await engine.transcribe(audioURL: audioURL))
+                    let outcome = try await runKeyboardTranscriptionJob(
+                        audioURL: audioURL,
+                        request: request,
+                        session: session,
+                        startedFromKeyboard: startedFromKeyboard
+                    )
+                    guard case .completed(let rawText) = outcome else { return }
+                    text = postProcessTranscript(rawText)
                 }
                 guard !isRecordingSessionCancelled(requestID: request.id) else {
                     if startedFromKeyboard {
@@ -2473,7 +2537,37 @@ final class DictationCoordinator {
 
             do {
                 let audioURL = try store.audioFileURL(fileName: audioFileName)
-                let detailedTranscription = try await engine.transcribeDetailed(audioURL: audioURL)
+                let outcome = try await runOfflineTranscriptionJob(
+                    audioURL: audioURL,
+                    onProgress: { [weak self] update in
+                        guard let self else { return }
+                        self.meetingStatusText = self.transcriptionStatusMessage(for: update)
+                    }
+                ) { [weak self] in
+                    guard let self else { return }
+                    let message = "Transcription stalled. Try again."
+                    var failedSession = session
+                    failedSession.phase = .failed
+                    failedSession.errorMessage = message
+                    try? self.store.saveSession(failedSession)
+                    self.meetingStatusText = message
+                    self.isMeetingTranscribing = false
+                    self.refreshHistory()
+                    Task {
+                        await self.liveActivityController.end(
+                            phase: "Failed",
+                            detail: "Transcription stalled",
+                            session: session
+                        )
+                    }
+                    AppTelemetry.signal(
+                        "meeting_transcription_failed",
+                        parameters: ["engine": self.engine.identifier, "error": "timeout"]
+                    )
+                } operation: { [engine] progress in
+                    try await engine.transcribeDetailed(audioURL: audioURL, progress: progress)
+                }
+                guard case .completed(let detailedTranscription) = outcome else { return }
                 let text = postProcessTranscript(detailedTranscription.text)
                 let finalTranscript = try await finalizeMeetingTranscript(
                     session: session,
@@ -2703,6 +2797,185 @@ final class DictationCoordinator {
         recordingTimerTask?.cancel()
         recordingTimerTask = nil
         recordingElapsedTime = 0
+    }
+
+    private func offlineTranscriptionTimeout(for audioURL: URL?) -> TimeInterval {
+        guard let audioURL,
+              let audioFile = try? AVAudioFile(forReading: audioURL),
+              audioFile.fileFormat.sampleRate > 0
+        else {
+            return Self.offlineTranscriptionNoProgressTimeout
+        }
+
+        let duration = Double(audioFile.length) / audioFile.fileFormat.sampleRate
+        return min(max(Self.offlineTranscriptionNoProgressTimeout, duration * 2), 300)
+    }
+
+    private func transcriptionStatusMessage(
+        for update: TranscriptionProgressUpdate,
+        fallback: String = "Transcribing"
+    ) -> String {
+        guard let fraction = update.fractionCompleted, fraction > 0, fraction < 1 else {
+            return update.message ?? fallback
+        }
+        return "\(update.message ?? fallback) \(Int((fraction * 100).rounded()))%"
+    }
+
+    private func runOfflineTranscriptionJob<Output: Sendable>(
+        audioURL: URL,
+        onProgress: (@MainActor @Sendable (TranscriptionProgressUpdate) -> Void)? = nil,
+        onTimeout: @escaping @MainActor @Sendable () -> Void,
+        operation: @escaping @Sendable (@escaping @Sendable (TranscriptionProgressUpdate) -> Void) async throws -> Output
+    ) async throws -> OfflineTranscriptionJobOutcome<Output> {
+        let tracker = OfflineTranscriptionProgressTracker()
+        let timeout = offlineTranscriptionTimeout(for: audioURL)
+        let control = OfflineTranscriptionJobControl<Output>()
+        let progressHandler: @Sendable (TranscriptionProgressUpdate) -> Void = { update in
+            Task {
+                await tracker.record(update)
+            }
+            guard let onProgress else { return }
+            Task { @MainActor in
+                guard !control.isFinished else { return }
+                onProgress(update)
+            }
+        }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                control.setContinuation(continuation)
+
+                let transcriptionTask = Task {
+                    do {
+                        let output = try await operation(progressHandler)
+                        control.resume(returning: .completed(output))
+                    } catch {
+                        control.resume(throwing: error)
+                    }
+                }
+                control.setTranscriptionTask(transcriptionTask)
+
+                let watchdogTask = Task.detached(priority: .utility) {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(2))
+                        guard !Task.isCancelled else { return }
+                        if await tracker.hasNoProgress(for: timeout) {
+                            guard control.claimTimeout() else { return }
+                            await onTimeout()
+                            control.completeTimeout()
+                            return
+                        }
+                    }
+                }
+                control.setWatchdogTask(watchdogTask)
+            }
+        } onCancel: {
+            control.cancel()
+        }
+    }
+
+    private func keyboardTranscriptionProgressUpdate(
+        requestID: UUID,
+        startedFromKeyboard: Bool,
+        update: TranscriptionProgressUpdate
+    ) {
+        let message = transcriptionStatusMessage(for: update)
+        statusText = message
+        try? store.saveStatus(.init(requestID: requestID, phase: .transcribing, message: message))
+        if startedFromKeyboard {
+            saveKeyboardHandoff(requestID: requestID, phase: .transcribingStarted, message: message)
+            saveKeyboardRuntimeStatus(
+                isActive: true,
+                activeRequestID: requestID,
+                phase: .transcribing,
+                message: message,
+                supportsBackgroundStart: canStartKeyboardRequestsInBackground
+            )
+        }
+    }
+
+    private func runKeyboardTranscriptionJob(
+        audioURL: URL,
+        request: DictationRequest,
+        session: RecordingSession?,
+        startedFromKeyboard: Bool
+    ) async throws -> OfflineTranscriptionJobOutcome<String> {
+        try await runOfflineTranscriptionJob(
+            audioURL: audioURL,
+            onProgress: { [weak self] update in
+                self?.keyboardTranscriptionProgressUpdate(
+                    requestID: request.id,
+                    startedFromKeyboard: startedFromKeyboard,
+                    update: update
+                )
+            }
+        ) { [weak self] in
+            self?.handleKeyboardTranscriptionTimeout(
+                request: request,
+                session: session,
+                startedFromKeyboard: startedFromKeyboard
+            )
+        } operation: { [engine] progress in
+            try await engine.transcribe(audioURL: audioURL, progress: progress)
+        }
+    }
+
+    private func handleKeyboardTranscriptionTimeout(
+        request: DictationRequest,
+        session: RecordingSession?,
+        startedFromKeyboard: Bool,
+        source: KeyboardTranscriptionTimeoutSource = .activeDictation
+    ) {
+        let message = "Transcription stalled. Open Muesli to try again."
+        if var failedSession = activeSession ?? session {
+            failedSession.phase = .failed
+            failedSession.errorMessage = message
+            try? store.saveSession(failedSession)
+        }
+        activeRequest = nil
+        activeSession = nil
+        liveDictationTranscript = ""
+        realtimeDictationCommittedText = ""
+        clearKeyboardLiveTranscript()
+        statusText = message
+        let completedDeferredStop = completeDeferredKeyboardSessionStopIfNeeded()
+        try? store.clearPendingRequest()
+        try? store.clearPendingCommand()
+        try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
+        if startedFromKeyboard {
+            saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
+            if !completedDeferredStop {
+                saveKeyboardRuntimeStatus(
+                    isActive: canStartKeyboardRequestsInBackground,
+                    activeRequestID: nil,
+                    phase: .failed,
+                    message: message,
+                    supportsBackgroundStart: canStartKeyboardRequestsInBackground
+                )
+            }
+        }
+        transitionKeyboardSession(.requestFinished)
+        if !completedDeferredStop {
+            resumeKeyboardSessionKeeperIfNeeded()
+            publishKeyboardSessionReadyIfAvailable()
+        }
+        clearKeyboardSessionLiveActivityRoute(for: request.id)
+        refreshHistory()
+        switch source {
+        case .activeDictation:
+            AppTelemetry.signal(
+                "dictation_failed",
+                parameters: [
+                    "stage": "transcription_timeout",
+                    "engine": engine.identifier
+                ]
+            )
+        case .recovery:
+            AppTelemetry.signal(
+                "keyboard_transcription_recovery_failed",
+                parameters: ["reason": "timeout"]
+            )
+        }
     }
 
     private func cleanupNonRetainedAudio(for session: inout RecordingSession) {
@@ -3248,6 +3521,152 @@ final class DictationCoordinator {
         realtimeDictationChunksDirectory = nil
         realtimeDictationCommittedText = ""
         liveDictationTranscript = ""
+    }
+}
+
+private actor OfflineTranscriptionProgressTracker {
+    private var lastProgressAt = Date()
+
+    func record(_ update: TranscriptionProgressUpdate) {
+        lastProgressAt = update.updatedAt
+    }
+
+    func hasNoProgress(for timeout: TimeInterval, now: Date = .now) -> Bool {
+        now.timeIntervalSince(lastProgressAt) >= timeout
+    }
+}
+
+private enum OfflineTranscriptionJobOutcome<Output: Sendable>: Sendable {
+    case completed(Output)
+    case timedOut
+}
+
+private enum KeyboardTranscriptionTimeoutSource {
+    case activeDictation
+    case recovery
+}
+
+private final class OfflineTranscriptionJobControl<Output: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<OfflineTranscriptionJobOutcome<Output>, Error>?
+    private var pendingCompletion: Result<OfflineTranscriptionJobOutcome<Output>, Error>?
+    private var transcriptionTask: Task<Void, Never>?
+    private var watchdogTask: Task<Void, Never>?
+    private var didFinish = false
+
+    var isFinished: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return didFinish
+    }
+
+    func setContinuation(_ continuation: CheckedContinuation<OfflineTranscriptionJobOutcome<Output>, Error>) {
+        lock.lock()
+        let pendingCompletion = pendingCompletion
+        if pendingCompletion == nil {
+            self.continuation = continuation
+        }
+        lock.unlock()
+
+        if let pendingCompletion {
+            continuation.resume(with: pendingCompletion)
+        }
+    }
+
+    func setTranscriptionTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        if didFinish {
+            lock.unlock()
+            task.cancel()
+        } else {
+            transcriptionTask = task
+            lock.unlock()
+        }
+    }
+
+    func setWatchdogTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        if didFinish {
+            lock.unlock()
+            task.cancel()
+        } else {
+            watchdogTask = task
+            lock.unlock()
+        }
+    }
+
+    func resume(returning outcome: OfflineTranscriptionJobOutcome<Output>) {
+        finish(.success(outcome), cancelTranscription: false)
+    }
+
+    func resume(throwing error: Error) {
+        finish(.failure(error), cancelTranscription: false)
+    }
+
+    func claimTimeout() -> Bool {
+        lock.lock()
+        guard !didFinish else {
+            lock.unlock()
+            return false
+        }
+        didFinish = true
+        let transcriptionTask = transcriptionTask
+        self.transcriptionTask = nil
+        let watchdogTask = watchdogTask
+        self.watchdogTask = nil
+        lock.unlock()
+
+        watchdogTask?.cancel()
+        transcriptionTask?.cancel()
+        return true
+    }
+
+    func completeTimeout() {
+        completeClaimedFinish(.success(.timedOut))
+    }
+
+    func cancel() {
+        finish(.failure(CancellationError()), cancelTranscription: true)
+    }
+
+    private func completeClaimedFinish(_ result: Result<OfflineTranscriptionJobOutcome<Output>, Error>) {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingCompletion = result
+        }
+        lock.unlock()
+
+        continuation?.resume(with: result)
+    }
+
+    private func finish(
+        _ result: Result<OfflineTranscriptionJobOutcome<Output>, Error>,
+        cancelTranscription: Bool
+    ) {
+        lock.lock()
+        guard !didFinish else {
+            lock.unlock()
+            return
+        }
+        didFinish = true
+        let continuation = continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingCompletion = result
+        }
+        let transcriptionTask = transcriptionTask
+        self.transcriptionTask = nil
+        let watchdogTask = watchdogTask
+        self.watchdogTask = nil
+        lock.unlock()
+
+        watchdogTask?.cancel()
+        if cancelTranscription {
+            transcriptionTask?.cancel()
+        }
+        continuation?.resume(with: result)
     }
 }
 

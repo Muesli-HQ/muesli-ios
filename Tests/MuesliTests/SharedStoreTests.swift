@@ -3,14 +3,14 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
-    func testFreshSQLiteStoreCreatesV3Schema() throws {
+    func testFreshSQLiteStoreCreatesV4Schema() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let store = SharedStore(containerURL: directory)
         XCTAssertEqual(try store.resultsHistory(), [])
 
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 3)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 4)
         XCTAssertTrue(try sqliteColumnNames(table: "result_history", in: directory).isSuperset(of: [
             "session_id",
             "text",
@@ -24,6 +24,7 @@ final class SharedStoreTests: XCTestCase {
         ]))
         XCTAssertTrue(try sqliteColumnNames(table: "recording_sessions", in: directory).contains("audio_file_name"))
         XCTAssertTrue(try sqliteColumnNames(table: "recording_sessions", in: directory).contains("manual_notes"))
+        XCTAssertTrue(try sqliteColumnNames(table: "recording_sessions", in: directory).contains("manual_notes_updated_at"))
         XCTAssertTrue(try sqliteColumnNames(table: "transcripts", in: directory).contains("summary_model"))
         XCTAssertTrue(try sqliteColumnNames(table: "custom_words", in: directory).contains("matching_threshold"))
     }
@@ -76,7 +77,7 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try sqliteString("SELECT text FROM result_history LIMIT 1", in: directory), "migrated dictation")
         XCTAssertEqual(try sqliteString("SELECT engine_identifier FROM result_history LIMIT 1", in: directory), "parakeet-v3")
         XCTAssertEqual(try sqliteString("SELECT replacement FROM custom_words LIMIT 1", in: directory), "Muesli")
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 3)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 4)
     }
 
     func testResultsHistoryPersistsSortedResultsAfterOneOffResultIsCleared() throws {
@@ -680,6 +681,62 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(session.cloudRecordName, recordID)
     }
 
+    func testSyncedMeetingDoesNotClobberNewerLocalManualNotesWithStaleRemoteNotes() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let session = RecordingSession(
+            id: UUID(),
+            requestID: nil,
+            kind: .meeting,
+            title: "Conflict sync",
+            createdAt: Date(timeIntervalSince1970: 100),
+            phase: .completed,
+            transcriptID: UUID(),
+            engineIdentifier: "icloud",
+            source: "ios",
+            cloudRecordName: nil
+        )
+        try store.saveSession(session)
+        try store.saveTranscript(Transcript(
+            id: try XCTUnwrap(session.transcriptID),
+            sessionID: session.id,
+            text: "Old transcript",
+            createdAt: Date(timeIntervalSince1970: 100),
+            engineIdentifier: "icloud",
+            summaryText: "Old summary"
+        ))
+        try store.updateMeetingManualNotes(sessionID: session.id, manualNotes: "New local notes")
+
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: session.id.uuidString,
+            kind: .meeting,
+            title: "Conflict sync",
+            text: "New remote transcript",
+            speakerTranscript: nil,
+            summaryText: "New remote summary",
+            manualNotes: "Stale remote notes",
+            source: "macos",
+            engineIdentifier: "icloud",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date().addingTimeInterval(60),
+            manualNotesUpdatedAt: Date(timeIntervalSince1970: 120),
+            startedAt: Date(timeIntervalSince1970: 90),
+            endedAt: Date(timeIntervalSince1970: 140),
+            durationSeconds: 50,
+            wordCount: 6,
+            isDeleted: false,
+            cloudChangeTag: "newer-transcript-tag"
+        ))
+
+        let syncedSession = try XCTUnwrap(try store.recordingSession(id: session.id))
+        let syncedTranscript = try XCTUnwrap(try store.transcript(for: session.id))
+        XCTAssertEqual(syncedSession.manualNotes, "New local notes")
+        XCTAssertEqual(syncedTranscript.text, "New remote transcript")
+        XCTAssertEqual(syncedTranscript.summaryText, "New remote summary")
+    }
+
     func testSyncedMeetingWithoutSourceDefaultsToMacOrigin() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -931,7 +988,7 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try store.recordingSessions(), [expectedSession])
         XCTAssertEqual(try store.transcript(for: session.id), transcript)
         XCTAssertEqual(try store.customWords(), [customWord])
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 3)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 4)
         XCTAssertEqual(try sqliteString("SELECT text FROM result_history LIMIT 1", in: directory), "legacy sqlite dictation")
         XCTAssertEqual(try sqliteString("SELECT audio_file_name FROM recording_sessions LIMIT 1", in: directory), "legacy.wav")
         XCTAssertEqual(try sqliteString("SELECT summary_text FROM transcripts LIMIT 1", in: directory), "Legacy notes")

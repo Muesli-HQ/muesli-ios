@@ -192,7 +192,6 @@ enum MeetingLifecycleReducer {
             guard state.activeSessionID == id else { return state }
             return MeetingLifecycleState(phase: .stopping(id))
         case .transcriptionStarted(let id):
-            guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
             return MeetingLifecycleState(phase: .transcribing(id))
         case .cancelRequested(let id):
             guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
@@ -353,7 +352,11 @@ final class DictationCoordinator {
     var clipboardStatusText: String?
 
     var hasMeetingRecordingInProgress: Bool {
-        meetingLifecycleState.isRecordingVisible || isMeetingRecording || activeSession?.kind == .meeting || persistedRecordingMeetingSession != nil
+        meetingLifecycleState.isRecordingVisible
+            || isMeetingRecording
+            || isMeetingTranscribing
+            || activeSession?.kind == .meeting
+            || persistedRecordingMeetingSession != nil
     }
 
     var activeMeetingSessionID: UUID? {
@@ -854,7 +857,8 @@ final class DictationCoordinator {
         }
     }
 
-    func deleteMeeting(_ session: RecordingSession) {
+    @discardableResult
+    func deleteMeeting(_ session: RecordingSession) -> Bool {
         do {
             if let audioFileName = session.audioFileName {
                 try? store.deleteAudioFile(fileName: audioFileName)
@@ -867,9 +871,11 @@ final class DictationCoordinator {
             AppTelemetry.signal("meeting_deleted")
             clearClipboardStatusSoon()
             scheduleICloudSyncAfterLocalChange(reason: "meeting_deleted")
+            return true
         } catch {
             clipboardStatusText = "Delete failed"
             clearClipboardStatusSoon()
+            return false
         }
     }
 
@@ -2503,6 +2509,7 @@ final class DictationCoordinator {
             session.phase = .failed
             session.errorMessage = error.localizedDescription
             cleanupNonRetainedAudio(for: &session)
+            clearMissingRetainedAudioReference(for: &session)
             try? store.saveSession(session)
             activeSession = nil
             meetingStatusText = error.localizedDescription
@@ -3332,6 +3339,16 @@ final class DictationCoordinator {
         else { return }
 
         try? store.deleteAudioFile(fileName: audioFileName)
+        session.audioFileName = nil
+    }
+
+    private func clearMissingRetainedAudioReference(for session: inout RecordingSession) {
+        guard session.keepsAudioRecording,
+              let audioFileName = session.audioFileName,
+              let audioURL = try? store.audioFileURL(fileName: audioFileName),
+              !FileManager.default.fileExists(atPath: audioURL.path)
+        else { return }
+
         session.audioFileName = nil
     }
 

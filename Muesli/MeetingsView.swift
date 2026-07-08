@@ -38,7 +38,7 @@ struct MeetingsView: View {
                 transcript: coordinator.transcript(for: session)
             )
 
-            guard query.isEmpty || item.searchableText.contains(query) else {
+            guard query.isEmpty || item.containsSearchQuery(query) else {
                 continue
             }
 
@@ -110,6 +110,7 @@ struct MeetingsView: View {
                         isProcessingCurrentMeeting: session.phase == .transcribing,
                         inputLevel: coordinator.inputLevel,
                         statusText: coordinator.activeMeetingSessionID == session.id ? coordinator.effectiveMeetingStatusText : session.phase.title,
+                        actionStatusText: coordinator.clipboardStatusText,
                         onTranscribe: { coordinator.transcribeSession(session) },
                         onStopRecording: { coordinator.stopCurrentMeetingRecording() },
                         onDiscardRecording: {
@@ -329,9 +330,7 @@ struct MeetingsView: View {
                 )
 
                 if let status = coordinator.clipboardStatusText {
-                    Label(status, systemImage: "checkmark")
-                        .font(MuesliTheme.captionMedium())
-                        .foregroundStyle(MuesliTheme.success)
+                    MeetingActionStatusLabel(statusText: status)
                 }
             }
 
@@ -528,7 +527,7 @@ struct MeetingsView: View {
     }
 
     private var isPrimaryMeetingActionDisabled: Bool {
-        coordinator.isMeetingTranscribing && !coordinator.hasMeetingRecordingInProgress
+        coordinator.isMeetingTranscribing
     }
 
     private func openMeeting(_ sessionID: UUID) {
@@ -541,7 +540,6 @@ struct MeetingsView: View {
 private struct MeetingBrowserItem: Identifiable {
     let session: RecordingSession
     let transcript: Transcript?
-    let searchableText: String
     let copyText: String
 
     var id: UUID { session.id }
@@ -549,7 +547,11 @@ private struct MeetingBrowserItem: Identifiable {
     init(session: RecordingSession, transcript: Transcript?) {
         self.session = session
         self.transcript = transcript
-        searchableText = [
+        copyText = Self.preferredCopyText(for: session, transcript: transcript)
+    }
+
+    func containsSearchQuery(_ query: String) -> Bool {
+        [
             session.title ?? "",
             session.phase.title,
             session.sourceDisplayName,
@@ -561,8 +563,7 @@ private struct MeetingBrowserItem: Identifiable {
         ]
         .joined(separator: " ")
         .lowercased()
-
-        copyText = Self.preferredCopyText(for: session, transcript: transcript)
+        .contains(query)
     }
 
     private static func preferredCopyText(for session: RecordingSession, transcript: Transcript?) -> String {
@@ -585,6 +586,20 @@ private struct MeetingBrowserItem: Identifiable {
 private struct MeetingBrowserState {
     let totalCount: Int
     let filteredItems: [MeetingBrowserItem]
+}
+
+private struct MeetingActionStatusLabel: View {
+    let statusText: String
+
+    private var isFailure: Bool {
+        statusText.localizedCaseInsensitiveContains("failed")
+    }
+
+    var body: some View {
+        Label(statusText, systemImage: isFailure ? "exclamationmark.triangle.fill" : "checkmark")
+            .font(MuesliTheme.captionMedium())
+            .foregroundStyle(isFailure ? MuesliTheme.destructive : MuesliTheme.success)
+    }
 }
 
 private enum MeetingSourceFilter: String, CaseIterable, Identifiable {
@@ -909,12 +924,13 @@ private struct MeetingSessionDetailView: View {
     let isProcessingCurrentMeeting: Bool
     let inputLevel: Double
     let statusText: String
+    let actionStatusText: String?
     let onTranscribe: () -> Void
     let onStopRecording: () -> Void
     let onDiscardRecording: () -> Void
     let onCopy: (String, MeetingContentTab) -> Void
-    let onDelete: () -> Void
-    let onDeleteAudio: () -> Void
+    let onDelete: () -> Bool
+    let onDeleteAudio: () -> Bool
     let onRename: (String) -> Void
     let onManualNotesChange: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -937,6 +953,9 @@ private struct MeetingSessionDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                 detailHeader
+                if let actionStatusText {
+                    MeetingActionStatusLabel(statusText: actionStatusText)
+                }
                 if isCompletedMeeting {
                     contentSection
                     transcriptActionsSection
@@ -980,8 +999,11 @@ private struct MeetingSessionDetailView: View {
             Button("Delete Meeting", role: .destructive) {
                 isLeavingAfterDestructiveAction = true
                 manualNotesSaveTask?.cancel()
-                onDelete()
-                dismiss()
+                if onDelete() {
+                    dismiss()
+                } else {
+                    isLeavingAfterDestructiveAction = false
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -993,7 +1015,7 @@ private struct MeetingSessionDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Delete Audio", role: .destructive) {
-                onDeleteAudio()
+                _ = onDeleteAudio()
             }
             Button("Cancel", role: .cancel) {}
         } message: {

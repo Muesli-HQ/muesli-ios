@@ -98,6 +98,7 @@ struct SyncTextRecord: Codable, Sendable, Equatable, Identifiable {
     var engineIdentifier: String?
     var createdAt: Date
     var updatedAt: Date
+    var manualNotesUpdatedAt: Date? = nil
     var startedAt: Date?
     var endedAt: Date?
     var durationSeconds: Double

@@ -568,6 +568,7 @@ final class ICloudTextSyncEngine {
         cloud["speakerTranscript"] = record.speakerTranscript as NSString?
         cloud["summaryText"] = record.summaryText as NSString?
         cloud["manualNotes"] = record.manualNotes as NSString?
+        cloud["manualNotesUpdatedAt"] = record.manualNotesUpdatedAt as NSDate?
         cloud["source"] = record.source as NSString?
         cloud["localSource"] = record.localSource as NSString?
         cloud["engineIdentifier"] = record.engineIdentifier as NSString?
@@ -602,6 +603,7 @@ final class ICloudTextSyncEngine {
             engineIdentifier: record["engineIdentifier"] as? String,
             createdAt: createdAt,
             updatedAt: updatedAt,
+            manualNotesUpdatedAt: record["manualNotesUpdatedAt"] as? Date,
             startedAt: record["startedAt"] as? Date,
             endedAt: record["endedAt"] as? Date,
             durationSeconds: (record["durationSeconds"] as? NSNumber)?.doubleValue ?? 0,
@@ -650,6 +652,7 @@ final class ICloudTextSyncEngine {
             "speakerTranscript",
             "summaryText",
             "manualNotes",
+            "manualNotesUpdatedAt",
             "source",
             "engineIdentifier",
             "createdAt",

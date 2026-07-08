@@ -30,5 +30,6 @@ final class MuesliSmokeUITests: XCTestCase {
         app.buttons["tab.meetings"].tap()
 
         XCTAssertTrue(app.staticTexts["Meetings"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
     }
 }

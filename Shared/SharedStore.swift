@@ -346,7 +346,7 @@ private enum SharedStoreDatabaseError: Error, LocalizedError {
 
 private struct SharedStoreDatabase {
     private static let databaseFileName = "Muesli.sqlite"
-    private static let schemaVersion = 3
+    private static let schemaVersion = 4
 
     private static let initializationLock = NSLock()
     nonisolated(unsafe) private static var initializedDatabasePaths: Set<String> = []
@@ -693,13 +693,14 @@ private struct SharedStoreDatabase {
                        s.started_at, s.ended_at, s.engine_identifier, s.error_message,
                        s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
                        t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
-                       t.summary_model, t.updated_at, t.deleted_at, s.manual_notes
+                       t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
+                       s.manual_notes_updated_at
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
                   AND s.cloud_record_name IS NOT NULL
                   AND s.kind = ?
-                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0)) DESC
+                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0), s.manual_notes_updated_at) DESC
                 LIMIT ?
                 """,
                 db: db
@@ -711,7 +712,8 @@ private struct SharedStoreDatabase {
                 let ended = Self.optionalDate(statement, 7)
                 let text = sqliteColumnString(statement, 14) ?? ""
                 let summary = sqliteColumnString(statement, 16)
-                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19))
+                let manualNotesUpdatedAt = sqlite3_column_double(statement, 22)
+                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19), manualNotesUpdatedAt)
                 let payload = sqliteColumnData(statement, 13)
                 let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
                 let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, 21)
@@ -728,6 +730,7 @@ private struct SharedStoreDatabase {
                     engineIdentifier: sqliteColumnString(statement, 8),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
                     updatedAt: Date(timeIntervalSince1970: updated),
+                    manualNotesUpdatedAt: manualNotesUpdatedAt > 0 ? Date(timeIntervalSince1970: manualNotesUpdatedAt) : nil,
                     startedAt: started,
                     endedAt: ended,
                     durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
@@ -791,12 +794,13 @@ private struct SharedStoreDatabase {
                        s.started_at, s.ended_at, s.engine_identifier, s.error_message,
                        s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
                        t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
-                       t.summary_model, t.updated_at, t.deleted_at, s.manual_notes
+                       t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
+                       s.manual_notes_updated_at
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE s.cloud_record_name IS NOT NULL
                   AND s.kind = ?
-                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0)) DESC
+                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0), s.manual_notes_updated_at) DESC
                 LIMIT ?
                 """,
                 db: db
@@ -808,7 +812,8 @@ private struct SharedStoreDatabase {
                 let ended = Self.optionalDate(statement, 7)
                 let text = sqliteColumnString(statement, 14) ?? ""
                 let summary = sqliteColumnString(statement, 16)
-                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19))
+                let manualNotesUpdatedAt = sqlite3_column_double(statement, 22)
+                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19), manualNotesUpdatedAt)
                 let payload = sqliteColumnData(statement, 13)
                 let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
                 let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, 21)
@@ -825,6 +830,7 @@ private struct SharedStoreDatabase {
                     engineIdentifier: sqliteColumnString(statement, 8),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
                     updatedAt: Date(timeIntervalSince1970: updated),
+                    manualNotesUpdatedAt: manualNotesUpdatedAt > 0 ? Date(timeIntervalSince1970: manualNotesUpdatedAt) : nil,
                     startedAt: started,
                     endedAt: ended,
                     durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
@@ -946,6 +952,7 @@ private struct SharedStoreDatabase {
             ("recording_sessions", "transcript_id", "ALTER TABLE recording_sessions ADD COLUMN transcript_id TEXT"),
             ("recording_sessions", "engine_identifier", "ALTER TABLE recording_sessions ADD COLUMN engine_identifier TEXT"),
             ("recording_sessions", "manual_notes", "ALTER TABLE recording_sessions ADD COLUMN manual_notes TEXT"),
+            ("recording_sessions", "manual_notes_updated_at", "ALTER TABLE recording_sessions ADD COLUMN manual_notes_updated_at REAL NOT NULL DEFAULT 0"),
             ("recording_sessions", "error_message", "ALTER TABLE recording_sessions ADD COLUMN error_message TEXT"),
             ("recording_sessions", "updated_at", "ALTER TABLE recording_sessions ADD COLUMN updated_at REAL NOT NULL DEFAULT 0"),
             ("recording_sessions", "deleted_at", "ALTER TABLE recording_sessions ADD COLUMN deleted_at REAL"),
@@ -1084,6 +1091,10 @@ private struct SharedStoreDatabase {
                     transcript_id = COALESCE(transcript_id, ?),
                     engine_identifier = COALESCE(engine_identifier, ?),
                     manual_notes = COALESCE(manual_notes, ?),
+                    manual_notes_updated_at = CASE
+                        WHEN manual_notes_updated_at = 0 AND manual_notes IS NOT NULL THEN updated_at
+                        ELSE manual_notes_updated_at
+                    END,
                     error_message = COALESCE(error_message, ?),
                     updated_at = CASE WHEN updated_at = 0 THEN ? ELSE updated_at END,
                     cloud_record_name = COALESCE(NULLIF(cloud_record_name, ''), ?),
@@ -1350,10 +1361,10 @@ private struct SharedStoreDatabase {
             INSERT INTO recording_sessions (
                 id, request_id, kind, title, phase, created_at, started_at, ended_at,
                 audio_file_name, keeps_audio_recording, transcript_id, engine_identifier,
-                manual_notes, error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
+                manual_notes, manual_notes_updated_at, error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
                 last_synced_at, sync_dirty, payload
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, 1, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, 1, ?)
             ON CONFLICT(id) DO UPDATE SET
                 request_id = excluded.request_id,
                 kind = excluded.kind,
@@ -1367,6 +1378,10 @@ private struct SharedStoreDatabase {
                 transcript_id = excluded.transcript_id,
                 engine_identifier = excluded.engine_identifier,
                 manual_notes = excluded.manual_notes,
+                manual_notes_updated_at = CASE
+                    WHEN excluded.manual_notes IS NOT recording_sessions.manual_notes THEN excluded.manual_notes_updated_at
+                    ELSE recording_sessions.manual_notes_updated_at
+                END,
                 error_message = excluded.error_message,
                 updated_at = excluded.updated_at,
                 deleted_at = NULL,
@@ -1389,10 +1404,11 @@ private struct SharedStoreDatabase {
             try bind(session.transcriptID?.uuidString, to: statement, at: 11)
             try bind(session.engineIdentifier, to: statement, at: 12)
             try bind(session.manualNotes, to: statement, at: 13)
-            try bind(session.errorMessage, to: statement, at: 14)
-            try bind(now, to: statement, at: 15)
-            try bind(session.id.uuidString, to: statement, at: 16)
-            try bind(try encoder.encode(session), to: statement, at: 17)
+            try bind(session.manualNotes == nil ? 0 : now, to: statement, at: 14)
+            try bind(session.errorMessage, to: statement, at: 15)
+            try bind(now, to: statement, at: 16)
+            try bind(session.id.uuidString, to: statement, at: 17)
+            try bind(try encoder.encode(session), to: statement, at: 18)
         }
     }
 
@@ -1418,15 +1434,16 @@ private struct SharedStoreDatabase {
                 try execute(
                     """
                     UPDATE recording_sessions
-                    SET manual_notes = ?, updated_at = ?, sync_dirty = 1, payload = ?
+                    SET manual_notes = ?, manual_notes_updated_at = ?, updated_at = ?, sync_dirty = 1, payload = ?
                     WHERE id = ? AND deleted_at IS NULL
                     """,
                     db: db
                 ) { statement in
                     try bind(manualNotes, to: statement, at: 1)
                     try bind(now, to: statement, at: 2)
-                    try bind(try encoder.encode(session), to: statement, at: 3)
-                    try bind(sessionID.uuidString, to: statement, at: 4)
+                    try bind(now, to: statement, at: 3)
+                    try bind(try encoder.encode(session), to: statement, at: 4)
+                    try bind(sessionID.uuidString, to: statement, at: 5)
                 }
                 didUpdate = true
             }
@@ -1590,20 +1607,35 @@ private struct SharedStoreDatabase {
     }
 
     private func upsertSyncedMeeting(_ record: SyncTextRecord, db: OpaquePointer) throws {
-        if let localUpdatedAt = try localUpdatedAt(table: "recording_sessions", recordName: record.id, db: db),
-           localUpdatedAt > record.updatedAt.timeIntervalSince1970 {
-            return
-        }
-
-        let existingSessionID = try queryRows(
-            "SELECT id FROM recording_sessions WHERE cloud_record_name = ? LIMIT 1",
+        let existingSession = try queryRows(
+            "SELECT id, manual_notes, manual_notes_updated_at, updated_at FROM recording_sessions WHERE cloud_record_name = ? LIMIT 1",
             db: db
         ) { statement in
             try bind(record.id, to: statement, at: 1)
         } read: { statement in
-            sqliteColumnString(statement, 0)
+            (
+                id: sqliteColumnString(statement, 0),
+                manualNotes: sqliteColumnString(statement, 1),
+                manualNotesUpdatedAt: sqlite3_column_double(statement, 2),
+                updatedAt: sqlite3_column_double(statement, 3)
+            )
         }.first ?? nil
-        let sessionID = existingSessionID.flatMap(UUID.init(uuidString:)) ?? UUID(uuidString: record.id) ?? UUID()
+        let incomingManualNotesUpdatedAt = record.manualNotesUpdatedAt?.timeIntervalSince1970
+            ?? ((existingSession?.manualNotesUpdatedAt ?? 0) > 0 ? 0 : record.updatedAt.timeIntervalSince1970)
+        let shouldUseIncomingManualNotes = existingSession == nil
+            || incomingManualNotesUpdatedAt >= (existingSession?.manualNotesUpdatedAt ?? 0)
+        let resolvedManualNotes = shouldUseIncomingManualNotes ? record.manualNotes : existingSession?.manualNotes
+        let resolvedManualNotesUpdatedAt = shouldUseIncomingManualNotes
+            ? incomingManualNotesUpdatedAt
+            : (existingSession?.manualNotesUpdatedAt ?? 0)
+
+        if let existingSession,
+           existingSession.updatedAt > record.updatedAt.timeIntervalSince1970,
+           !shouldUseIncomingManualNotes {
+            return
+        }
+
+        let sessionID = existingSession?.id.flatMap(UUID.init(uuidString:)) ?? UUID(uuidString: record.id) ?? UUID()
         let transcriptID = UUID()
         let importedSource = Self.syncSource(record.source, fallback: "macos")
         let session = RecordingSession(
@@ -1624,7 +1656,7 @@ private struct SharedStoreDatabase {
             errorMessage: nil
         )
         var sessionWithManualNotes = session
-        sessionWithManualNotes.manualNotes = record.manualNotes
+        sessionWithManualNotes.manualNotes = resolvedManualNotes
         let transcript = Transcript(
             id: transcriptID,
             sessionID: sessionID,
@@ -1642,10 +1674,10 @@ private struct SharedStoreDatabase {
             INSERT INTO recording_sessions (
                 id, request_id, kind, title, phase, created_at, started_at, ended_at,
                 audio_file_name, keeps_audio_recording, transcript_id, engine_identifier,
-                manual_notes, error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
+                manual_notes, manual_notes_updated_at, error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
                 last_synced_at, sync_dirty, payload
             )
-            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0, ?)
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 phase = excluded.phase,
@@ -1656,6 +1688,7 @@ private struct SharedStoreDatabase {
                 transcript_id = excluded.transcript_id,
                 engine_identifier = excluded.engine_identifier,
                 manual_notes = excluded.manual_notes,
+                manual_notes_updated_at = excluded.manual_notes_updated_at,
                 updated_at = excluded.updated_at,
                 deleted_at = excluded.deleted_at,
                 cloud_record_name = excluded.cloud_record_name,
@@ -1675,13 +1708,14 @@ private struct SharedStoreDatabase {
             try bind(session.endedAt?.timeIntervalSince1970, to: statement, at: 7)
             try bind(transcriptID.uuidString, to: statement, at: 8)
             try bind(session.engineIdentifier, to: statement, at: 9)
-            try bind(record.manualNotes, to: statement, at: 10)
-            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 11)
-            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 12)
-            try bind(record.id, to: statement, at: 13)
-            try bind(record.cloudChangeTag, to: statement, at: 14)
-            try bind(Date().timeIntervalSince1970, to: statement, at: 15)
-            try bind(try encoder.encode(sessionWithManualNotes), to: statement, at: 16)
+            try bind(resolvedManualNotes, to: statement, at: 10)
+            try bind(resolvedManualNotesUpdatedAt, to: statement, at: 11)
+            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 12)
+            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 13)
+            try bind(record.id, to: statement, at: 14)
+            try bind(record.cloudChangeTag, to: statement, at: 15)
+            try bind(Date().timeIntervalSince1970, to: statement, at: 16)
+            try bind(try encoder.encode(sessionWithManualNotes), to: statement, at: 17)
         }
 
         try execute("DELETE FROM transcripts WHERE session_id = ?", db: db) { statement in
@@ -2017,6 +2051,7 @@ private struct SharedStoreDatabase {
         transcript_id TEXT,
         engine_identifier TEXT,
         manual_notes TEXT,
+        manual_notes_updated_at REAL NOT NULL DEFAULT 0,
         error_message TEXT,
         updated_at REAL NOT NULL DEFAULT 0,
         deleted_at REAL,

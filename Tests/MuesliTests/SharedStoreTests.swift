@@ -656,6 +656,37 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(session.source, "macos")
     }
 
+    func testSyncedMeetingWithoutSourceDefaultsToMacOrigin() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let recordID = UUID().uuidString
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: recordID,
+            kind: .meeting,
+            title: "Legacy Mac sync",
+            text: "Transcript",
+            speakerTranscript: nil,
+            summaryText: nil,
+            manualNotes: nil,
+            source: nil,
+            engineIdentifier: nil,
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 150),
+            startedAt: Date(timeIntervalSince1970: 90),
+            endedAt: Date(timeIntervalSince1970: 140),
+            durationSeconds: 50,
+            wordCount: 1,
+            isDeleted: false,
+            cloudChangeTag: "tag"
+        ))
+
+        let sessionID = try XCTUnwrap(UUID(uuidString: recordID))
+        let session = try XCTUnwrap(try store.recordingSession(id: sessionID))
+        XCTAssertEqual(session.source, "macos")
+    }
+
     func testRecordingSessionDecodesLegacyPayloadWithoutAudioRetentionFlag() throws {
         let session = RecordingSession(
             kind: .meeting,

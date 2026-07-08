@@ -1590,6 +1590,7 @@ private struct SharedStoreDatabase {
         }.first ?? nil
         let sessionID = existingSessionID.flatMap(UUID.init(uuidString:)) ?? UUID(uuidString: record.id) ?? UUID()
         let transcriptID = UUID()
+        let importedSource = Self.syncSource(record.source, fallback: "macos")
         let session = RecordingSession(
             id: sessionID,
             requestID: nil,
@@ -1603,7 +1604,7 @@ private struct SharedStoreDatabase {
             keepsAudioRecording: false,
             transcriptID: transcriptID,
             engineIdentifier: record.engineIdentifier,
-            source: record.source,
+            source: importedSource,
             errorMessage: nil
         )
         var sessionWithManualNotes = session

@@ -1814,12 +1814,22 @@ private enum MeetingExportFormatter {
 }
 
 private extension RecordingSession {
-    var normalizedSource: String {
-        source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    var normalizedSource: String? {
+        let normalized = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized?.isEmpty == false ? normalized : nil
     }
 
     var isFromMac: Bool {
-        normalizedSource.contains("mac")
+        if let normalizedSource {
+            switch normalizedSource {
+            case "ios", "iphone", "app", "keyboard":
+                return false
+            default:
+                return true
+            }
+        }
+
+        return engineIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "icloud"
     }
 
     var isFromThisIPhone: Bool {

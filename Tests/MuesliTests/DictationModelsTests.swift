@@ -38,6 +38,22 @@ final class DictationModelsTests: XCTestCase {
         XCTAssertNil(decoded.source)
     }
 
+    func testSyncOriginClassifiesLocalSourcesAsThisIPhone() {
+        XCTAssertEqual(SyncOrigin.classify(source: nil), .thisIPhone)
+        XCTAssertEqual(SyncOrigin.classify(source: "ios"), .thisIPhone)
+        XCTAssertEqual(SyncOrigin.classify(source: "iPhone"), .thisIPhone)
+        XCTAssertEqual(SyncOrigin.classify(source: "app"), .thisIPhone)
+        XCTAssertEqual(SyncOrigin.classify(source: "keyboard"), .thisIPhone)
+    }
+
+    func testSyncOriginClassifiesRemoteSourcesAsFromMac() {
+        XCTAssertEqual(SyncOrigin.classify(source: "macos"), .fromMac)
+        XCTAssertEqual(SyncOrigin.classify(source: "meeting"), .fromMac)
+        XCTAssertEqual(SyncOrigin.classify(source: nil, engineIdentifier: "icloud"), .fromMac)
+        XCTAssertEqual(SyncOrigin.classify(source: nil, cloudRecordName: "meeting-123"), .fromMac)
+        XCTAssertEqual(SyncOrigin.classify(source: nil, importedFromCloud: true), .fromMac)
+    }
+
     func testFillerWordFilterRemovesCommonDisfluencies() {
         let filtered = FillerWordFilter.apply("um you know, muesli is kind of working")
 

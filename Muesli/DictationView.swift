@@ -1142,7 +1142,7 @@ private enum DictationSourceFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    func includes(_ origin: DictationSyncOrigin) -> Bool {
+    func includes(_ origin: SyncOrigin) -> Bool {
         switch self {
         case .all:
             true
@@ -1165,10 +1165,7 @@ private enum DictationSourceFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private enum DictationSyncOrigin: Equatable {
-    case thisIPhone
-    case fromMac
-
+private extension SyncOrigin {
     var title: String {
         switch self {
         case .thisIPhone:
@@ -1207,52 +1204,14 @@ private enum DictationSyncOrigin: Equatable {
 }
 
 private extension RecordingSession {
-    var syncOrigin: DictationSyncOrigin {
-        let normalizedSource = source.normalizedSyncOriginSource
-        if let normalizedSource, normalizedSource == "ios" {
-            return .thisIPhone
-        }
-
-        if normalizedSource != nil {
-            return .fromMac
-        }
-
-        if engineIdentifier?.lowercased() == "icloud" {
-            return .fromMac
-        }
-
-        return .thisIPhone
+    var syncOrigin: SyncOrigin {
+        SyncOrigin.classify(source: source, engineIdentifier: engineIdentifier)
     }
 }
 
 private extension DictationResult {
-    var syncOrigin: DictationSyncOrigin {
-        let normalizedSource = source.normalizedSyncOriginSource
-        if let normalizedSource, normalizedSource == "ios" {
-            return .thisIPhone
-        }
-
-        if normalizedSource != nil {
-            return .fromMac
-        }
-
-        // Older synced rows were stored before source was persisted and used
-        // the fallback engine label. Treat those as Mac-origin cloud imports.
-        if engineIdentifier.lowercased() == "icloud" {
-            return .fromMac
-        }
-
-        return .thisIPhone
-    }
-}
-
-private extension Optional where Wrapped == String {
-    var normalizedSyncOriginSource: String? {
-        guard let source = self?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-              !source.isEmpty else {
-            return nil
-        }
-        return source
+    var syncOrigin: SyncOrigin {
+        SyncOrigin.classify(source: source, engineIdentifier: engineIdentifier)
     }
 }
 
@@ -1372,7 +1331,7 @@ private struct DictationHistoryRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var origin: DictationSyncOrigin {
+    private var origin: SyncOrigin {
         result.syncOrigin
     }
 
@@ -1599,7 +1558,7 @@ private struct AudioFileDocument: FileDocument {
 }
 
 private struct DictationOriginChip: View {
-    let origin: DictationSyncOrigin
+    let origin: SyncOrigin
 
     var body: some View {
         Label {

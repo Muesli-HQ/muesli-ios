@@ -105,6 +105,47 @@ struct SyncTextRecord: Codable, Sendable, Equatable, Identifiable {
     var cloudChangeTag: String?
 }
 
+enum SyncOrigin: Sendable, Equatable {
+    case thisIPhone
+    case fromMac
+
+    static func classify(
+        source: String?,
+        engineIdentifier: String? = nil,
+        cloudRecordName: String? = nil,
+        importedFromCloud: Bool = false
+    ) -> SyncOrigin {
+        if let source = normalized(source) {
+            return isLocalSource(source) ? .thisIPhone : .fromMac
+        }
+
+        if normalized(engineIdentifier) == "icloud" || importedFromCloud || isMacGeneratedCloudRecordName(cloudRecordName) {
+            return .fromMac
+        }
+
+        return .thisIPhone
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized?.isEmpty == false ? normalized : nil
+    }
+
+    private static func isLocalSource(_ source: String) -> Bool {
+        switch source {
+        case "ios", "iphone", "app", "keyboard":
+            true
+        default:
+            false
+        }
+    }
+
+    private static func isMacGeneratedCloudRecordName(_ cloudRecordName: String?) -> Bool {
+        guard let cloudRecordName = normalized(cloudRecordName) else { return false }
+        return cloudRecordName.hasPrefix("dictation-") || cloudRecordName.hasPrefix("meeting-")
+    }
+}
+
 struct DictationRequest: Codable, Sendable, Equatable, Identifiable {
     let id: UUID
     let createdAt: Date

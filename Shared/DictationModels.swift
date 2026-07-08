@@ -94,15 +94,62 @@ struct SyncTextRecord: Codable, Sendable, Equatable, Identifiable {
     var summaryText: String?
     var manualNotes: String?
     var source: String?
+    var localSource: String? = nil
     var engineIdentifier: String?
     var createdAt: Date
     var updatedAt: Date
+    var manualNotesUpdatedAt: Date? = nil
     var startedAt: Date?
     var endedAt: Date?
     var durationSeconds: Double
     var wordCount: Int
     var isDeleted: Bool
     var cloudChangeTag: String?
+}
+
+enum SyncOrigin: Sendable, Equatable {
+    case thisIPhone
+    case fromMac
+
+    static func classify(
+        source: String?,
+        engineIdentifier: String? = nil,
+        cloudRecordName: String? = nil,
+        importedFromCloud: Bool = false
+    ) -> SyncOrigin {
+        if isMacGeneratedCloudRecordName(cloudRecordName) {
+            return .fromMac
+        }
+
+        if let source = normalized(source) {
+            return isLocalSource(source) ? .thisIPhone : .fromMac
+        }
+
+        if normalized(engineIdentifier) == "icloud" || importedFromCloud {
+            return .fromMac
+        }
+
+        return .thisIPhone
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized?.isEmpty == false ? normalized : nil
+    }
+
+    private static func isLocalSource(_ source: String) -> Bool {
+        switch source {
+        case "ios", "iphone", "app", "keyboard":
+            true
+        default:
+            false
+        }
+    }
+
+    private static func isMacGeneratedCloudRecordName(_ cloudRecordName: String?) -> Bool {
+        guard let cloudRecordName = normalized(cloudRecordName) else { return false }
+        return cloudRecordName.hasPrefix("dictation-") || cloudRecordName.hasPrefix("meeting-")
+    }
 }
 
 struct DictationRequest: Codable, Sendable, Equatable, Identifiable {
@@ -295,6 +342,10 @@ struct DictationResult: Codable, Sendable, Equatable, Identifiable {
         self.engineIdentifier = engineIdentifier
         self.source = source
     }
+
+    var syncOrigin: SyncOrigin {
+        SyncOrigin.classify(source: source, engineIdentifier: engineIdentifier)
+    }
 }
 
 struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
@@ -311,6 +362,8 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var transcriptID: UUID?
     var engineIdentifier: String?
     var source: String?
+    var cloudRecordName: String?
+    var manualNotes: String?
     var errorMessage: String?
 
     init(
@@ -327,6 +380,8 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         transcriptID: UUID? = nil,
         engineIdentifier: String? = nil,
         source: String? = nil,
+        cloudRecordName: String? = nil,
+        manualNotes: String? = nil,
         errorMessage: String? = nil
     ) {
         self.id = id
@@ -342,12 +397,22 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.transcriptID = transcriptID
         self.engineIdentifier = engineIdentifier
         self.source = source
+        self.cloudRecordName = cloudRecordName
+        self.manualNotes = manualNotes
         self.errorMessage = errorMessage
     }
 
     var duration: TimeInterval? {
         guard let startedAt else { return nil }
         return (endedAt ?? .now).timeIntervalSince(startedAt)
+    }
+
+    var syncOrigin: SyncOrigin {
+        SyncOrigin.classify(
+            source: source,
+            engineIdentifier: engineIdentifier,
+            cloudRecordName: cloudRecordName
+        )
     }
 
     enum CodingKeys: String, CodingKey {
@@ -364,6 +429,8 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         case transcriptID
         case engineIdentifier
         case source
+        case cloudRecordName
+        case manualNotes
         case errorMessage
     }
 
@@ -382,6 +449,8 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         transcriptID = try container.decodeIfPresent(UUID.self, forKey: .transcriptID)
         engineIdentifier = try container.decodeIfPresent(String.self, forKey: .engineIdentifier)
         source = try container.decodeIfPresent(String.self, forKey: .source)
+        cloudRecordName = try container.decodeIfPresent(String.self, forKey: .cloudRecordName)
+        manualNotes = try container.decodeIfPresent(String.self, forKey: .manualNotes)
         errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
     }
 }

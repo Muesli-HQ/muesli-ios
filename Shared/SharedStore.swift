@@ -148,6 +148,11 @@ struct SharedStore: Sendable {
         try database().deleteRecordingSession(id: id)
     }
 
+    @discardableResult
+    func updateMeetingManualNotes(sessionID: UUID, manualNotes: String) throws -> Bool {
+        try database().updateMeetingManualNotes(sessionID: sessionID, manualNotes: manualNotes)
+    }
+
     func saveTranscript(_ transcript: Transcript) throws {
         try database().saveTranscript(transcript)
     }
@@ -341,7 +346,7 @@ private enum SharedStoreDatabaseError: Error, LocalizedError {
 
 private struct SharedStoreDatabase {
     private static let databaseFileName = "Muesli.sqlite"
-    private static let schemaVersion = 2
+    private static let schemaVersion = 4
 
     private static let initializationLock = NSLock()
     nonisolated(unsafe) private static var initializedDatabasePaths: Set<String> = []
@@ -457,43 +462,51 @@ private struct SharedStoreDatabase {
 
     func recordingSessions() throws -> [RecordingSession] {
         try withDatabase { db in
-            try queryBlobs(
-                "SELECT payload FROM recording_sessions WHERE deleted_at IS NULL ORDER BY created_at DESC",
+            try queryRows(
+                "SELECT payload, cloud_record_name FROM recording_sessions WHERE deleted_at IS NULL ORDER BY created_at DESC",
                 db: db
-            ) { _ in }.map { try decoder.decode(RecordingSession.self, from: $0) }
+            ) { _ in } read: { statement in
+                try decodeRecordingSession(statement)
+            }
         }
     }
 
     func recordingSession(id: UUID) throws -> RecordingSession? {
         try withDatabase { db in
-            try querySingleBlob(
-                "SELECT payload FROM recording_sessions WHERE id = ? LIMIT 1",
+            try queryRows(
+                "SELECT payload, cloud_record_name FROM recording_sessions WHERE id = ? LIMIT 1",
                 db: db
             ) { statement in
                 try bind(id.uuidString, to: statement, at: 1)
-            }.map { try decoder.decode(RecordingSession.self, from: $0) }
+            } read: { statement in
+                try decodeRecordingSession(statement)
+            }.first
         }
     }
 
     func activeRecordingSession(id: UUID) throws -> RecordingSession? {
         try withDatabase { db in
-            try querySingleBlob(
-                "SELECT payload FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+            try queryRows(
+                "SELECT payload, cloud_record_name FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
                 db: db
             ) { statement in
                 try bind(id.uuidString, to: statement, at: 1)
-            }.map { try decoder.decode(RecordingSession.self, from: $0) }
+            } read: { statement in
+                try decodeRecordingSession(statement)
+            }.first
         }
     }
 
     func recordingSession(requestID: UUID) throws -> RecordingSession? {
         try withDatabase { db in
-            try querySingleBlob(
-                "SELECT payload FROM recording_sessions WHERE request_id = ? LIMIT 1",
+            try queryRows(
+                "SELECT payload, cloud_record_name FROM recording_sessions WHERE request_id = ? LIMIT 1",
                 db: db
             ) { statement in
                 try bind(requestID.uuidString, to: statement, at: 1)
-            }.map { try decoder.decode(RecordingSession.self, from: $0) }
+            } read: { statement in
+                try decodeRecordingSession(statement)
+            }.first
         }
     }
 
@@ -656,7 +669,8 @@ private struct SharedStoreDatabase {
                     speakerTranscript: nil,
                     summaryText: nil,
                     manualNotes: nil,
-                    source: Self.syncSource(result?.source),
+                    source: Self.syncPlatformSource(result?.source),
+                    localSource: Self.syncSource(result?.source),
                     engineIdentifier: sqliteColumnString(statement, 2),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
                     updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
@@ -679,13 +693,14 @@ private struct SharedStoreDatabase {
                        s.started_at, s.ended_at, s.engine_identifier, s.error_message,
                        s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
                        t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
-                       t.summary_model, t.updated_at, t.deleted_at
+                       t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
+                       s.manual_notes_updated_at
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
                   AND s.cloud_record_name IS NOT NULL
                   AND s.kind = ?
-                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0)) DESC
+                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0), s.manual_notes_updated_at) DESC
                 LIMIT ?
                 """,
                 db: db
@@ -697,9 +712,11 @@ private struct SharedStoreDatabase {
                 let ended = Self.optionalDate(statement, 7)
                 let text = sqliteColumnString(statement, 14) ?? ""
                 let summary = sqliteColumnString(statement, 16)
-                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19))
+                let manualNotesUpdatedAt = sqlite3_column_double(statement, 22)
+                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19), manualNotesUpdatedAt)
                 let payload = sqliteColumnData(statement, 13)
                 let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
+                let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, 21)
                 return SyncTextRecord(
                     id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
                     kind: .meeting,
@@ -707,15 +724,17 @@ private struct SharedStoreDatabase {
                     text: text,
                     speakerTranscript: sqliteColumnString(statement, 15),
                     summaryText: summary,
-                    manualNotes: nil,
-                    source: Self.syncSource(session?.source),
+                    manualNotes: manualNotes,
+                    source: Self.syncPlatformSource(session?.source),
+                    localSource: Self.syncSource(session?.source, fallback: "meeting"),
                     engineIdentifier: sqliteColumnString(statement, 8),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
                     updatedAt: Date(timeIntervalSince1970: updated),
+                    manualNotesUpdatedAt: manualNotesUpdatedAt > 0 ? Date(timeIntervalSince1970: manualNotesUpdatedAt) : nil,
                     startedAt: started,
                     endedAt: ended,
                     durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
-                    wordCount: Self.wordCount(text + " " + (summary ?? "")),
+                    wordCount: Self.wordCount(text + " " + (summary ?? "") + " " + (manualNotes ?? "")),
                     isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 20) != SQLITE_NULL,
                     cloudChangeTag: sqliteColumnString(statement, 12)
                 )
@@ -751,7 +770,8 @@ private struct SharedStoreDatabase {
                     speakerTranscript: nil,
                     summaryText: nil,
                     manualNotes: nil,
-                    source: Self.syncSource(result?.source),
+                    source: Self.syncPlatformSource(result?.source),
+                    localSource: Self.syncSource(result?.source),
                     engineIdentifier: sqliteColumnString(statement, 2),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
                     updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
@@ -774,12 +794,13 @@ private struct SharedStoreDatabase {
                        s.started_at, s.ended_at, s.engine_identifier, s.error_message,
                        s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
                        t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
-                       t.summary_model, t.updated_at, t.deleted_at
+                       t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
+                       s.manual_notes_updated_at
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE s.cloud_record_name IS NOT NULL
                   AND s.kind = ?
-                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0)) DESC
+                ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0), s.manual_notes_updated_at) DESC
                 LIMIT ?
                 """,
                 db: db
@@ -791,9 +812,11 @@ private struct SharedStoreDatabase {
                 let ended = Self.optionalDate(statement, 7)
                 let text = sqliteColumnString(statement, 14) ?? ""
                 let summary = sqliteColumnString(statement, 16)
-                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19))
+                let manualNotesUpdatedAt = sqlite3_column_double(statement, 22)
+                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19), manualNotesUpdatedAt)
                 let payload = sqliteColumnData(statement, 13)
                 let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
+                let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, 21)
                 return SyncTextRecord(
                     id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
                     kind: .meeting,
@@ -801,15 +824,17 @@ private struct SharedStoreDatabase {
                     text: text,
                     speakerTranscript: sqliteColumnString(statement, 15),
                     summaryText: summary,
-                    manualNotes: nil,
-                    source: Self.syncSource(session?.source),
+                    manualNotes: manualNotes,
+                    source: Self.syncPlatformSource(session?.source),
+                    localSource: Self.syncSource(session?.source, fallback: "meeting"),
                     engineIdentifier: sqliteColumnString(statement, 8),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
                     updatedAt: Date(timeIntervalSince1970: updated),
+                    manualNotesUpdatedAt: manualNotesUpdatedAt > 0 ? Date(timeIntervalSince1970: manualNotesUpdatedAt) : nil,
                     startedAt: started,
                     endedAt: ended,
                     durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
-                    wordCount: Self.wordCount(text + " " + (summary ?? "")),
+                    wordCount: Self.wordCount(text + " " + (summary ?? "") + " " + (manualNotes ?? "")),
                     isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 20) != SQLITE_NULL,
                     cloudChangeTag: sqliteColumnString(statement, 12)
                 )
@@ -892,9 +917,9 @@ private struct SharedStoreDatabase {
 
     private func ensureInitialized(_ db: OpaquePointer) throws {
         Self.initializationLock.lock()
-        let didInitialize = Self.initializedDatabasePaths.contains(databaseURL.path)
-        Self.initializationLock.unlock()
-        guard !didInitialize else { return }
+        defer { Self.initializationLock.unlock() }
+
+        guard !Self.initializedDatabasePaths.contains(databaseURL.path) else { return }
 
         try exec(Self.schemaSQL, db: db)
         try migrateSchemaIfNeeded(db)
@@ -902,9 +927,7 @@ private struct SharedStoreDatabase {
         try backfillNormalizedColumns(db)
         try setUserVersion(Self.schemaVersion, db: db)
 
-        Self.initializationLock.lock()
         Self.initializedDatabasePaths.insert(databaseURL.path)
-        Self.initializationLock.unlock()
     }
 
     private func migrateSchemaIfNeeded(_ db: OpaquePointer) throws {
@@ -928,6 +951,8 @@ private struct SharedStoreDatabase {
             ("recording_sessions", "keeps_audio_recording", "ALTER TABLE recording_sessions ADD COLUMN keeps_audio_recording INTEGER NOT NULL DEFAULT 0"),
             ("recording_sessions", "transcript_id", "ALTER TABLE recording_sessions ADD COLUMN transcript_id TEXT"),
             ("recording_sessions", "engine_identifier", "ALTER TABLE recording_sessions ADD COLUMN engine_identifier TEXT"),
+            ("recording_sessions", "manual_notes", "ALTER TABLE recording_sessions ADD COLUMN manual_notes TEXT"),
+            ("recording_sessions", "manual_notes_updated_at", "ALTER TABLE recording_sessions ADD COLUMN manual_notes_updated_at REAL NOT NULL DEFAULT 0"),
             ("recording_sessions", "error_message", "ALTER TABLE recording_sessions ADD COLUMN error_message TEXT"),
             ("recording_sessions", "updated_at", "ALTER TABLE recording_sessions ADD COLUMN updated_at REAL NOT NULL DEFAULT 0"),
             ("recording_sessions", "deleted_at", "ALTER TABLE recording_sessions ADD COLUMN deleted_at REAL"),
@@ -1065,6 +1090,11 @@ private struct SharedStoreDatabase {
                     keeps_audio_recording = ?,
                     transcript_id = COALESCE(transcript_id, ?),
                     engine_identifier = COALESCE(engine_identifier, ?),
+                    manual_notes = COALESCE(manual_notes, ?),
+                    manual_notes_updated_at = CASE
+                        WHEN manual_notes_updated_at = 0 AND manual_notes IS NOT NULL THEN updated_at
+                        ELSE manual_notes_updated_at
+                    END,
                     error_message = COALESCE(error_message, ?),
                     updated_at = CASE WHEN updated_at = 0 THEN ? ELSE updated_at END,
                     cloud_record_name = COALESCE(NULLIF(cloud_record_name, ''), ?),
@@ -1084,10 +1114,11 @@ private struct SharedStoreDatabase {
                 try bind(session?.keepsAudioRecording == true ? 1 : 0, to: update, at: 9)
                 try bind(session?.transcriptID?.uuidString, to: update, at: 10)
                 try bind(session?.engineIdentifier, to: update, at: 11)
-                try bind(session?.errorMessage, to: update, at: 12)
-                try bind(createdAt, to: update, at: 13)
-                try bind(id, to: update, at: 14)
-                try bind(rowID, to: update, at: 15)
+                try bind(session?.manualNotes, to: update, at: 12)
+                try bind(session?.errorMessage, to: update, at: 13)
+                try bind(createdAt, to: update, at: 14)
+                try bind(id, to: update, at: 15)
+                try bind(rowID, to: update, at: 16)
             }
         }
     }
@@ -1330,10 +1361,10 @@ private struct SharedStoreDatabase {
             INSERT INTO recording_sessions (
                 id, request_id, kind, title, phase, created_at, started_at, ended_at,
                 audio_file_name, keeps_audio_recording, transcript_id, engine_identifier,
-                error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
+                manual_notes, manual_notes_updated_at, error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
                 last_synced_at, sync_dirty, payload
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, 1, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, 1, ?)
             ON CONFLICT(id) DO UPDATE SET
                 request_id = excluded.request_id,
                 kind = excluded.kind,
@@ -1346,6 +1377,11 @@ private struct SharedStoreDatabase {
                 keeps_audio_recording = excluded.keeps_audio_recording,
                 transcript_id = excluded.transcript_id,
                 engine_identifier = excluded.engine_identifier,
+                manual_notes = excluded.manual_notes,
+                manual_notes_updated_at = CASE
+                    WHEN excluded.manual_notes IS NOT recording_sessions.manual_notes THEN excluded.manual_notes_updated_at
+                    ELSE recording_sessions.manual_notes_updated_at
+                END,
                 error_message = excluded.error_message,
                 updated_at = excluded.updated_at,
                 deleted_at = NULL,
@@ -1367,10 +1403,51 @@ private struct SharedStoreDatabase {
             try bind(session.keepsAudioRecording ? 1 : 0, to: statement, at: 10)
             try bind(session.transcriptID?.uuidString, to: statement, at: 11)
             try bind(session.engineIdentifier, to: statement, at: 12)
-            try bind(session.errorMessage, to: statement, at: 13)
-            try bind(now, to: statement, at: 14)
-            try bind(session.id.uuidString, to: statement, at: 15)
-            try bind(try encoder.encode(session), to: statement, at: 16)
+            try bind(session.manualNotes, to: statement, at: 13)
+            try bind(session.manualNotes == nil ? 0 : now, to: statement, at: 14)
+            try bind(session.errorMessage, to: statement, at: 15)
+            try bind(now, to: statement, at: 16)
+            try bind(session.id.uuidString, to: statement, at: 17)
+            try bind(try encoder.encode(session), to: statement, at: 18)
+        }
+    }
+
+    @discardableResult
+    func updateMeetingManualNotes(sessionID: UUID, manualNotes: String) throws -> Bool {
+        try withDatabase { db in
+            var didUpdate = false
+            try transaction(db: db) {
+                guard let data = try querySingleBlob(
+                    "SELECT payload FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+                    db: db,
+                    bindValues: { statement in
+                        try bind(sessionID.uuidString, to: statement, at: 1)
+                    }
+                ) else {
+                    return
+                }
+
+                var session = try decoder.decode(RecordingSession.self, from: data)
+                guard session.kind == .meeting else { return }
+                session.manualNotes = manualNotes
+                let now = Date().timeIntervalSince1970
+                try execute(
+                    """
+                    UPDATE recording_sessions
+                    SET manual_notes = ?, manual_notes_updated_at = ?, updated_at = ?, sync_dirty = 1, payload = ?
+                    WHERE id = ? AND deleted_at IS NULL
+                    """,
+                    db: db
+                ) { statement in
+                    try bind(manualNotes, to: statement, at: 1)
+                    try bind(now, to: statement, at: 2)
+                    try bind(now, to: statement, at: 3)
+                    try bind(try encoder.encode(session), to: statement, at: 4)
+                    try bind(sessionID.uuidString, to: statement, at: 5)
+                }
+                didUpdate = true
+            }
+            return didUpdate
         }
     }
 
@@ -1530,21 +1607,76 @@ private struct SharedStoreDatabase {
     }
 
     private func upsertSyncedMeeting(_ record: SyncTextRecord, db: OpaquePointer) throws {
-        if let localUpdatedAt = try localUpdatedAt(table: "recording_sessions", recordName: record.id, db: db),
-           localUpdatedAt > record.updatedAt.timeIntervalSince1970 {
-            return
-        }
-
-        let existingSessionID = try queryRows(
-            "SELECT id FROM recording_sessions WHERE cloud_record_name = ? LIMIT 1",
+        let existingSession = try queryRows(
+            "SELECT id, manual_notes, manual_notes_updated_at, updated_at, payload FROM recording_sessions WHERE cloud_record_name = ? LIMIT 1",
             db: db
         ) { statement in
             try bind(record.id, to: statement, at: 1)
         } read: { statement in
-            sqliteColumnString(statement, 0)
+            (
+                id: sqliteColumnString(statement, 0),
+                manualNotes: sqliteColumnString(statement, 1),
+                manualNotesUpdatedAt: sqlite3_column_double(statement, 2),
+                updatedAt: sqlite3_column_double(statement, 3),
+                payload: sqliteColumnData(statement, 4)
+            )
         }.first ?? nil
-        let sessionID = existingSessionID.flatMap(UUID.init(uuidString:)) ?? UUID(uuidString: record.id) ?? UUID()
+        let existingManualNotesUpdatedAt = existingSession?.manualNotesUpdatedAt ?? 0
+        let incomingManualNotesUpdatedAt = record.manualNotesUpdatedAt?.timeIntervalSince1970
+            ?? ((existingSession == nil || record.manualNotes != nil) ? record.updatedAt.timeIntervalSince1970 : 0)
+        let shouldUseIncomingManualNotes = existingSession == nil
+            || incomingManualNotesUpdatedAt > existingManualNotesUpdatedAt
+        let resolvedManualNotes = shouldUseIncomingManualNotes ? record.manualNotes : existingSession?.manualNotes
+        let resolvedManualNotesUpdatedAt = shouldUseIncomingManualNotes
+            ? incomingManualNotesUpdatedAt
+            : existingManualNotesUpdatedAt
+
+        if let existingSession,
+           existingSession.updatedAt > record.updatedAt.timeIntervalSince1970 {
+            if shouldUseIncomingManualNotes, let existingID = existingSession.id {
+                let encodedPayload: Data?
+                if let payload = existingSession.payload,
+                   var payloadSession = try? decoder.decode(RecordingSession.self, from: payload) {
+                    payloadSession.manualNotes = resolvedManualNotes
+                    encodedPayload = try encoder.encode(payloadSession)
+                } else {
+                    encodedPayload = nil
+                }
+                if let encodedPayload {
+                    try execute(
+                        """
+                        UPDATE recording_sessions
+                        SET manual_notes = ?, manual_notes_updated_at = ?, payload = ?
+                        WHERE id = ? AND deleted_at IS NULL
+                        """,
+                        db: db
+                    ) { statement in
+                        try bind(resolvedManualNotes, to: statement, at: 1)
+                        try bind(resolvedManualNotesUpdatedAt, to: statement, at: 2)
+                        try bind(encodedPayload, to: statement, at: 3)
+                        try bind(existingID, to: statement, at: 4)
+                    }
+                } else {
+                    try execute(
+                        """
+                        UPDATE recording_sessions
+                        SET manual_notes = ?, manual_notes_updated_at = ?
+                        WHERE id = ? AND deleted_at IS NULL
+                        """,
+                        db: db
+                    ) { statement in
+                        try bind(resolvedManualNotes, to: statement, at: 1)
+                        try bind(resolvedManualNotesUpdatedAt, to: statement, at: 2)
+                        try bind(existingID, to: statement, at: 3)
+                    }
+                }
+            }
+            return
+        }
+
+        let sessionID = existingSession?.id.flatMap(UUID.init(uuidString:)) ?? UUID(uuidString: record.id) ?? UUID()
         let transcriptID = UUID()
+        let importedSource = Self.syncSource(record.source, fallback: "macos")
         let session = RecordingSession(
             id: sessionID,
             requestID: nil,
@@ -1558,9 +1690,12 @@ private struct SharedStoreDatabase {
             keepsAudioRecording: false,
             transcriptID: transcriptID,
             engineIdentifier: record.engineIdentifier,
-            source: record.source,
+            source: importedSource,
+            cloudRecordName: record.id,
             errorMessage: nil
         )
+        var sessionWithManualNotes = session
+        sessionWithManualNotes.manualNotes = resolvedManualNotes
         let transcript = Transcript(
             id: transcriptID,
             sessionID: sessionID,
@@ -1578,10 +1713,10 @@ private struct SharedStoreDatabase {
             INSERT INTO recording_sessions (
                 id, request_id, kind, title, phase, created_at, started_at, ended_at,
                 audio_file_name, keeps_audio_recording, transcript_id, engine_identifier,
-                error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
+                manual_notes, manual_notes_updated_at, error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
                 last_synced_at, sync_dirty, payload
             )
-            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, NULL, ?, ?, ?, ?, ?, 0, ?)
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 phase = excluded.phase,
@@ -1591,6 +1726,8 @@ private struct SharedStoreDatabase {
                 keeps_audio_recording = 0,
                 transcript_id = excluded.transcript_id,
                 engine_identifier = excluded.engine_identifier,
+                manual_notes = excluded.manual_notes,
+                manual_notes_updated_at = excluded.manual_notes_updated_at,
                 updated_at = excluded.updated_at,
                 deleted_at = excluded.deleted_at,
                 cloud_record_name = excluded.cloud_record_name,
@@ -1610,12 +1747,14 @@ private struct SharedStoreDatabase {
             try bind(session.endedAt?.timeIntervalSince1970, to: statement, at: 7)
             try bind(transcriptID.uuidString, to: statement, at: 8)
             try bind(session.engineIdentifier, to: statement, at: 9)
-            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 10)
-            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 11)
-            try bind(record.id, to: statement, at: 12)
-            try bind(record.cloudChangeTag, to: statement, at: 13)
-            try bind(Date().timeIntervalSince1970, to: statement, at: 14)
-            try bind(try encoder.encode(session), to: statement, at: 15)
+            try bind(resolvedManualNotes, to: statement, at: 10)
+            try bind(resolvedManualNotesUpdatedAt, to: statement, at: 11)
+            try bind(record.updatedAt.timeIntervalSince1970, to: statement, at: 12)
+            try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 13)
+            try bind(record.id, to: statement, at: 14)
+            try bind(record.cloudChangeTag, to: statement, at: 15)
+            try bind(Date().timeIntervalSince1970, to: statement, at: 16)
+            try bind(try encoder.encode(sessionWithManualNotes), to: statement, at: 17)
         }
 
         try execute("DELETE FROM transcripts WHERE session_id = ?", db: db) { statement in
@@ -1743,6 +1882,15 @@ private struct SharedStoreDatabase {
                 throw SharedStoreDatabaseError.stepFailed(sqlite3ErrorMessage(db))
             }
         }
+    }
+
+    private func decodeRecordingSession(_ statement: OpaquePointer) throws -> RecordingSession {
+        guard let payload = sqliteColumnData(statement, 0) else {
+            throw SharedStoreDatabaseError.stepFailed("Missing recording session payload")
+        }
+        var session = try decoder.decode(RecordingSession.self, from: payload)
+        session.cloudRecordName = sqliteColumnString(statement, 1)
+        return session
     }
 
     private func forEachRow(
@@ -1882,6 +2030,22 @@ private struct SharedStoreDatabase {
         return normalized
     }
 
+    private static func syncPlatformSource(_ source: String?, fallback: String = "ios") -> String {
+        guard let normalized = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty else {
+            return fallback
+        }
+
+        switch normalized {
+        case "ios", "iphone", "app", "keyboard":
+            return "ios"
+        case "macos", "mac", "dictation", "cua", "meeting", "audio_import":
+            return "macos"
+        default:
+            return fallback
+        }
+    }
+
     private static let schemaSQL = """
     CREATE TABLE IF NOT EXISTS key_values (
         key TEXT PRIMARY KEY NOT NULL,
@@ -1925,6 +2089,8 @@ private struct SharedStoreDatabase {
         keeps_audio_recording INTEGER NOT NULL DEFAULT 0,
         transcript_id TEXT,
         engine_identifier TEXT,
+        manual_notes TEXT,
+        manual_notes_updated_at REAL NOT NULL DEFAULT 0,
         error_message TEXT,
         updated_at REAL NOT NULL DEFAULT 0,
         deleted_at REAL,

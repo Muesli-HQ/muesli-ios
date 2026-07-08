@@ -22,7 +22,7 @@ settings:
 packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio.git
-    from: "0.14.5"
+    exactVersion: "0.14.5"
   TelemetryDeck:
     url: https://github.com/TelemetryDeck/SwiftSDK
     from: "2.12.0"

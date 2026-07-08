@@ -1039,7 +1039,7 @@ private struct VoiceNoteRecordButtonLabel: View {
     }
 }
 
-private struct ICloudSyncStatusButton: View {
+struct ICloudSyncStatusButton: View {
     let isEnabled: Bool
     let isSyncing: Bool
     let hasError: Bool

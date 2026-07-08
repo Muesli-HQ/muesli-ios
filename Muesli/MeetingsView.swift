@@ -9,51 +9,60 @@ struct MeetingsView: View {
     @State private var sessionPendingDelete: RecordingSession?
     @State private var navigationPath: [UUID] = []
     @State private var searchText = ""
-    @State private var selectedFilter: MeetingBrowserFilter = .all
+    @State private var selectedSourceFilter: MeetingSourceFilter = .all
+    @State private var selectedStatusFilter: MeetingStatusFilter = .all
     @State private var selectedSort: MeetingSortOrder = .newest
+    @State private var isSyncSetupPromptPresented = false
+    @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @AppStorage(MuesliPreferences.meetingTemplateKey) private var selectedMeetingTemplate = MeetingTemplatePreset.general.rawValue
-
-    private var meetingSessions: [RecordingSession] {
-        coordinator.recordingSessions
-            .filter { $0.kind == .meeting }
-            .sorted { lhs, rhs in
-                switch selectedSort {
-                case .newest:
-                    lhs.createdAt > rhs.createdAt
-                case .oldest:
-                    lhs.createdAt < rhs.createdAt
-                }
-            }
-    }
-
-    private var meetingBrowserItems: [MeetingBrowserItem] {
-        meetingSessions.map { session in
-            MeetingBrowserItem(
-                session: session,
-                transcript: coordinator.transcript(for: session)
-            )
-        }
-    }
 
     private var meetingTemplate: MeetingTemplatePreset {
         MeetingTemplatePreset(rawValue: selectedMeetingTemplate) ?? .general
     }
 
-    private func filteredMeetingItems(from items: [MeetingBrowserItem]) -> [MeetingBrowserItem] {
+    private var meetingBrowserState: MeetingBrowserState {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return items.filter { item in
-            guard selectedFilter.includes(item.session) else { return false }
-            guard !query.isEmpty else { return true }
-            return item.searchableText.contains(query)
+        var totalCount = 0
+        var filteredItems: [MeetingBrowserItem] = []
+        filteredItems.reserveCapacity(coordinator.recordingSessions.count)
+
+        for session in coordinator.recordingSessions where session.kind == .meeting {
+            totalCount += 1
+            guard selectedSourceFilter.includes(session),
+                  selectedStatusFilter.includes(session) else {
+                continue
+            }
+
+            let item = MeetingBrowserItem(
+                session: session,
+                transcript: coordinator.transcript(for: session)
+            )
+
+            guard query.isEmpty || item.searchableText.contains(query) else {
+                continue
+            }
+
+            filteredItems.append(item)
         }
+
+        filteredItems.sort { lhs, rhs in
+            switch selectedSort {
+            case .newest:
+                lhs.session.createdAt > rhs.session.createdAt
+            case .oldest:
+                lhs.session.createdAt < rhs.session.createdAt
+            }
+        }
+
+        return MeetingBrowserState(totalCount: totalCount, filteredItems: filteredItems)
     }
 
-    private func browserResultSummary(filteredCount: Int) -> String {
-        guard !meetingSessions.isEmpty else { return "No saved meetings" }
-        if filteredCount == meetingSessions.count {
-            return "\(meetingSessions.count) saved"
+    private func browserResultSummary(_ state: MeetingBrowserState) -> String {
+        guard state.totalCount > 0 else { return "No saved meetings" }
+        if state.filteredItems.count == state.totalCount {
+            return "\(state.totalCount) saved"
         }
-        return "\(filteredCount) of \(meetingSessions.count)"
+        return "\(state.filteredItems.count) of \(state.totalCount)"
     }
 
     var body: some View {
@@ -70,6 +79,20 @@ struct MeetingsView: View {
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)
+            .confirmationDialog(
+                "Turn on private iCloud sync?",
+                isPresented: $isSyncSetupPromptPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Open Sync Setup") {
+                    coordinator.requestSyncSetup(source: "meetings_sync")
+                }
+                Button("Not Now", role: .cancel) {
+                    coordinator.iCloudSyncStatusText = nil
+                }
+            } message: {
+                Text("Muesli will sync meeting transcripts, notes, and summaries with your Mac through your private iCloud account. Audio stays local.")
+            }
             .onAppear {
                 refreshVisibleStateIfNeeded()
             }
@@ -282,20 +305,28 @@ struct MeetingsView: View {
 
     @ViewBuilder
     private var sessionsSection: some View {
-        let browserItems = filteredMeetingItems(from: meetingBrowserItems)
+        let browserState = meetingBrowserState
+        let browserItems = browserState.filteredItems
 
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                     Text("Recent Meetings")
                         .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text(browserResultSummary(filteredCount: browserItems.count))
+                    Text(browserResultSummary(browserState))
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }
 
                 Spacer()
+
+                ICloudSyncStatusButton(
+                    isEnabled: iCloudSyncEnabled,
+                    isSyncing: coordinator.isICloudSyncInProgress,
+                    hasError: syncStatusIsError,
+                    action: triggerMeetingSync
+                )
 
                 if let status = coordinator.clipboardStatusText {
                     Label(status, systemImage: "checkmark")
@@ -304,9 +335,13 @@ struct MeetingsView: View {
                 }
             }
 
+            if browserState.totalCount > 0 {
+                MeetingSourceFilterPicker(selection: $selectedSourceFilter)
+            }
+
             browserControls
 
-            if meetingSessions.isEmpty {
+            if browserState.totalCount == 0 {
                 emptyState
             } else if browserItems.isEmpty {
                 emptySearchState
@@ -380,11 +415,11 @@ struct MeetingsView: View {
             )
 
             Menu {
-                ForEach(MeetingBrowserFilter.allCases) { filter in
+                ForEach(MeetingStatusFilter.allCases) { filter in
                     Button {
-                        selectedFilter = filter
+                        selectedStatusFilter = filter
                     } label: {
-                        Label(filter.label, systemImage: selectedFilter == filter ? "checkmark" : filter.systemImage)
+                        Label(filter.label, systemImage: selectedStatusFilter == filter ? "checkmark" : filter.systemImage)
                     }
                 }
 
@@ -413,6 +448,19 @@ struct MeetingsView: View {
     private func refreshVisibleStateIfNeeded() {
         guard isActive else { return }
         coordinator.refreshHistory()
+    }
+
+    private var syncStatusIsError: Bool {
+        coordinator.iCloudSyncStatusText?.localizedCaseInsensitiveContains("sync failed") == true
+    }
+
+    private func triggerMeetingSync() {
+        if !iCloudSyncEnabled {
+            coordinator.iCloudSyncStatusText = nil
+            isSyncSetupPromptPresented = true
+            return
+        }
+        coordinator.syncICloudTextIfEnabled(reason: "meetings_manual")
     }
 
     private var emptyState: some View {
@@ -445,7 +493,7 @@ struct MeetingsView: View {
                 Text("No matches")
                     .font(MuesliTheme.headline())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("Adjust the search or filter to find another meeting.")
+                Text("Adjust the search, source, or filter to find another meeting.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
@@ -533,16 +581,19 @@ private struct MeetingBrowserItem: Identifiable {
     }
 }
 
-private enum MeetingBrowserFilter: String, CaseIterable, Identifiable {
+private struct MeetingBrowserState {
+    let totalCount: Int
+    let filteredItems: [MeetingBrowserItem]
+}
+
+private enum MeetingSourceFilter: String, CaseIterable, Identifiable {
     case all
     case thisIPhone
     case fromMac
-    case processing
-    case needsAttention
 
     var id: String { rawValue }
 
-    var label: String {
+    var title: String {
         switch self {
         case .all:
             "All"
@@ -550,25 +601,6 @@ private enum MeetingBrowserFilter: String, CaseIterable, Identifiable {
             "This iPhone"
         case .fromMac:
             "From Mac"
-        case .processing:
-            "Processing"
-        case .needsAttention:
-            "Needs Review"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .all:
-            "tray.full"
-        case .thisIPhone:
-            "iphone"
-        case .fromMac:
-            "desktopcomputer"
-        case .processing:
-            "waveform.badge.magnifyingglass"
-        case .needsAttention:
-            "exclamationmark.triangle"
         }
     }
 
@@ -580,11 +612,81 @@ private enum MeetingBrowserFilter: String, CaseIterable, Identifiable {
             session.isFromThisIPhone
         case .fromMac:
             session.isFromMac
+        }
+    }
+}
+
+private enum MeetingStatusFilter: String, CaseIterable, Identifiable {
+    case all
+    case processing
+    case needsAttention
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all:
+            "All Statuses"
+        case .processing:
+            "Processing"
+        case .needsAttention:
+            "Needs Review"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all:
+            "tray.full"
+        case .processing:
+            "waveform.badge.magnifyingglass"
+        case .needsAttention:
+            "exclamationmark.triangle"
+        }
+    }
+
+    func includes(_ session: RecordingSession) -> Bool {
+        switch self {
+        case .all:
+            true
         case .processing:
             session.phase == .recording || session.phase == .transcriptionQueued || session.phase == .transcribing
         case .needsAttention:
             session.phase == .failed || session.phase == .cancelled
         }
+    }
+}
+
+private struct MeetingSourceFilterPicker: View {
+    @Binding var selection: MeetingSourceFilter
+
+    var body: some View {
+        HStack(spacing: MuesliTheme.spacing4) {
+            ForEach(MeetingSourceFilter.allCases) { filter in
+                Button {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        selection = filter
+                    }
+                } label: {
+                    Text(filter.title)
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(selection == filter ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(selection == filter ? MuesliTheme.accent.opacity(0.13) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Show \(filter.title.lowercased()) meetings")
+            }
+        }
+        .padding(3)
+        .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
     }
 }
 

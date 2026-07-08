@@ -819,6 +819,7 @@ private struct MeetingSessionDetailView: View {
     @State private var sharePayload: MeetingSharePayload?
     @State private var isConfirmingDelete = false
     @State private var isConfirmingAudioDelete = false
+    @State private var isConfirmingDiscardRecording = false
     @State private var editedTitle: String?
     @State private var titleDraft = ""
     @State private var isEditingTitle = false
@@ -891,6 +892,18 @@ private struct MeetingSessionDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes the saved meeting audio file. The transcript, summary, and manual notes stay in place.")
+        }
+        .confirmationDialog(
+            "Discard this meeting recording?",
+            isPresented: $isConfirmingDiscardRecording,
+            titleVisibility: .visible
+        ) {
+            Button("Discard Recording", role: .destructive) {
+                onDiscardRecording()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the in-progress audio recording and meeting notes from local history.")
         }
         .onAppear {
             manualNotesDraft = session.manualNotes ?? ""
@@ -997,7 +1010,9 @@ private struct MeetingSessionDetailView: View {
                         Spacer()
 
                         if isActiveRecording {
-                            Button(role: .destructive, action: onDiscardRecording) {
+                            Button(role: .destructive) {
+                                isConfirmingDiscardRecording = true
+                            } label: {
                                 Image(systemName: "trash")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(MuesliTheme.destructive)

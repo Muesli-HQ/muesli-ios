@@ -737,6 +737,64 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(syncedTranscript.summaryText, "New remote summary")
     }
 
+    func testStaleSyncedMeetingWithoutManualNotesDoesNotOverwriteNewerLocalState() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let transcriptID = UUID()
+        let session = RecordingSession(
+            id: UUID(),
+            requestID: nil,
+            kind: .meeting,
+            title: "Local completed meeting",
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            phase: .completed,
+            transcriptID: transcriptID,
+            engineIdentifier: "local-engine",
+            source: "ios",
+            cloudRecordName: nil
+        )
+        try store.saveSession(session)
+        try store.saveTranscript(Transcript(
+            id: transcriptID,
+            sessionID: session.id,
+            text: "Local completed transcript",
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            engineIdentifier: "local-engine",
+            summaryText: "Local summary"
+        ))
+
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: session.id.uuidString,
+            kind: .meeting,
+            title: "Stale remote title",
+            text: "Stale remote transcript",
+            speakerTranscript: nil,
+            summaryText: "Stale remote summary",
+            manualNotes: nil,
+            source: "macos",
+            engineIdentifier: "icloud",
+            createdAt: Date(timeIntervalSince1970: 900),
+            updatedAt: Date(timeIntervalSince1970: 950),
+            manualNotesUpdatedAt: nil,
+            startedAt: Date(timeIntervalSince1970: 900),
+            endedAt: Date(timeIntervalSince1970: 940),
+            durationSeconds: 40,
+            wordCount: 3,
+            isDeleted: false,
+            cloudChangeTag: "stale-tag"
+        ))
+
+        let syncedSession = try XCTUnwrap(try store.recordingSession(id: session.id))
+        let syncedTranscript = try XCTUnwrap(try store.transcript(for: session.id))
+        XCTAssertEqual(syncedSession.title, "Local completed meeting")
+        XCTAssertEqual(syncedSession.phase, .completed)
+        XCTAssertEqual(syncedSession.engineIdentifier, "local-engine")
+        XCTAssertEqual(syncedTranscript.text, "Local completed transcript")
+        XCTAssertEqual(syncedTranscript.summaryText, "Local summary")
+    }
+
     func testSyncedMeetingWithoutSourceDefaultsToMacOrigin() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

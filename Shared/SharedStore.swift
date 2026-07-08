@@ -1608,7 +1608,7 @@ private struct SharedStoreDatabase {
 
     private func upsertSyncedMeeting(_ record: SyncTextRecord, db: OpaquePointer) throws {
         let existingSession = try queryRows(
-            "SELECT id, manual_notes, manual_notes_updated_at, updated_at FROM recording_sessions WHERE cloud_record_name = ? LIMIT 1",
+            "SELECT id, manual_notes, manual_notes_updated_at, updated_at, payload FROM recording_sessions WHERE cloud_record_name = ? LIMIT 1",
             db: db
         ) { statement in
             try bind(record.id, to: statement, at: 1)
@@ -1617,21 +1617,60 @@ private struct SharedStoreDatabase {
                 id: sqliteColumnString(statement, 0),
                 manualNotes: sqliteColumnString(statement, 1),
                 manualNotesUpdatedAt: sqlite3_column_double(statement, 2),
-                updatedAt: sqlite3_column_double(statement, 3)
+                updatedAt: sqlite3_column_double(statement, 3),
+                payload: sqliteColumnData(statement, 4)
             )
         }.first ?? nil
+        let existingManualNotesUpdatedAt = existingSession?.manualNotesUpdatedAt ?? 0
         let incomingManualNotesUpdatedAt = record.manualNotesUpdatedAt?.timeIntervalSince1970
-            ?? ((existingSession?.manualNotesUpdatedAt ?? 0) > 0 ? 0 : record.updatedAt.timeIntervalSince1970)
+            ?? ((existingSession == nil || record.manualNotes != nil) ? record.updatedAt.timeIntervalSince1970 : 0)
         let shouldUseIncomingManualNotes = existingSession == nil
-            || incomingManualNotesUpdatedAt >= (existingSession?.manualNotesUpdatedAt ?? 0)
+            || incomingManualNotesUpdatedAt > existingManualNotesUpdatedAt
         let resolvedManualNotes = shouldUseIncomingManualNotes ? record.manualNotes : existingSession?.manualNotes
         let resolvedManualNotesUpdatedAt = shouldUseIncomingManualNotes
             ? incomingManualNotesUpdatedAt
-            : (existingSession?.manualNotesUpdatedAt ?? 0)
+            : existingManualNotesUpdatedAt
 
         if let existingSession,
-           existingSession.updatedAt > record.updatedAt.timeIntervalSince1970,
-           !shouldUseIncomingManualNotes {
+           existingSession.updatedAt > record.updatedAt.timeIntervalSince1970 {
+            if shouldUseIncomingManualNotes, let existingID = existingSession.id {
+                let encodedPayload: Data?
+                if let payload = existingSession.payload,
+                   var payloadSession = try? decoder.decode(RecordingSession.self, from: payload) {
+                    payloadSession.manualNotes = resolvedManualNotes
+                    encodedPayload = try encoder.encode(payloadSession)
+                } else {
+                    encodedPayload = nil
+                }
+                if let encodedPayload {
+                    try execute(
+                        """
+                        UPDATE recording_sessions
+                        SET manual_notes = ?, manual_notes_updated_at = ?, payload = ?
+                        WHERE id = ? AND deleted_at IS NULL
+                        """,
+                        db: db
+                    ) { statement in
+                        try bind(resolvedManualNotes, to: statement, at: 1)
+                        try bind(resolvedManualNotesUpdatedAt, to: statement, at: 2)
+                        try bind(encodedPayload, to: statement, at: 3)
+                        try bind(existingID, to: statement, at: 4)
+                    }
+                } else {
+                    try execute(
+                        """
+                        UPDATE recording_sessions
+                        SET manual_notes = ?, manual_notes_updated_at = ?
+                        WHERE id = ? AND deleted_at IS NULL
+                        """,
+                        db: db
+                    ) { statement in
+                        try bind(resolvedManualNotes, to: statement, at: 1)
+                        try bind(resolvedManualNotesUpdatedAt, to: statement, at: 2)
+                        try bind(existingID, to: statement, at: 3)
+                    }
+                }
+            }
             return
         }
 

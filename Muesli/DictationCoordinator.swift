@@ -257,6 +257,7 @@ final class DictationCoordinator {
     var liveDictationTranscript = ""
     var dictationHistory: [DictationResult] = []
     var recordingSessions: [RecordingSession] = []
+    private var transcriptCache: [UUID: Transcript] = [:]
     var isMeetingRecording = false
     var isMeetingTranscribing = false
     var activeMeetingTitle = "Untitled Meeting"
@@ -618,10 +619,25 @@ final class DictationCoordinator {
         do {
             dictationHistory = try store.resultsHistory()
             recordingSessions = try store.recordingSessions()
+            transcriptCache = transcriptsBySessionID(try store.transcripts())
             lastTranscript = dictationHistory.first?.text ?? lastTranscript
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    private func transcriptsBySessionID(_ transcripts: [Transcript]) -> [UUID: Transcript] {
+        transcripts.reduce(into: [:]) { cache, transcript in
+            cache[transcript.sessionID] = transcript
+        }
+    }
+
+    private func cacheTranscript(_ transcript: Transcript) {
+        transcriptCache[transcript.sessionID] = transcript
+    }
+
+    private func removeCachedTranscript(for sessionID: UUID) {
+        transcriptCache.removeValue(forKey: sessionID)
     }
 
     private func postProcessTranscript(_ text: String) -> String {
@@ -643,6 +659,7 @@ final class DictationCoordinator {
                     try? store.deleteAudioFile(fileName: audioFileName)
                 }
                 try? store.deleteTranscript(for: session.id)
+                removeCachedTranscript(for: session.id)
                 try? store.deleteRecordingSession(id: session.id)
                 recordingSessions.removeAll { $0.id == session.id }
             }
@@ -698,6 +715,7 @@ final class DictationCoordinator {
                 try? store.deleteAudioFile(fileName: audioFileName)
             }
             try store.deleteTranscript(for: session.id)
+            removeCachedTranscript(for: session.id)
             try store.deleteRecordingSession(id: session.id)
             recordingSessions.removeAll { $0.id == session.id }
             clipboardStatusText = "Deleted"
@@ -1157,7 +1175,7 @@ final class DictationCoordinator {
     }
 
     func transcript(for session: RecordingSession) -> Transcript? {
-        try? store.transcript(for: session.id)
+        transcriptCache[session.id]
     }
 
     func saveOnboardingProfile(name: String, useCase: OnboardingUseCase) {
@@ -1802,6 +1820,7 @@ final class DictationCoordinator {
                     engineIdentifier: engine.identifier
                 )
                 try store.saveTranscript(savedTranscript)
+                cacheTranscript(savedTranscript)
 
                 var completedSession = session
                 completedSession.phase = .completed
@@ -2066,6 +2085,7 @@ final class DictationCoordinator {
                         engineIdentifier: engine.identifier
                     )
                     try store.saveTranscript(savedTranscript)
+                    cacheTranscript(savedTranscript)
                     completedSession.phase = .completed
                     completedSession.audioFileName = completedSession.audioFileName ?? audioURL.lastPathComponent
                     completedSession.transcriptID = savedTranscript.id
@@ -2396,6 +2416,7 @@ final class DictationCoordinator {
             try? store.deleteAudioFile(fileName: audioFileName)
         }
         try? store.deleteTranscript(for: session.id)
+        removeCachedTranscript(for: session.id)
         try? store.deleteRecordingSession(id: session.id)
         recordingSessions.removeAll { $0.id == session.id }
         refreshHistory()
@@ -2506,7 +2527,12 @@ final class DictationCoordinator {
             diarizationState: .processing,
             summaryState: MuesliPreferences.meetingSummariesEnabled ? .processing : .notStarted
         )
-        try? store.saveTranscript(transcript)
+        do {
+            try store.saveTranscript(transcript)
+        } catch {
+            return
+        }
+        cacheTranscript(transcript)
         session.transcriptID = transcript.id
         session.engineIdentifier = engine.identifier
         _ = try? saveActiveMeetingSession(session)
@@ -2555,6 +2581,7 @@ final class DictationCoordinator {
                 )
                 guard shouldContinueMeetingFinalization(sessionID: session.id) else {
                     try? store.deleteTranscript(for: session.id)
+                    removeCachedTranscript(for: session.id)
                     meetingStatusText = "Ready"
                     cleanupMeetingChunks()
                     return
@@ -2823,6 +2850,7 @@ final class DictationCoordinator {
             summaryErrorMessage: summaryErrorMessage
         )
         try store.saveTranscript(transcript)
+        cacheTranscript(transcript)
         return FinalizedMeetingTranscript(transcript: transcript, resolvedTitle: resolvedTitle)
     }
 
@@ -2852,6 +2880,7 @@ final class DictationCoordinator {
             try? store.deleteAudioFile(fileName: audioFileName)
         }
         try? store.deleteTranscript(for: session.id)
+        removeCachedTranscript(for: session.id)
         try? store.deleteRecordingSession(id: session.id)
         activeSession = nil
         meetingRecorder = nil

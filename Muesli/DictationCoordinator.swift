@@ -681,7 +681,8 @@ final class DictationCoordinator {
     @discardableResult
     func deleteDictationAudio(for result: DictationResult) -> Bool {
         do {
-            guard var session = recordingSession(for: result),
+            guard let sessionID = result.sessionID,
+                  var session = try store.activeRecordingSession(id: sessionID),
                   let audioFileName = session.audioFileName
             else {
                 clipboardStatusText = "Audio already removed"
@@ -792,7 +793,13 @@ final class DictationCoordinator {
 
     func updateMeetingManualNotes(sessionID: UUID, notes: String) {
         do {
-            try store.updateMeetingManualNotes(sessionID: sessionID, manualNotes: notes)
+            guard try store.updateMeetingManualNotes(sessionID: sessionID, manualNotes: notes) else {
+                clipboardStatusText = "Notes save failed"
+                clearClipboardStatusSoon()
+                refreshHistory()
+                return
+            }
+
             if activeSession?.id == sessionID {
                 activeSession?.manualNotes = notes
             }

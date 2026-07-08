@@ -624,6 +624,29 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(record.manualNotes, "Follow up with Alex.")
     }
 
+    func testUpdateMeetingManualNotesReportsMissingOrNonMeetingSession() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let dictationSession = RecordingSession(
+            id: UUID(),
+            requestID: UUID(),
+            kind: .quickDictation,
+            title: "Voice note",
+            createdAt: Date(timeIntervalSince1970: 100),
+            phase: .completed,
+            source: "ios"
+        )
+        try store.saveSession(dictationSession)
+
+        XCTAssertFalse(try store.updateMeetingManualNotes(sessionID: UUID(), manualNotes: "Missing"))
+        XCTAssertFalse(try store.updateMeetingManualNotes(sessionID: dictationSession.id, manualNotes: "Wrong kind"))
+
+        let saved = try XCTUnwrap(try store.recordingSession(id: dictationSession.id))
+        XCTAssertNil(saved.manualNotes)
+    }
+
     func testSyncedMeetingPreservesManualNotes() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -901,9 +924,11 @@ final class SharedStoreTests: XCTestCase {
         )
 
         let store = SharedStore(containerURL: directory)
+        var expectedSession = session
+        expectedSession.cloudRecordName = session.id.uuidString
 
         XCTAssertEqual(try store.resultsHistory(), [result])
-        XCTAssertEqual(try store.recordingSessions(), [session])
+        XCTAssertEqual(try store.recordingSessions(), [expectedSession])
         XCTAssertEqual(try store.transcript(for: session.id), transcript)
         XCTAssertEqual(try store.customWords(), [customWord])
         XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 3)

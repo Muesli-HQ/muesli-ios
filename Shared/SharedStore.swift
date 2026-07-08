@@ -148,7 +148,8 @@ struct SharedStore: Sendable {
         try database().deleteRecordingSession(id: id)
     }
 
-    func updateMeetingManualNotes(sessionID: UUID, manualNotes: String) throws {
+    @discardableResult
+    func updateMeetingManualNotes(sessionID: UUID, manualNotes: String) throws -> Bool {
         try database().updateMeetingManualNotes(sessionID: sessionID, manualNotes: manualNotes)
     }
 
@@ -910,9 +911,9 @@ private struct SharedStoreDatabase {
 
     private func ensureInitialized(_ db: OpaquePointer) throws {
         Self.initializationLock.lock()
-        let didInitialize = Self.initializedDatabasePaths.contains(databaseURL.path)
-        Self.initializationLock.unlock()
-        guard !didInitialize else { return }
+        defer { Self.initializationLock.unlock() }
+
+        guard !Self.initializedDatabasePaths.contains(databaseURL.path) else { return }
 
         try exec(Self.schemaSQL, db: db)
         try migrateSchemaIfNeeded(db)
@@ -920,9 +921,7 @@ private struct SharedStoreDatabase {
         try backfillNormalizedColumns(db)
         try setUserVersion(Self.schemaVersion, db: db)
 
-        Self.initializationLock.lock()
         Self.initializedDatabasePaths.insert(databaseURL.path)
-        Self.initializationLock.unlock()
     }
 
     private func migrateSchemaIfNeeded(_ db: OpaquePointer) throws {
@@ -1397,8 +1396,10 @@ private struct SharedStoreDatabase {
         }
     }
 
-    func updateMeetingManualNotes(sessionID: UUID, manualNotes: String) throws {
+    @discardableResult
+    func updateMeetingManualNotes(sessionID: UUID, manualNotes: String) throws -> Bool {
         try withDatabase { db in
+            var didUpdate = false
             try transaction(db: db) {
                 guard let data = try querySingleBlob(
                     "SELECT payload FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
@@ -1427,7 +1428,9 @@ private struct SharedStoreDatabase {
                     try bind(try encoder.encode(session), to: statement, at: 3)
                     try bind(sessionID.uuidString, to: statement, at: 4)
                 }
+                didUpdate = true
             }
+            return didUpdate
         }
     }
 

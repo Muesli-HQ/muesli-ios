@@ -654,6 +654,7 @@ final class SharedStoreTests: XCTestCase {
         let session = try XCTUnwrap(try store.recordingSession(id: sessionID))
         XCTAssertEqual(session.manualNotes, "Mac-side written notes")
         XCTAssertEqual(session.source, "macos")
+        XCTAssertEqual(session.cloudRecordName, recordID)
     }
 
     func testSyncedMeetingWithoutSourceDefaultsToMacOrigin() throws {
@@ -685,6 +686,38 @@ final class SharedStoreTests: XCTestCase {
         let sessionID = try XCTUnwrap(UUID(uuidString: recordID))
         let session = try XCTUnwrap(try store.recordingSession(id: sessionID))
         XCTAssertEqual(session.source, "macos")
+        XCTAssertEqual(session.cloudRecordName, recordID)
+    }
+
+    func testSyncedMacMeetingWithStaleIOSSourceClassifiesFromCloudRecordName() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let recordID = "meeting-\(UUID().uuidString)"
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: recordID,
+            kind: .meeting,
+            title: "Legacy source sync",
+            text: "Transcript",
+            speakerTranscript: nil,
+            summaryText: nil,
+            manualNotes: nil,
+            source: "ios",
+            engineIdentifier: nil,
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 150),
+            startedAt: Date(timeIntervalSince1970: 90),
+            endedAt: Date(timeIntervalSince1970: 140),
+            durationSeconds: 50,
+            wordCount: 1,
+            isDeleted: false,
+            cloudChangeTag: "tag"
+        ))
+
+        let session = try XCTUnwrap(try store.recordingSessions().first { $0.cloudRecordName == recordID })
+        XCTAssertEqual(session.source, "ios")
+        XCTAssertEqual(SyncOrigin.classify(source: session.source, cloudRecordName: session.cloudRecordName), .fromMac)
     }
 
     func testRecordingSessionDecodesLegacyPayloadWithoutAudioRetentionFlag() throws {

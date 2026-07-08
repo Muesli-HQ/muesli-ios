@@ -461,43 +461,51 @@ private struct SharedStoreDatabase {
 
     func recordingSessions() throws -> [RecordingSession] {
         try withDatabase { db in
-            try queryBlobs(
-                "SELECT payload FROM recording_sessions WHERE deleted_at IS NULL ORDER BY created_at DESC",
+            try queryRows(
+                "SELECT payload, cloud_record_name FROM recording_sessions WHERE deleted_at IS NULL ORDER BY created_at DESC",
                 db: db
-            ) { _ in }.map { try decoder.decode(RecordingSession.self, from: $0) }
+            ) { _ in } read: { statement in
+                try decodeRecordingSession(statement)
+            }
         }
     }
 
     func recordingSession(id: UUID) throws -> RecordingSession? {
         try withDatabase { db in
-            try querySingleBlob(
-                "SELECT payload FROM recording_sessions WHERE id = ? LIMIT 1",
+            try queryRows(
+                "SELECT payload, cloud_record_name FROM recording_sessions WHERE id = ? LIMIT 1",
                 db: db
             ) { statement in
                 try bind(id.uuidString, to: statement, at: 1)
-            }.map { try decoder.decode(RecordingSession.self, from: $0) }
+            } read: { statement in
+                try decodeRecordingSession(statement)
+            }.first
         }
     }
 
     func activeRecordingSession(id: UUID) throws -> RecordingSession? {
         try withDatabase { db in
-            try querySingleBlob(
-                "SELECT payload FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+            try queryRows(
+                "SELECT payload, cloud_record_name FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
                 db: db
             ) { statement in
                 try bind(id.uuidString, to: statement, at: 1)
-            }.map { try decoder.decode(RecordingSession.self, from: $0) }
+            } read: { statement in
+                try decodeRecordingSession(statement)
+            }.first
         }
     }
 
     func recordingSession(requestID: UUID) throws -> RecordingSession? {
         try withDatabase { db in
-            try querySingleBlob(
-                "SELECT payload FROM recording_sessions WHERE request_id = ? LIMIT 1",
+            try queryRows(
+                "SELECT payload, cloud_record_name FROM recording_sessions WHERE request_id = ? LIMIT 1",
                 db: db
             ) { statement in
                 try bind(requestID.uuidString, to: statement, at: 1)
-            }.map { try decoder.decode(RecordingSession.self, from: $0) }
+            } read: { statement in
+                try decodeRecordingSession(statement)
+            }.first
         }
     }
 
@@ -660,7 +668,8 @@ private struct SharedStoreDatabase {
                     speakerTranscript: nil,
                     summaryText: nil,
                     manualNotes: nil,
-                    source: Self.syncSource(result?.source),
+                    source: Self.syncPlatformSource(result?.source),
+                    localSource: Self.syncSource(result?.source),
                     engineIdentifier: sqliteColumnString(statement, 2),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
                     updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
@@ -713,7 +722,8 @@ private struct SharedStoreDatabase {
                     speakerTranscript: sqliteColumnString(statement, 15),
                     summaryText: summary,
                     manualNotes: manualNotes,
-                    source: Self.syncSource(session?.source),
+                    source: Self.syncPlatformSource(session?.source),
+                    localSource: Self.syncSource(session?.source, fallback: "meeting"),
                     engineIdentifier: sqliteColumnString(statement, 8),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
                     updatedAt: Date(timeIntervalSince1970: updated),
@@ -756,7 +766,8 @@ private struct SharedStoreDatabase {
                     speakerTranscript: nil,
                     summaryText: nil,
                     manualNotes: nil,
-                    source: Self.syncSource(result?.source),
+                    source: Self.syncPlatformSource(result?.source),
+                    localSource: Self.syncSource(result?.source),
                     engineIdentifier: sqliteColumnString(statement, 2),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
                     updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
@@ -808,7 +819,8 @@ private struct SharedStoreDatabase {
                     speakerTranscript: sqliteColumnString(statement, 15),
                     summaryText: summary,
                     manualNotes: manualNotes,
-                    source: Self.syncSource(session?.source),
+                    source: Self.syncPlatformSource(session?.source),
+                    localSource: Self.syncSource(session?.source, fallback: "meeting"),
                     engineIdentifier: sqliteColumnString(statement, 8),
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
                     updatedAt: Date(timeIntervalSince1970: updated),
@@ -1605,6 +1617,7 @@ private struct SharedStoreDatabase {
             transcriptID: transcriptID,
             engineIdentifier: record.engineIdentifier,
             source: importedSource,
+            cloudRecordName: record.id,
             errorMessage: nil
         )
         var sessionWithManualNotes = session
@@ -1795,6 +1808,15 @@ private struct SharedStoreDatabase {
         }
     }
 
+    private func decodeRecordingSession(_ statement: OpaquePointer) throws -> RecordingSession {
+        guard let payload = sqliteColumnData(statement, 0) else {
+            throw SharedStoreDatabaseError.stepFailed("Missing recording session payload")
+        }
+        var session = try decoder.decode(RecordingSession.self, from: payload)
+        session.cloudRecordName = sqliteColumnString(statement, 1)
+        return session
+    }
+
     private func forEachRow(
         _ sql: String,
         db: OpaquePointer,
@@ -1930,6 +1952,22 @@ private struct SharedStoreDatabase {
             return fallback
         }
         return normalized
+    }
+
+    private static func syncPlatformSource(_ source: String?, fallback: String = "ios") -> String {
+        guard let normalized = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty else {
+            return fallback
+        }
+
+        switch normalized {
+        case "ios", "iphone", "app", "keyboard":
+            return "ios"
+        case "macos", "mac", "dictation", "cua", "meeting", "audio_import":
+            return "macos"
+        default:
+            return fallback
+        }
     }
 
     private static let schemaSQL = """

@@ -47,10 +47,12 @@ final class DictationModelsTests: XCTestCase {
     }
 
     func testSyncOriginClassifiesRemoteSourcesAsFromMac() {
+        let macMeetingRecordName = "meeting-\(UUID().uuidString)"
         XCTAssertEqual(SyncOrigin.classify(source: "macos"), .fromMac)
         XCTAssertEqual(SyncOrigin.classify(source: "meeting"), .fromMac)
         XCTAssertEqual(SyncOrigin.classify(source: nil, engineIdentifier: "icloud"), .fromMac)
         XCTAssertEqual(SyncOrigin.classify(source: nil, cloudRecordName: "meeting-123"), .fromMac)
+        XCTAssertEqual(SyncOrigin.classify(source: "ios", cloudRecordName: macMeetingRecordName), .fromMac)
         XCTAssertEqual(SyncOrigin.classify(source: nil, importedFromCloud: true), .fromMac)
     }
 

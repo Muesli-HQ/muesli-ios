@@ -1815,7 +1815,11 @@ private enum MeetingExportFormatter {
 
 private extension RecordingSession {
     var syncOrigin: SyncOrigin {
-        SyncOrigin.classify(source: source, engineIdentifier: engineIdentifier)
+        SyncOrigin.classify(
+            source: source,
+            engineIdentifier: engineIdentifier,
+            cloudRecordName: cloudRecordName
+        )
     }
 
     var isFromMac: Bool {

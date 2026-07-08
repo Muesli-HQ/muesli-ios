@@ -154,6 +154,13 @@ struct MeetingLifecycleState: Equatable {
         if case .cancelling = phase { true } else { false }
     }
 
+    func isStarting(sessionID: UUID) -> Bool {
+        if case .starting(let id) = phase {
+            return id == sessionID
+        }
+        return false
+    }
+
     var isRecordingVisible: Bool {
         switch phase {
         case .starting, .recording, .stopping:
@@ -2495,6 +2502,7 @@ final class DictationCoordinator {
             guard isCurrentMeetingLifecycle(sessionID: session.id) else { return }
             session.phase = .failed
             session.errorMessage = error.localizedDescription
+            cleanupNonRetainedAudio(for: &session)
             try? store.saveSession(session)
             activeSession = nil
             meetingStatusText = error.localizedDescription
@@ -2514,13 +2522,18 @@ final class DictationCoordinator {
         guard var session = activeSession ?? persistedRecordingMeetingSession,
               session.kind == .meeting
         else { return }
-        session.endedAt = .now
+
+        if meetingLifecycleState.isStarting(sessionID: session.id) {
+            stopMeetingStartup(session)
+            return
+        }
 
         guard session.audioFileName != nil else {
             stopMeetingStartup(session)
             return
         }
 
+        session.endedAt = .now
         isMeetingRecording = false
         isMeetingTranscribing = false
         meetingRecorder = nil

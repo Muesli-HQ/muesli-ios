@@ -442,6 +442,7 @@ struct MeetingsView: View {
                     .overlay(Circle().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Filter and sort meetings")
         }
     }
 
@@ -928,6 +929,7 @@ private struct MeetingSessionDetailView: View {
     @State private var manualNotesDraft = ""
     @State private var manualNotesSaveState: ManualNotesSaveState = .saved
     @State private var manualNotesSaveTask: Task<Void, Never>?
+    @State private var isLeavingAfterDestructiveAction = false
     @State private var recordingPulse = false
     @State private var isEditingCompletedManualNotes = false
 
@@ -976,6 +978,8 @@ private struct MeetingSessionDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Delete Meeting", role: .destructive) {
+                isLeavingAfterDestructiveAction = true
+                manualNotesSaveTask?.cancel()
                 onDelete()
                 dismiss()
             }
@@ -1001,6 +1005,8 @@ private struct MeetingSessionDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Discard Recording", role: .destructive) {
+                isLeavingAfterDestructiveAction = true
+                manualNotesSaveTask?.cancel()
                 onDiscardRecording()
             }
             Button("Cancel", role: .cancel) {}
@@ -1015,6 +1021,7 @@ private struct MeetingSessionDetailView: View {
             manualNotesDraft = newValue
         }
         .onDisappear {
+            guard !isLeavingAfterDestructiveAction else { return }
             flushPendingManualNotes()
         }
     }
@@ -1814,14 +1821,6 @@ private enum MeetingExportFormatter {
 }
 
 private extension RecordingSession {
-    var syncOrigin: SyncOrigin {
-        SyncOrigin.classify(
-            source: source,
-            engineIdentifier: engineIdentifier,
-            cloudRecordName: cloudRecordName
-        )
-    }
-
     var isFromMac: Bool {
         syncOrigin == .fromMac
     }

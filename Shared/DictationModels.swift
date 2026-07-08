@@ -341,6 +341,10 @@ struct DictationResult: Codable, Sendable, Equatable, Identifiable {
         self.engineIdentifier = engineIdentifier
         self.source = source
     }
+
+    var syncOrigin: SyncOrigin {
+        SyncOrigin.classify(source: source, engineIdentifier: engineIdentifier)
+    }
 }
 
 struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
@@ -400,6 +404,14 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var duration: TimeInterval? {
         guard let startedAt else { return nil }
         return (endedAt ?? .now).timeIntervalSince(startedAt)
+    }
+
+    var syncOrigin: SyncOrigin {
+        SyncOrigin.classify(
+            source: source,
+            engineIdentifier: engineIdentifier,
+            cloudRecordName: cloudRecordName
+        )
     }
 
     enum CodingKeys: String, CodingKey {

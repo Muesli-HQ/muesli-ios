@@ -56,6 +56,17 @@ final class DictationModelsTests: XCTestCase {
         XCTAssertEqual(SyncOrigin.classify(source: nil, importedFromCloud: true), .fromMac)
     }
 
+    func testRecordingSessionSyncOriginUsesCloudRecordNameBeforeStaleSource() {
+        let session = RecordingSession(
+            kind: .meeting,
+            engineIdentifier: nil,
+            source: "ios",
+            cloudRecordName: "meeting-\(UUID().uuidString)"
+        )
+
+        XCTAssertEqual(session.syncOrigin, .fromMac)
+    }
+
     func testFillerWordFilterRemovesCommonDisfluencies() {
         let filtered = FillerWordFilter.apply("um you know, muesli is kind of working")
 

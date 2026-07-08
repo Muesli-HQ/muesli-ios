@@ -61,4 +61,17 @@ final class MeetingLifecycleReducerTests: XCTestCase {
         XCTAssertTrue(state.isCancelling)
         XCTAssertFalse(state.isRecordingVisible)
     }
+
+    func testLifecycleReportsOnlyTheActiveStartupSessionAsStarting() {
+        let sessionID = UUID()
+        let otherID = UUID()
+        let state = MeetingLifecycleReducer.reduce(
+            MeetingLifecycleState(),
+            event: .startRequested(sessionID)
+        )
+
+        XCTAssertTrue(state.isStarting(sessionID: sessionID))
+        XCTAssertFalse(state.isStarting(sessionID: otherID))
+        XCTAssertFalse(MeetingLifecycleState().isStarting(sessionID: sessionID))
+    }
 }

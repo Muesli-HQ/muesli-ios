@@ -1203,18 +1203,6 @@ private extension SyncOrigin {
     }
 }
 
-private extension RecordingSession {
-    var syncOrigin: SyncOrigin {
-        SyncOrigin.classify(source: source, engineIdentifier: engineIdentifier)
-    }
-}
-
-private extension DictationResult {
-    var syncOrigin: SyncOrigin {
-        SyncOrigin.classify(source: source, engineIdentifier: engineIdentifier)
-    }
-}
-
 private struct DictationSourceFilterPicker: View {
     @Binding var selection: DictationSourceFilter
 

@@ -12,6 +12,8 @@ struct DictationView: View {
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
+    @AppStorage(MuesliPreferences.longVoiceNoteModeEnabledKey) private var longVoiceNoteModeEnabled = true
+    @AppStorage(MuesliPreferences.longVoiceNoteThresholdSecondsKey) private var longVoiceNoteThresholdSeconds = 60
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
@@ -428,6 +430,28 @@ struct DictationView: View {
                 }
                 .padding(.top, isWaveformActive || shouldShowRealtimeTranscript ? 0 : MuesliTheme.spacing4)
 
+                if longVoiceNoteModeEnabled && !coordinator.isRecording {
+                    Button {
+                        coordinator.openLongVoiceNoteSettings()
+                    } label: {
+                        HStack(spacing: MuesliTheme.spacing8) {
+                            Image(systemName: "waveform.path.ecg")
+                                .foregroundStyle(MuesliTheme.accent)
+                            Text("Long mode after \(longModeThresholdLabel)")
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(MuesliTheme.textTertiary)
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens Long Voice Note settings")
+                }
+
                 if shouldShowKeyboardSetupRow && !shouldHideKeyboardSetupRowForMockPreview && !coordinator.isRecording {
                     keyboardShortcutRow
                 }
@@ -439,6 +463,14 @@ struct DictationView: View {
             guard isActive else { return }
             await runPreviewWaveformIfNeeded()
         }
+    }
+
+    private var longModeThresholdLabel: String {
+        let seconds = MuesliPreferences.clampedLongVoiceNoteThreshold(longVoiceNoteThresholdSeconds)
+        if seconds == 60 { return "1 min" }
+        if seconds % 60 == 0 { return "\(seconds / 60) min" }
+        if seconds > 60 { return "\(seconds / 60)m \(seconds % 60)s" }
+        return "\(seconds) sec"
     }
 
     private var microphoneMenu: some View {
@@ -522,7 +554,7 @@ struct DictationView: View {
                     Text("Recent Voice Notes")
                         .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("\(displayHistory.count) saved")
+                    Text("\(voiceNoteTimeline.count) saved")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }
@@ -543,7 +575,7 @@ struct DictationView: View {
                 }
             }
 
-            if !displayHistory.isEmpty {
+            if !voiceNoteTimeline.isEmpty {
                 DictationSourceFilterPicker(selection: $sourceFilter)
             }
         }
@@ -552,30 +584,51 @@ struct DictationView: View {
     @ViewBuilder
     private var historyRows: some View {
         Group {
-            if filteredHistory.isEmpty {
+            if voiceNoteTimeline.isEmpty {
                 emptyHistory
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
-                    ForEach(filteredHistory) { result in
-                        let session = coordinator.recordingSession(for: result)
-                        let hasRetainedAudio = session?.keepsAudioRecording == true && coordinator.audioFileURL(for: result) != nil
-                        if hasRetainedAudio {
-                            NavigationLink(value: result.id) {
+                    ForEach(voiceNoteTimeline) { item in
+                        switch item {
+                        case .recoverable(let session):
+                            RecoverableVoiceNoteRow(session: session) {
+                                coordinator.openLongVoiceNote(session)
+                            }
+                        case .completed(let result, let session):
+                        let hasRetainedAudio = session?.keepsAudioRecording == true
+                            && session.flatMap { coordinator.audioFileURL(for: $0) } != nil
+                            if session?.isLongForm == true {
+                                Button {
+                                    if let session {
+                                        coordinator.openLongVoiceNote(session)
+                                    }
+                                } label: {
+                                    DictationHistoryRow(
+                                        result: result,
+                                        hasRetainedAudio: hasRetainedAudio,
+                                        onCopy: { coordinator.copyToClipboard(result) },
+                                        onDelete: { coordinator.deleteDictation(result) }
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            } else if hasRetainedAudio {
+                                NavigationLink(value: result.id) {
+                                    DictationHistoryRow(
+                                        result: result,
+                                        hasRetainedAudio: true,
+                                        onCopy: { coordinator.copyToClipboard(result) },
+                                        onDelete: { coordinator.deleteDictation(result) }
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            } else {
                                 DictationHistoryRow(
                                     result: result,
-                                    hasRetainedAudio: true,
+                                    hasRetainedAudio: false,
                                     onCopy: { coordinator.copyToClipboard(result) },
                                     onDelete: { coordinator.deleteDictation(result) }
                                 )
                             }
-                            .buttonStyle(.plain)
-                        } else {
-                            DictationHistoryRow(
-                                result: result,
-                                hasRetainedAudio: false,
-                                onCopy: { coordinator.copyToClipboard(result) },
-                                onDelete: { coordinator.deleteDictation(result) }
-                            )
                         }
                     }
                 }
@@ -585,6 +638,24 @@ struct DictationView: View {
 
     private var filteredHistory: [DictationResult] {
         displayHistory.filter { sourceFilter.includes($0.syncOrigin) }
+    }
+
+    private var filteredRecoverableVoiceNotes: [RecordingSession] {
+        coordinator.recoverableVoiceNoteSessions.filter { sourceFilter.includes($0.syncOrigin) }
+    }
+
+    private var voiceNoteTimeline: [VoiceNoteTimelineItem] {
+        let sessionsByID = Dictionary(
+            uniqueKeysWithValues: coordinator.recordingSessions.map { ($0.id, $0) }
+        )
+        let completed = filteredHistory.map { result in
+            VoiceNoteTimelineItem.completed(
+                result,
+                result.sessionID.flatMap { sessionsByID[$0] }
+            )
+        }
+        let recoverable = filteredRecoverableVoiceNotes.map(VoiceNoteTimelineItem.recoverable)
+        return VoiceNoteTimelineItem.mergeNewestFirst(completed, recoverable)
     }
 
     private var statsHistory: [DictationResult] {
@@ -876,6 +947,99 @@ private struct DictationHomeStatTile: View {
         .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 3)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(value) \(label)")
+    }
+}
+
+private enum VoiceNoteTimelineItem: Identifiable {
+    case completed(DictationResult, RecordingSession?)
+    case recoverable(RecordingSession)
+
+    var id: String {
+        switch self {
+        case .completed(let result, _): "result-\(result.id.uuidString)"
+        case .recoverable(let session): "session-\(session.id.uuidString)"
+        }
+    }
+
+    var createdAt: Date {
+        switch self {
+        case .completed(let result, _): result.createdAt
+        case .recoverable(let session): session.createdAt
+        }
+    }
+
+    static func mergeNewestFirst(
+        _ completed: [VoiceNoteTimelineItem],
+        _ recoverable: [VoiceNoteTimelineItem]
+    ) -> [VoiceNoteTimelineItem] {
+        var completedIndex = 0
+        var recoverableIndex = 0
+        var merged: [VoiceNoteTimelineItem] = []
+        merged.reserveCapacity(completed.count + recoverable.count)
+
+        while completedIndex < completed.count || recoverableIndex < recoverable.count {
+            if completedIndex == completed.count {
+                merged.append(recoverable[recoverableIndex])
+                recoverableIndex += 1
+            } else if recoverableIndex == recoverable.count
+                        || completed[completedIndex].createdAt >= recoverable[recoverableIndex].createdAt {
+                merged.append(completed[completedIndex])
+                completedIndex += 1
+            } else {
+                merged.append(recoverable[recoverableIndex])
+                recoverableIndex += 1
+            }
+        }
+        return merged
+    }
+}
+
+private struct RecoverableVoiceNoteRow: View {
+    let session: RecordingSession
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: session.audioFileName == nil ? "waveform.slash" : "waveform.badge.exclamationmark")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(session.audioFileName == nil ? MuesliTheme.destructive : MuesliTheme.accent)
+                    .frame(width: 36, height: 36)
+                    .background(MuesliTheme.accentSubtle)
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text(session.audioFileName == nil ? "Audio unavailable" : "Needs transcription")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(session.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                    if let scratchpad = session.scratchpadText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !scratchpad.isEmpty {
+                        Text(scratchpad)
+                            .font(MuesliTheme.callout())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer(minLength: MuesliTheme.spacing8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+            .padding(MuesliTheme.spacing16)
+            .background(MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
+                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(session.audioFileName == nil ? "Opens recovery details" : "Opens retry actions")
     }
 }
 

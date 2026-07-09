@@ -228,6 +228,39 @@ struct SharedStore: Sendable {
         try? deleteExportedAudioFile(fileName: fileName)
     }
 
+    func voiceNoteCheckpointDirectoryURL(sessionID: UUID) throws -> URL {
+        let root = try recordingsDirectoryURL()
+            .appendingPathComponent("VoiceNoteCheckpoints", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableRoot = root
+        try? mutableRoot.setResourceValues(values)
+
+        let directory = root.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    func deleteVoiceNoteCheckpoints(sessionID: UUID) throws {
+        let directory = try recordingsDirectoryURL()
+            .appendingPathComponent("VoiceNoteCheckpoints", isDirectory: true)
+            .appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        try FileManager.default.removeItem(at: directory)
+    }
+
+    func voiceNoteCheckpointSessionIDs() throws -> [UUID] {
+        let root = try recordingsDirectoryURL()
+            .appendingPathComponent("VoiceNoteCheckpoints", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: root.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ).compactMap { UUID(uuidString: $0.lastPathComponent) }
+    }
+
     @discardableResult
     func exportAudioFileToDocuments(fileName: String) throws -> URL {
         let sourceURL = try audioFileURL(fileName: fileName)

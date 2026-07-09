@@ -3,12 +3,19 @@ import Foundation
 import os
 
 final class KeyboardSessionKeeper: @unchecked Sendable {
+    struct SegmentResult: Sendable {
+        let audioURL: URL
+        let finalCheckpoint: MeetingAudioChunk?
+        let writerFailure: CheckpointingAudioWriterFailure?
+    }
+
     private final class ConverterInputState: @unchecked Sendable {
         var didProvideInput = false
     }
 
     private struct FileState {
         var activeFile: AVAudioFile?
+        var checkpointWriter: CheckpointingAudioWriter?
         var activeURL: URL?
         var activeSegmentID: UUID?
         var latestPowerDB: Float = -160
@@ -34,6 +41,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
     private var isStarting = false
     private var tapInstalled = false
     private var inputActivityHandler: (@Sendable (_ powerDB: Float, _ isCapturing: Bool) -> Void)?
+    var onRecordingFailure: (@Sendable (CheckpointingAudioWriterFailure) -> Void)?
 
     private static let sampleRate: Double = 16_000
     private static let bufferSize: AVAudioFrameCount = 2_048
@@ -60,7 +68,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
 
     var isRecordingSegment: Bool {
         lock.lock()
-        let recording = state.activeFile != nil
+        let recording = state.activeFile != nil || state.checkpointWriter != nil
         lock.unlock()
         return recording
     }
@@ -113,17 +121,31 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         lock.unlock()
     }
 
-    func beginSegment(outputURL: URL) throws {
+    func beginSegment(outputURL: URL, checkpointDirectory: URL? = nil) throws {
         guard isRunning else {
             throw AudioRecorder.RecordingError.startFailed(stage: "keyboard session inactive")
         }
 
         try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let file = try AVAudioFile(forWriting: outputURL, settings: Self.makeTargetFormat().settings)
+        let format = try Self.makeTargetFormat()
+        let file = try checkpointDirectory == nil
+            ? AVAudioFile(forWriting: outputURL, settings: format.settings)
+            : nil
+        let writer = try checkpointDirectory.map {
+            try CheckpointingAudioWriter(
+                continuousAudioURL: outputURL,
+                checkpointDirectory: $0,
+                format: format
+            )
+        }
+        writer?.onFailure = { [weak self] failure in
+            self?.onRecordingFailure?(failure)
+        }
         let segmentID = UUID()
 
         lock.lock()
         state.activeFile = file
+        state.checkpointWriter = writer
         state.activeURL = outputURL
         state.activeSegmentID = segmentID
         state.segmentFrames = 0
@@ -132,30 +154,46 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
     }
 
     @discardableResult
-    func finishSegment() throws -> URL {
+    func finishSegment() throws -> SegmentResult {
         lock.lock()
         state.isFinishingSegment = true
         let url = state.activeURL
         let segmentID = state.activeSegmentID
+        let writer = state.checkpointWriter
         lock.unlock()
 
-        if segmentID != nil {
+        if segmentID != nil, writer == nil {
             fileWriteQueue.sync {}
         }
+
+        let writerResult = writer?.finish()
 
         lock.lock()
         let frameCount = segmentID == state.activeSegmentID ? state.segmentFrames : 0
         state.activeFile = nil
+        state.checkpointWriter = nil
         state.activeURL = nil
         state.activeSegmentID = nil
         state.segmentFrames = 0
         state.isFinishingSegment = false
         lock.unlock()
 
-        guard let url, frameCount > 0 else {
+        let recordedFrames = writerResult?.totalFrames ?? frameCount
+        guard let url, recordedFrames > 0 else {
             throw AudioRecorder.RecordingError.noRecording
         }
-        return url
+        return SegmentResult(
+            audioURL: url,
+            finalCheckpoint: writerResult?.finalCheckpoint,
+            writerFailure: writerResult?.failure
+        )
+    }
+
+    func rotateSegmentCheckpoint() -> MeetingAudioChunk? {
+        lock.lock()
+        let writer = state.checkpointWriter
+        lock.unlock()
+        return writer?.rotateCheckpoint()
     }
 
     func cancelSegment() {
@@ -163,14 +201,17 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         state.isFinishingSegment = true
         let url = state.activeURL
         let segmentID = state.activeSegmentID
+        let writer = state.checkpointWriter
         lock.unlock()
 
-        if segmentID != nil {
+        if segmentID != nil, writer == nil {
             fileWriteQueue.sync {}
         }
+        writer?.cancel()
 
         lock.lock()
         state.activeFile = nil
+        state.checkpointWriter = nil
         state.activeURL = nil
         state.activeSegmentID = nil
         state.segmentFrames = 0
@@ -227,6 +268,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         let handler: (@Sendable (_ powerDB: Float, _ isCapturing: Bool) -> Void)?
         let shouldNotifyActivity: Bool
         let file: AVAudioFile?
+        let checkpointWriter: CheckpointingAudioWriter?
         let segmentID: UUID?
 
         lock.lock()
@@ -236,9 +278,17 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         {
             file = activeFile
             segmentID = activeSegmentID
+            checkpointWriter = state.checkpointWriter
+        } else if let activeSegmentID = state.activeSegmentID,
+                  let writer = state.checkpointWriter,
+                  !state.isFinishingSegment {
+            file = nil
+            segmentID = activeSegmentID
+            checkpointWriter = writer
         } else {
             file = nil
             segmentID = nil
+            checkpointWriter = nil
         }
         state.latestPowerDB = powerDB
         state.lastInputBufferAt = now
@@ -249,8 +299,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         handler = inputActivityHandler
         lock.unlock()
 
-        if let file,
-           let segmentID,
+        if let segmentID,
            let monoBuffer = convert(buffer: buffer, targetFormat: targetFormat)
         {
             let frameCount = Int(monoBuffer.frameLength)
@@ -260,18 +309,22 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
                 lock.unlock()
 
                 if shouldWrite {
-                    enqueue(PendingFileWrite(
-                        segmentID: segmentID,
-                        file: file,
-                        buffer: monoBuffer,
-                        frameCount: frameCount
-                    ))
+                    if let checkpointWriter {
+                        checkpointWriter.append(monoBuffer)
+                    } else if let file {
+                        enqueue(PendingFileWrite(
+                            segmentID: segmentID,
+                            file: file,
+                            buffer: monoBuffer,
+                            frameCount: frameCount
+                        ))
+                    }
                 }
             }
         }
 
         if shouldNotifyActivity {
-            handler?(powerDB, file != nil)
+            handler?(powerDB, file != nil || checkpointWriter != nil)
         }
     }
 

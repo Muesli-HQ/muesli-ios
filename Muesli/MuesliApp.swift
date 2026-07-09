@@ -22,6 +22,7 @@ struct MuesliApp: App {
                     if phase == .active {
                         coordinator.prewarmModelIfNeeded(reason: "foreground")
                         coordinator.syncICloudTextIfEnabled(reason: "foreground")
+                        coordinator.recoverLongVoiceNotesIfNeeded()
                     }
                 }
         }

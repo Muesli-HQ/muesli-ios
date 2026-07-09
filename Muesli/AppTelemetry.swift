@@ -74,6 +74,15 @@ enum AppTelemetry {
         TelemetryDeck.signal("Muesli.iOS.\(name)", parameters: parameters)
     }
 
+    static func contextualSignal(_ name: String, parameters: [String: String] = [:]) {
+        var enriched = runtimeParameters()
+        enriched.merge(
+            AppTelemetryParameterSanitizer.normalizedCustomParameters(parameters),
+            uniquingKeysWith: { _, new in new }
+        )
+        signal(name, parameters: enriched)
+    }
+
     static func failure(
         _ name: String,
         domain: AppTelemetryFailureDomain,

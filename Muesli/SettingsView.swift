@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var coordinator: DictationCoordinator
     var openSyncPrivacyRequest: UUID?
+    var openInputRequest: UUID?
     var isActive = true
     var onSelectSection: ((AppSection) -> Void)?
 
@@ -12,6 +13,8 @@ struct SettingsView: View {
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @AppStorage(MuesliPreferences.keepDictationAudioRecordingsKey) private var keepDictationAudioRecordings = false
+    @AppStorage(MuesliPreferences.longVoiceNoteModeEnabledKey) private var longVoiceNoteModeEnabled = true
+    @AppStorage(MuesliPreferences.longVoiceNoteThresholdSecondsKey) private var longVoiceNoteThresholdSeconds = 60
     @AppStorage(MuesliPreferences.keepMeetingAudioRecordingsKey) private var keepMeetingAudioRecordings = false
     @AppStorage(MuesliPreferences.meetingSummariesEnabledKey) private var meetingSummariesEnabled = false
     @AppStorage(MuesliPreferences.meetingSummaryBackendKey) private var meetingSummaryBackend = MeetingSummaryBackend.openRouter.rawValue
@@ -37,14 +40,19 @@ struct SettingsView: View {
             .onAppear {
                 refreshVisibleSettingsIfNeeded()
                 openRequestedSyncPrivacySection()
+                openRequestedInputSection()
             }
             .onChange(of: isActive) { _, active in
                 guard active else { return }
                 refreshVisibleSettingsIfNeeded()
                 openRequestedSyncPrivacySection()
+                openRequestedInputSection()
             }
             .onChange(of: openSyncPrivacyRequest) { _, _ in
                 openRequestedSyncPrivacySection()
+            }
+            .onChange(of: openInputRequest) { _, _ in
+                openRequestedInputSection()
             }
             .sheet(isPresented: $isSyncQRCodeScannerPresented) {
                 SyncQRCodeScannerView(
@@ -249,6 +257,11 @@ struct SettingsView: View {
                         title: "Save Voice Note Audio",
                         detail: "Keep original voice note audio locally on this iPhone for playback and troubleshooting. Audio does not sync.",
                         isOn: $keepDictationAudioRecordings
+                    )
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    LongVoiceNoteSettingsRow(
+                        isEnabled: $longVoiceNoteModeEnabled,
+                        thresholdSeconds: $longVoiceNoteThresholdSeconds
                     )
                 }
                 .padding(MuesliTheme.spacing16)
@@ -638,6 +651,12 @@ struct SettingsView: View {
         coordinator.syncSetupRequestID = nil
     }
 
+    private func openRequestedInputSection() {
+        guard openInputRequest != nil else { return }
+        selectedSettingsSection = .input
+        coordinator.inputSettingsNavigationRequestID = nil
+    }
+
 }
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
@@ -713,6 +732,118 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiSummaries:
             "sparkles"
         }
+    }
+
+}
+
+private struct LongVoiceNoteSettingsRow: View {
+    @Binding var isEnabled: Bool
+    @Binding var thresholdSeconds: Int
+    @State private var customText = ""
+    @FocusState private var isCustomFieldFocused: Bool
+
+    private let commonValues = [30, 60, 90, 120]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            SettingsToggleRow(
+                icon: "waveform.path.ecg",
+                title: "Long Voice Note Mode",
+                detail: "Switch to memo mode after longer recordings.",
+                isOn: $isEnabled
+            )
+
+            if isEnabled {
+                HStack(spacing: MuesliTheme.spacing12) {
+                    Text("Switch after")
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+
+                    Spacer()
+
+                    Menu {
+                        ForEach(commonValues, id: \.self) { value in
+                            Button(thresholdLabel(value)) {
+                                thresholdSeconds = value
+                                customText = String(value)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(thresholdLabel(thresholdSeconds))
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.accent)
+                        .frame(minHeight: 44)
+                    }
+                }
+
+                HStack(spacing: MuesliTheme.spacing8) {
+                    TextField("Seconds", text: $customText)
+                        .keyboardType(.numberPad)
+                        .focused($isCustomFieldFocused)
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .frame(height: 44)
+                        .background(MuesliTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
+                        .onSubmit(commitCustomValue)
+
+                    Stepper("Threshold seconds", value: $thresholdSeconds, in: 30...600, step: 5)
+                        .labelsHidden()
+                        .onChange(of: thresholdSeconds) { _, value in
+                            let clamped = MuesliPreferences.clampedLongVoiceNoteThreshold(value)
+                            if thresholdSeconds != clamped {
+                                thresholdSeconds = clamped
+                            }
+                            customText = String(clamped)
+                        }
+                }
+
+                Text("30 seconds to 10 minutes")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+        }
+        .onAppear {
+            thresholdSeconds = MuesliPreferences.clampedLongVoiceNoteThreshold(thresholdSeconds)
+            customText = String(thresholdSeconds)
+        }
+        .onChange(of: isEnabled) { _, enabled in
+            AppTelemetry.signal(
+                "long_voice_note_mode_toggled",
+                parameters: ["enabled": enabled ? "true" : "false"]
+            )
+        }
+        .onChange(of: customText) { _, value in
+            guard value.count > 4 else { return }
+            customText = String(value.prefix(4))
+        }
+        .onChange(of: isCustomFieldFocused) { _, focused in
+            if !focused {
+                commitCustomValue()
+            }
+        }
+    }
+
+    private func commitCustomValue() {
+        let value = Int(customText) ?? thresholdSeconds
+        thresholdSeconds = MuesliPreferences.clampedLongVoiceNoteThreshold(value)
+        customText = String(thresholdSeconds)
+        AppTelemetry.signal(
+            "long_voice_note_threshold_changed",
+            parameters: ["threshold_bucket": thresholdLabel(thresholdSeconds)]
+        )
+    }
+
+    private func thresholdLabel(_ seconds: Int) -> String {
+        if seconds == 60 { return "1 min" }
+        if seconds % 60 == 0 { return "\(seconds / 60) min" }
+        if seconds > 60 { return "\(seconds / 60)m \(seconds % 60)s" }
+        return "\(seconds) sec"
     }
 }
 

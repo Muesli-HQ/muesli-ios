@@ -2,6 +2,29 @@ import XCTest
 @testable import Muesli
 
 final class MuesliPreferencesTests: XCTestCase {
+    func testLongVoiceNoteThresholdClampsToSupportedRange() {
+        XCTAssertEqual(MuesliPreferences.clampedLongVoiceNoteThreshold(5), 30)
+        XCTAssertEqual(MuesliPreferences.clampedLongVoiceNoteThreshold(60), 60)
+        XCTAssertEqual(MuesliPreferences.clampedLongVoiceNoteThreshold(9_999), 600)
+    }
+
+    func testLongVoiceNotePreferencesDefaultEnabledAtSixtySeconds() {
+        let defaults = UserDefaults.standard
+        let enabled = defaults.object(forKey: MuesliPreferences.longVoiceNoteModeEnabledKey)
+        let threshold = defaults.object(forKey: MuesliPreferences.longVoiceNoteThresholdSecondsKey)
+        defer {
+            if let enabled { defaults.set(enabled, forKey: MuesliPreferences.longVoiceNoteModeEnabledKey) }
+            else { defaults.removeObject(forKey: MuesliPreferences.longVoiceNoteModeEnabledKey) }
+            if let threshold { defaults.set(threshold, forKey: MuesliPreferences.longVoiceNoteThresholdSecondsKey) }
+            else { defaults.removeObject(forKey: MuesliPreferences.longVoiceNoteThresholdSecondsKey) }
+        }
+        defaults.removeObject(forKey: MuesliPreferences.longVoiceNoteModeEnabledKey)
+        defaults.removeObject(forKey: MuesliPreferences.longVoiceNoteThresholdSecondsKey)
+
+        XCTAssertTrue(MuesliPreferences.longVoiceNoteModeEnabled)
+        XCTAssertEqual(MuesliPreferences.longVoiceNoteThresholdSeconds, 60)
+    }
+
     func testOpenRouterModelReturnsCustomStoredValue() {
         let defaults = UserDefaults.standard
         let originalValue = defaults.object(forKey: MuesliPreferences.openRouterModelKey)

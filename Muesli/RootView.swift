@@ -34,6 +34,20 @@ struct RootView: View {
         .onChange(of: pinnedSectionsStorage) { _, _ in
             clampSelectedSectionToPinnedSections()
         }
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { coordinator.presentedLongVoiceNoteSessionID != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        coordinator.dismissLongVoiceNote()
+                    }
+                }
+            )
+        ) {
+            if let sessionID = coordinator.presentedLongVoiceNoteSessionID {
+                LongVoiceNoteView(coordinator: coordinator, sessionID: sessionID)
+            }
+        }
     }
 
     private var currentAccent: Color {
@@ -132,6 +146,7 @@ struct RootView: View {
             SettingsView(
                 coordinator: coordinator,
                 openSyncPrivacyRequest: coordinator.syncSetupRequestID,
+                openInputRequest: coordinator.inputSettingsNavigationRequestID,
                 isActive: isActive
             ) { section in
                 selectedSection = section

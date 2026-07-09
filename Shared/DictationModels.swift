@@ -72,6 +72,15 @@ enum RecordingSessionPhase: String, Codable, Sendable, Equatable {
     case cancelled
 }
 
+enum VoiceNoteTranscriptionFailureReason: String, Codable, Sendable, Equatable {
+    case timeout
+    case interrupted
+    case engineFailure
+    case audioUnavailable
+    case checkpointFailure
+    case unknown
+}
+
 enum MeetingProcessingState: String, Codable, Sendable, Equatable {
     case notStarted
     case processing
@@ -365,6 +374,14 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var cloudRecordName: String?
     var manualNotes: String?
     var errorMessage: String?
+    var isLongForm: Bool
+    var longFormActivatedAt: Date?
+    var longFormThresholdSeconds: Int?
+    var protectedAudioUntilTranscriptCompletes: Bool
+    var transcriptionRetryCount: Int
+    var lastTranscriptionAttemptAt: Date?
+    var lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason?
+    var scratchpadText: String?
 
     init(
         id: UUID = UUID(),
@@ -382,7 +399,15 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         source: String? = nil,
         cloudRecordName: String? = nil,
         manualNotes: String? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        isLongForm: Bool = false,
+        longFormActivatedAt: Date? = nil,
+        longFormThresholdSeconds: Int? = nil,
+        protectedAudioUntilTranscriptCompletes: Bool = false,
+        transcriptionRetryCount: Int = 0,
+        lastTranscriptionAttemptAt: Date? = nil,
+        lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason? = nil,
+        scratchpadText: String? = nil
     ) {
         self.id = id
         self.requestID = requestID
@@ -400,6 +425,14 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.cloudRecordName = cloudRecordName
         self.manualNotes = manualNotes
         self.errorMessage = errorMessage
+        self.isLongForm = isLongForm
+        self.longFormActivatedAt = longFormActivatedAt
+        self.longFormThresholdSeconds = longFormThresholdSeconds
+        self.protectedAudioUntilTranscriptCompletes = protectedAudioUntilTranscriptCompletes
+        self.transcriptionRetryCount = transcriptionRetryCount
+        self.lastTranscriptionAttemptAt = lastTranscriptionAttemptAt
+        self.lastTranscriptionFailureReason = lastTranscriptionFailureReason
+        self.scratchpadText = scratchpadText
     }
 
     var duration: TimeInterval? {
@@ -432,6 +465,14 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         case cloudRecordName
         case manualNotes
         case errorMessage
+        case isLongForm
+        case longFormActivatedAt
+        case longFormThresholdSeconds
+        case protectedAudioUntilTranscriptCompletes
+        case transcriptionRetryCount
+        case lastTranscriptionAttemptAt
+        case lastTranscriptionFailureReason
+        case scratchpadText
     }
 
     init(from decoder: Decoder) throws {
@@ -452,6 +493,20 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         cloudRecordName = try container.decodeIfPresent(String.self, forKey: .cloudRecordName)
         manualNotes = try container.decodeIfPresent(String.self, forKey: .manualNotes)
         errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        isLongForm = try container.decodeIfPresent(Bool.self, forKey: .isLongForm) ?? false
+        longFormActivatedAt = try container.decodeIfPresent(Date.self, forKey: .longFormActivatedAt)
+        longFormThresholdSeconds = try container.decodeIfPresent(Int.self, forKey: .longFormThresholdSeconds)
+        protectedAudioUntilTranscriptCompletes = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .protectedAudioUntilTranscriptCompletes
+        ) ?? false
+        transcriptionRetryCount = try container.decodeIfPresent(Int.self, forKey: .transcriptionRetryCount) ?? 0
+        lastTranscriptionAttemptAt = try container.decodeIfPresent(Date.self, forKey: .lastTranscriptionAttemptAt)
+        lastTranscriptionFailureReason = try container.decodeIfPresent(
+            VoiceNoteTranscriptionFailureReason.self,
+            forKey: .lastTranscriptionFailureReason
+        )
+        scratchpadText = try container.decodeIfPresent(String.self, forKey: .scratchpadText)
     }
 }
 

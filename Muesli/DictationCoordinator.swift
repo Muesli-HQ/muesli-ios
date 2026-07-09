@@ -3092,8 +3092,9 @@ final class DictationCoordinator {
                     manualNotes: session.manualNotes
                 )
                 summaryState = .failed
-                summaryBackend = MuesliPreferences.meetingSummaryBackend.rawValue
-                summaryModel = MuesliPreferences.meetingSummaryBackend == .chatGPT
+                let backend = MuesliPreferences.meetingSummaryBackend
+                summaryBackend = backend.rawValue
+                summaryModel = backend == .chatGPT
                     ? MuesliPreferences.chatGPTModel
                     : MuesliPreferences.openRouterModel
                 summaryErrorMessage = error.localizedDescription
@@ -3104,7 +3105,10 @@ final class DictationCoordinator {
                     error: error,
                     parameters: [
                         "backend": summaryBackend ?? "unknown",
-                        "model": summaryModel ?? "unknown"
+                        "model": SummaryModelPreset.telemetryIdentifier(
+                            for: summaryModel ?? "",
+                            backend: backend
+                        )
                     ]
                 )
             }

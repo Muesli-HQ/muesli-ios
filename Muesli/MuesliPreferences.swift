@@ -96,9 +96,6 @@ enum MuesliPreferences {
         let value = UserDefaults.standard.string(forKey: openRouterModelKey) ?? ""
         let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedValue.isEmpty else { return MeetingSummaryBackend.defaultOpenRouterModel }
-        guard SummaryModelPreset.openRouterModels.contains(where: { $0.id == trimmedValue }) else {
-            return MeetingSummaryBackend.defaultOpenRouterModel
-        }
         return trimmedValue
     }
 
@@ -182,6 +179,19 @@ struct SummaryModelPreset: Identifiable, Hashable {
         guard !presets.contains(where: { $0.id == trimmedModel }) else { return presets }
         guard preserveCustomValue else { return presets }
         return presets + [SummaryModelPreset(id: trimmedModel, label: "Custom: \(trimmedModel)")]
+    }
+
+    static func telemetryIdentifier(for model: String, backend: MeetingSummaryBackend) -> String {
+        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedModel.isEmpty else { return "unknown" }
+
+        let presets = switch backend {
+        case .openRouter:
+            openRouterModels
+        case .chatGPT:
+            chatGPTModels
+        }
+        return presets.contains(where: { $0.id == trimmedModel }) ? trimmedModel : "custom"
     }
 }
 

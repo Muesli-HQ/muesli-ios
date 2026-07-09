@@ -31,9 +31,12 @@ actor MuesliLiveActivityController {
         do {
             activity = try Activity.request(attributes: attributes, content: content, pushType: nil)
         } catch {
-            await AppTelemetry.signal(
+            await AppTelemetry.failure(
                 "live_activity_failed",
-                parameters: ["stage": "request", "error": String(describing: type(of: error))]
+                domain: .audio,
+                stage: "request",
+                error: error,
+                parameters: ["session_kind": session.kind.title]
             )
         }
     }

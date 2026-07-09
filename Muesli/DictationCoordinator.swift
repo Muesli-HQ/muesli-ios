@@ -1075,14 +1075,21 @@ final class DictationCoordinator {
                 self.iCloudSyncTask = nil
                 self.isICloudSyncInProgress = false
                 self.iCloudSyncStatusText = "Sync failed: \(error.localizedDescription)"
-                AppTelemetry.signal(
+                AppTelemetry.failure(
                     "icloud_text_sync_failed",
-                    parameters: ["reason": reason, "error": String(describing: type(of: error))]
+                    domain: .cloudSync,
+                    stage: "sync",
+                    error: error,
+                    reason: reason
                 )
                 if reason == "onboarding_bridge" || reason == "settings_toggle" {
-                    AppTelemetry.signal(
+                    AppTelemetry.failure(
                         "bridge_enable_failed",
-                        parameters: ["platform": "ios", "source": reason, "error": String(describing: type(of: error))]
+                        domain: .cloudSync,
+                        stage: "bridge_enable",
+                        error: error,
+                        reason: reason,
+                        parameters: ["platform": "ios", "source": reason]
                     )
                 }
                 self.runPendingICloudSyncIfNeeded()
@@ -1228,7 +1235,13 @@ final class DictationCoordinator {
                 phase: .failed,
                 message: isRecoverable ? Self.keyboardSessionRetryMessage : error.localizedDescription
             )
-            AppTelemetry.signal("keyboard_session_failed", parameters: ["error": String(describing: type(of: error))])
+            AppTelemetry.failure(
+                "keyboard_session_failed",
+                domain: .keyboardSession,
+                stage: "start",
+                error: error,
+                parameters: ["recoverable": isRecoverable ? "true" : "false"]
+            )
         }
     }
 
@@ -1403,12 +1416,12 @@ final class DictationCoordinator {
                         status: "Model setup paused",
                         detail: "Check your connection and try again"
                     )
-                    AppTelemetry.signal(
+                    AppTelemetry.failure(
                         "model_prepare_failed",
-                        parameters: [
-                            "engine": model.engineIdentifier,
-                            "error": String(describing: type(of: error))
-                        ]
+                        domain: .model,
+                        stage: "prepare",
+                        error: error,
+                        parameters: ["engine": model.engineIdentifier]
                     )
                 }
             }
@@ -1488,13 +1501,13 @@ final class DictationCoordinator {
                         status: "Warmup paused",
                         detail: "Muesli will try again when you record"
                     )
-                    AppTelemetry.signal(
+                    AppTelemetry.failure(
                         "model_prewarm_failed",
-                        parameters: [
-                            "engine": model.engineIdentifier,
-                            "reason": reason,
-                            "error": String(describing: type(of: error))
-                        ]
+                        domain: .model,
+                        stage: "prewarm",
+                        error: error,
+                        reason: reason,
+                        parameters: ["engine": model.engineIdentifier]
                     )
                 }
             }
@@ -1520,7 +1533,13 @@ final class DictationCoordinator {
             } catch {
                 onboardingTestError = error.localizedDescription
                 stopMetering()
-                AppTelemetry.signal("onboarding_test_failed", parameters: ["stage": "recording"])
+                AppTelemetry.failure(
+                    "onboarding_test_failed",
+                    domain: .audio,
+                    stage: "recording",
+                    error: error,
+                    parameters: ["surface": "onboarding"]
+                )
             }
         }
     }
@@ -1542,9 +1561,13 @@ final class DictationCoordinator {
                     guard let self else { return }
                     self.isOnboardingTestTranscribing = false
                     self.onboardingTestError = "Transcription stalled. Try again."
-                    AppTelemetry.signal(
+                    AppTelemetry.failure(
                         "onboarding_test_failed",
-                        parameters: ["stage": "transcription_timeout"]
+                        domain: .transcription,
+                        stage: "transcription_timeout",
+                        reason: "timeout",
+                        isTimeout: true,
+                        parameters: ["surface": "onboarding"]
                     )
                 } operation: { [engine] progress in
                     try await engine.transcribe(audioURL: audioURL, progress: progress)
@@ -1566,12 +1589,14 @@ final class DictationCoordinator {
             } catch {
                 isOnboardingTestTranscribing = false
                 onboardingTestError = error.localizedDescription
-                AppTelemetry.signal(
+                AppTelemetry.failure(
                     "onboarding_test_failed",
+                    domain: .transcription,
+                    stage: "transcription",
+                    error: error,
                     parameters: [
-                        "stage": "transcription",
                         "engine": engine.identifier,
-                        "error": String(describing: type(of: error))
+                        "surface": "onboarding"
                     ]
                 )
             }
@@ -1666,12 +1691,12 @@ final class DictationCoordinator {
                         status: "Model setup paused",
                         detail: "Download finished, but optimization failed"
                     )
-                    AppTelemetry.signal(
+                    AppTelemetry.failure(
                         "model_prepare_failed",
-                        parameters: [
-                            "engine": model.engineIdentifier,
-                            "error": String(describing: type(of: error))
-                        ]
+                        domain: .model,
+                        stage: "prepare_after_download",
+                        error: error,
+                        parameters: ["engine": model.engineIdentifier]
                     )
                 }
             }
@@ -1720,9 +1745,12 @@ final class DictationCoordinator {
                 } catch is CancellationError {
                     return
                 } catch {
-                    AppTelemetry.signal(
+                    AppTelemetry.failure(
                         "realtime_dictation_buffer_failed",
-                        parameters: ["error": String(describing: type(of: error))]
+                        domain: .transcription,
+                        stage: "streaming_buffer",
+                        error: error,
+                        parameters: ["surface": "dictation"]
                     )
                 }
             }
@@ -1909,7 +1937,13 @@ final class DictationCoordinator {
                 if !completedDeferredStop {
                     resumeKeyboardSessionKeeperIfNeeded()
                 }
-                AppTelemetry.signal("dictation_failed", parameters: ["stage": "recording"])
+                AppTelemetry.failure(
+                    "dictation_failed",
+                    domain: .audio,
+                    stage: "recording",
+                    error: error,
+                    parameters: ["source": source]
+                )
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
                 if source == "keyboard" {
                     saveKeyboardHandoff(
@@ -2055,12 +2089,12 @@ final class DictationCoordinator {
                     )
                     resumeKeyboardSessionKeeperIfNeeded()
                 }
-                AppTelemetry.signal(
+                AppTelemetry.failure(
                     "keyboard_transcription_recovery_failed",
-                    parameters: [
-                        "engine": engine.identifier,
-                        "error": String(describing: type(of: error))
-                    ]
+                    domain: .transcription,
+                    stage: "keyboard_recovery",
+                    error: error,
+                    parameters: ["engine": engine.identifier]
                 )
             }
         }
@@ -2364,13 +2398,12 @@ final class DictationCoordinator {
                 clearKeyboardLiveTranscript()
                 statusText = error.localizedDescription
                 refreshHistory()
-                AppTelemetry.signal(
+                AppTelemetry.failure(
                     "dictation_failed",
-                    parameters: [
-                        "stage": "transcription",
-                        "engine": engine.identifier,
-                        "error": String(describing: type(of: error))
-                    ]
+                    domain: .transcription,
+                    stage: "transcription",
+                    error: error,
+                    parameters: ["engine": engine.identifier]
                 )
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
                 if startedFromKeyboard {
@@ -2516,7 +2549,12 @@ final class DictationCoordinator {
             stopMetering()
             finishMeetingLifecycle(sessionID: session.id)
             refreshHistory()
-            AppTelemetry.signal("meeting_recording_failed", parameters: ["stage": "recording"])
+            AppTelemetry.failure(
+                "meeting_recording_failed",
+                domain: .meeting,
+                stage: "recording_start",
+                error: error
+            )
         }
     }
 
@@ -2654,7 +2692,12 @@ final class DictationCoordinator {
             meetingStatusText = error.localizedDescription
             finishMeetingLifecycle(sessionID: session.id)
             refreshHistory()
-            AppTelemetry.signal("meeting_recording_failed", parameters: ["stage": "stop"])
+            AppTelemetry.failure(
+                "meeting_recording_failed",
+                domain: .meeting,
+                stage: "stop",
+                error: error
+            )
         }
     }
 
@@ -2672,10 +2715,13 @@ final class DictationCoordinator {
                 try? FileManager.default.removeItem(at: chunk.url)
                 return MeetingChunkTranscription(chunk: chunk, result: result)
             } catch {
-                AppTelemetry.signal("meeting_chunk_transcription_failed", parameters: [
-                    "chunk": "\(chunk.index)",
-                    "error": String(describing: type(of: error))
-                ])
+                AppTelemetry.failure(
+                    "meeting_chunk_transcription_failed",
+                    domain: .transcription,
+                    stage: "meeting_chunk",
+                    error: error,
+                    parameters: ["chunk_index": "\(chunk.index)"]
+                )
                 return nil
             }
         }
@@ -2814,11 +2860,16 @@ final class DictationCoordinator {
                     detail: "Transcription failed",
                     session: session
                 )
-                AppTelemetry.signal("meeting_transcription_failed", parameters: [
-                    "engine": engine.identifier,
-                    "error": String(describing: type(of: error)),
-                    "chunked": "true"
-                ])
+                AppTelemetry.failure(
+                    "meeting_transcription_failed",
+                    domain: .transcription,
+                    stage: "meeting_finalize_chunked",
+                    error: error,
+                    parameters: [
+                        "engine": engine.identifier,
+                        "chunked": "true"
+                    ]
+                )
                 finishMeetingLifecycle(sessionID: session.id)
             }
         }
@@ -2880,9 +2931,13 @@ final class DictationCoordinator {
                             session: session
                         )
                     }
-                    AppTelemetry.signal(
+                    AppTelemetry.failure(
                         "meeting_transcription_failed",
-                        parameters: ["engine": self.engine.identifier, "error": "timeout"]
+                        domain: .transcription,
+                        stage: "meeting_transcription_timeout",
+                        reason: "timeout",
+                        isTimeout: true,
+                        parameters: ["engine": self.engine.identifier]
                     )
                     self.finishMeetingLifecycle(sessionID: session.id)
                 } operation: { [engine] progress in
@@ -2946,10 +3001,13 @@ final class DictationCoordinator {
                     detail: "Transcription failed",
                     session: session
                 )
-                AppTelemetry.signal("meeting_transcription_failed", parameters: [
-                    "engine": engine.identifier,
-                    "error": String(describing: type(of: error))
-                ])
+                AppTelemetry.failure(
+                    "meeting_transcription_failed",
+                    domain: .transcription,
+                    stage: "meeting_transcription",
+                    error: error,
+                    parameters: ["engine": engine.identifier]
+                )
                 finishMeetingLifecycle(sessionID: session.id)
             }
         }
@@ -2989,9 +3047,12 @@ final class DictationCoordinator {
                 speakerTranscript = nil
                 diarizationState = .failed
                 diarizationErrorMessage = error.localizedDescription
-                AppTelemetry.signal("meeting_diarization_failed", parameters: [
-                    "error": String(describing: type(of: error))
-                ])
+                AppTelemetry.failure(
+                    "meeting_diarization_failed",
+                    domain: .transcription,
+                    stage: "meeting_diarization",
+                    error: error
+                )
             }
             try ensureMeetingLifecycleActive(sessionID: session.id)
         }
@@ -3031,15 +3092,25 @@ final class DictationCoordinator {
                     manualNotes: session.manualNotes
                 )
                 summaryState = .failed
-                summaryBackend = MuesliPreferences.meetingSummaryBackend.rawValue
-                summaryModel = MuesliPreferences.meetingSummaryBackend == .chatGPT
+                let backend = MuesliPreferences.meetingSummaryBackend
+                summaryBackend = backend.rawValue
+                summaryModel = backend == .chatGPT
                     ? MuesliPreferences.chatGPTModel
                     : MuesliPreferences.openRouterModel
                 summaryErrorMessage = error.localizedDescription
-                AppTelemetry.signal("meeting_summary_failed", parameters: [
-                    "backend": summaryBackend ?? "unknown",
-                    "error": String(describing: type(of: error))
-                ])
+                AppTelemetry.failure(
+                    "meeting_summary_failed",
+                    domain: .summary,
+                    stage: "meeting_summary",
+                    error: error,
+                    parameters: [
+                        "backend": summaryBackend ?? "unknown",
+                        "model": SummaryModelPreset.telemetryIdentifier(
+                            for: summaryModel ?? "",
+                            backend: backend
+                        )
+                    ]
+                )
             }
             try ensureMeetingLifecycleActive(sessionID: session.id)
         }
@@ -3318,17 +3389,22 @@ final class DictationCoordinator {
         refreshHistory()
         switch source {
         case .activeDictation:
-            AppTelemetry.signal(
+            AppTelemetry.failure(
                 "dictation_failed",
-                parameters: [
-                    "stage": "transcription_timeout",
-                    "engine": engine.identifier
-                ]
+                domain: .transcription,
+                stage: "transcription_timeout",
+                reason: "timeout",
+                isTimeout: true,
+                parameters: ["engine": engine.identifier]
             )
         case .recovery:
-            AppTelemetry.signal(
+            AppTelemetry.failure(
                 "keyboard_transcription_recovery_failed",
-                parameters: ["reason": "timeout"]
+                domain: .transcription,
+                stage: "keyboard_recovery_timeout",
+                reason: "timeout",
+                isTimeout: true,
+                parameters: ["engine": engine.identifier]
             )
         }
     }
@@ -4070,12 +4146,12 @@ extension DictationCoordinator: ModelBackgroundDownloadServiceDelegate {
             status: "Download paused",
             detail: message
         )
-        AppTelemetry.signal(
+        AppTelemetry.failure(
             "model_prepare_failed",
-            parameters: [
-                "engine": model.engineIdentifier,
-                "error": "background_download_failed"
-            ]
+            domain: .model,
+            stage: "background_download",
+            reason: "background_download_failed",
+            parameters: ["engine": model.engineIdentifier]
         )
     }
 }

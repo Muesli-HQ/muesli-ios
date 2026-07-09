@@ -58,6 +58,91 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         XCTAssertEqual(state.phase, .transcriptionQueued(id))
     }
 
+    func testOnlyActiveLifecyclePhasesOwnAudioWork() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        XCTAssertTrue(state.isWorkActive)
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .stopRequested(id))
+        XCTAssertTrue(state.isWorkActive)
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .transcriptionStarted(id))
+        XCTAssertTrue(state.isWorkActive)
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .transcriptionFailed(id))
+        XCTAssertFalse(state.isWorkActive)
+    }
+
+    func testRequestOwnershipRejectsForeignCommandsOnlyWhileWorkIsActive() {
+        let owner = UUID()
+        let foreign = UUID()
+        let activeOwnership = VoiceNoteRequestOwnership(requestID: owner, isWorkActive: true)
+
+        XCTAssertTrue(activeOwnership.accepts(requestID: owner))
+        XCTAssertFalse(activeOwnership.accepts(requestID: foreign))
+
+        let retryableOwnership = VoiceNoteRequestOwnership(requestID: owner, isWorkActive: false)
+        XCTAssertTrue(retryableOwnership.accepts(requestID: foreign))
+
+        let unknownActiveOwnership = VoiceNoteRequestOwnership(requestID: nil, isWorkActive: true)
+        XCTAssertFalse(unknownActiveOwnership.accepts(requestID: foreign))
+    }
+
+    func testLifecycleRunnerGenerationDistinguishesRetriesOfTheSameRequest() {
+        let sessionID = UUID()
+        let requestID = UUID()
+        let first = VoiceNoteLifecycleRunner(sessionID: sessionID, requestID: requestID)
+        let retry = VoiceNoteLifecycleRunner(sessionID: sessionID, requestID: requestID)
+
+        XCTAssertEqual(first.sessionID, retry.sessionID)
+        XCTAssertEqual(first.requestID, retry.requestID)
+        XCTAssertNotEqual(first.id, retry.id)
+    }
+
+    func testCheckpointRetentionPolicyKeepsOnlyRecoverableAudio() {
+        let protectedFailure = Muesli.RecordingSession(
+            kind: .quickDictation,
+            phase: .failed,
+            audioFileName: "protected.wav",
+            protectedAudioUntilTranscriptCompletes: true
+        )
+        XCTAssertFalse(
+            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: protectedFailure)
+        )
+
+        let explicitlyDeleted = Muesli.RecordingSession(
+            kind: .quickDictation,
+            phase: .failed,
+            audioFileName: nil,
+            protectedAudioUntilTranscriptCompletes: false
+        )
+        XCTAssertTrue(
+            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: explicitlyDeleted)
+        )
+
+        let failedShortNote = Muesli.RecordingSession(
+            kind: .keyboardDictation,
+            phase: .failed,
+            audioFileName: "short.wav",
+            longFormThresholdSeconds: 60
+        )
+        XCTAssertTrue(
+            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: failedShortNote)
+        )
+
+        let activeShortNote = Muesli.RecordingSession(
+            kind: .keyboardDictation,
+            phase: .recording,
+            longFormThresholdSeconds: 60
+        )
+        XCTAssertFalse(
+            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: activeShortNote)
+        )
+
+        let completed = Muesli.RecordingSession(kind: .quickDictation, phase: .completed)
+        XCTAssertTrue(VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: completed))
+        XCTAssertTrue(VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: nil))
+    }
+
     func testProtectedAudioSurvivesFailureUntilExplicitlyRetainedOrCompleted() {
         let protected = Muesli.RecordingSession(
             kind: .quickDictation,

@@ -440,6 +440,16 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         return (endedAt ?? .now).timeIntervalSince(startedAt)
     }
 
+    var isKeyboardOwnedVoiceNote: Bool {
+        kind == .keyboardDictation
+            || source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "keyboard"
+    }
+
+    var hasActiveVoiceNoteWork: Bool {
+        kind != .meeting
+            && [.recording, .transcriptionQueued, .transcribing].contains(phase)
+    }
+
     var syncOrigin: SyncOrigin {
         SyncOrigin.classify(
             source: source,

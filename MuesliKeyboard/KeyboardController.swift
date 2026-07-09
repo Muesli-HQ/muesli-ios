@@ -22,6 +22,7 @@ final class KeyboardController {
     private var insertedRequestIDs = Set<UUID>()
     private var cancelledRequestIDs = Set<UUID>()
     private var lastRuntimeLevelUpdateAt = Date.distantPast
+    private var isBlockedByAppVoiceNote = false
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -44,6 +45,8 @@ final class KeyboardController {
 
     var primaryButtonTitle: String {
         return switch primaryButtonRole {
+        case .blocked:
+            "Voice Note Active"
         case .openMuesliRecovery:
             "Open Muesli"
         case .waitingForMuesli:
@@ -63,6 +66,8 @@ final class KeyboardController {
 
     var primaryButtonIcon: String {
         return switch primaryButtonRole {
+        case .blocked:
+            "waveform"
         case .openMuesliRecovery:
             "arrow.up.forward.app"
         case .waitingForMuesli:
@@ -85,6 +90,9 @@ final class KeyboardController {
     }
 
     var primaryButtonRole: KeyboardPrimaryButtonRole {
+        if isBlockedByAppVoiceNote {
+            return .blocked
+        }
         if recoveryRequestID != nil {
             return .openMuesliRecovery
         }
@@ -108,7 +116,7 @@ final class KeyboardController {
     }
 
     var isPrimaryButtonDisabled: Bool {
-        recoveryRequestID == nil && (
+        isBlockedByAppVoiceNote || recoveryRequestID == nil && (
             dictationPhase == .transcribing
             || latestHandoffState?.phase == .stopRequested
         )
@@ -142,17 +150,19 @@ final class KeyboardController {
     }
 
     var opensMuesliFromPrimaryButton: Bool {
-        recoveryRequestID != nil
-            || !canUseRuntimeStart
-            && (
-                dictationPhase == .idle
-                    || dictationPhase == .finished
-                    || dictationPhase == .failed
-                    || (dictationPhase == .requested && activeRequestID == nil)
-            )
+        !isBlockedByAppVoiceNote
+            && (recoveryRequestID != nil
+                || !canUseRuntimeStart
+                && (
+                    dictationPhase == .idle
+                        || dictationPhase == .finished
+                        || dictationPhase == .failed
+                        || (dictationPhase == .requested && activeRequestID == nil)
+                ))
     }
 
     func primaryLaunchAction() {
+        guard !isBlockedByAppVoiceNote else { return }
         if recoveryRequestID != nil {
             statusText = "Opening Muesli"
             return
@@ -162,6 +172,7 @@ final class KeyboardController {
     }
 
     func primaryAction() {
+        guard !isBlockedByAppVoiceNote else { return }
         switch dictationPhase {
         case .requested, .recording:
             stopActiveDictation()
@@ -214,6 +225,7 @@ final class KeyboardController {
     }
 
     func startDictation() {
+        guard !isBlockedByAppVoiceNote else { return }
         if hasPendingCancelCommand() {
             try? store.clearPendingCommand()
         }
@@ -413,10 +425,16 @@ final class KeyboardController {
             apply(handoffState: handoffState)
             apply(liveTranscript: try store.keyboardLiveTranscript())
 
+            if handoffState.requestID == nil
+                || [.idle, .failed, .cancelled, .inserted].contains(handoffState.phase) {
+                let status = try store.status()
+                apply(status: status)
+            }
+
             guard let result = try store.resultsHistory().first else {
                 latestResultID = nil
                 hasLatestDictation = false
-                if activeRequestID == nil {
+                if activeRequestID == nil, !isBlockedByAppVoiceNote {
                     statusText = "Ready"
                 }
                 return
@@ -428,17 +446,14 @@ final class KeyboardController {
                 return
             }
 
-            if handoffState.requestID == nil || handoffState.phase == .idle {
-                let status = try store.status()
-                apply(status: status)
-            }
-
             if latestResultID != result.id {
                 latestResultID = result.id
-                if activeRequestID == nil {
+                if activeRequestID == nil, !isBlockedByAppVoiceNote {
                     statusText = "Latest ready"
                 }
-            } else if activeRequestID == nil && statusText != "Inserted" {
+            } else if activeRequestID == nil,
+                      !isBlockedByAppVoiceNote,
+                      statusText != "Inserted" {
                 statusText = "Latest ready"
             }
         } catch {
@@ -593,6 +608,7 @@ final class KeyboardController {
 
     private func apply(status: DictationStatus) {
         guard let requestID = status.requestID else {
+            isBlockedByAppVoiceNote = false
             if activeRequestID != nil {
                 activeRequestID = nil
                 dictationPhase = .idle
@@ -600,6 +616,21 @@ final class KeyboardController {
             }
             return
         }
+
+        if let session = try? store.recordingSession(requestID: requestID),
+           !session.isKeyboardOwnedVoiceNote {
+            isBlockedByAppVoiceNote = session.hasActiveVoiceNoteWork
+            if isBlockedByAppVoiceNote {
+                activeRequestID = nil
+                recoveryRequestID = nil
+                dictationPhase = .idle
+                liveTranscript = ""
+                inputLevel = 0
+                statusText = "Finish the voice note in Muesli"
+            }
+            return
+        }
+        isBlockedByAppVoiceNote = false
 
         if activeRequestID == nil, preparedRequest?.id == requestID, status.phase == .requested {
             return
@@ -796,6 +827,7 @@ final class KeyboardController {
 }
 
 enum KeyboardPrimaryButtonRole {
+    case blocked
     case openMuesliRecovery
     case waitingForMuesli
     case openMuesliRequested

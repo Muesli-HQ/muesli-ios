@@ -44,6 +44,16 @@ struct VoiceNoteLifecycleState: Equatable {
             false
         }
     }
+
+    var isWorkActive: Bool {
+        switch phase {
+        case .recordingShort, .recordingLongProtected, .stopping, .audioSaved,
+             .transcriptionQueued, .transcribing, .cancelling:
+            true
+        case .idle, .failedRetryable:
+            false
+        }
+    }
 }
 
 enum VoiceNoteLifecycleEvent {
@@ -96,11 +106,30 @@ enum VoiceNoteLifecycleReducer {
     }
 }
 
+struct VoiceNoteRequestOwnership: Equatable {
+    let requestID: UUID?
+    let isWorkActive: Bool
+
+    func accepts(requestID incomingRequestID: UUID) -> Bool {
+        guard isWorkActive else { return true }
+        guard let requestID else { return false }
+        return requestID == incomingRequestID
+    }
+}
+
 struct VoiceNoteLifecycleRunner {
+    let id: UUID
     let sessionID: UUID
+    let requestID: UUID
     var checkpointTask: Task<Void, Never>?
     var thresholdTask: Task<Void, Never>?
     var transcriptionTask: Task<Void, Never>?
+
+    init(id: UUID = UUID(), sessionID: UUID, requestID: UUID) {
+        self.id = id
+        self.sessionID = sessionID
+        self.requestID = requestID
+    }
 
     mutating func cancelAll() {
         checkpointTask?.cancel()
@@ -119,5 +148,24 @@ enum VoiceNoteAudioRetentionPolicy {
 
     static func shouldDeleteAudioAfterSuccess(_ session: RecordingSession) -> Bool {
         !session.keepsAudioRecording
+    }
+}
+
+enum VoiceNoteCheckpointRetentionPolicy {
+    static func shouldDeleteCheckpoints(for session: RecordingSession?) -> Bool {
+        guard let session else { return true }
+        guard session.kind != .meeting else { return false }
+        if session.phase == .completed || session.phase == .cancelled {
+            return true
+        }
+        if session.protectedAudioUntilTranscriptCompletes,
+           session.audioFileName != nil {
+            return false
+        }
+        if !session.isLongForm {
+            return ![.recording, .transcriptionQueued, .transcribing].contains(session.phase)
+        }
+        return session.audioFileName == nil
+            && !session.protectedAudioUntilTranscriptCompletes
     }
 }

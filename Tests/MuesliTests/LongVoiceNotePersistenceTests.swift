@@ -61,4 +61,29 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertNil(decoded.lastTranscriptionFailureReason)
         XCTAssertNil(decoded.scratchpadText)
     }
+
+    func testVoiceNoteWorkOwnershipDistinguishesAppAndKeyboardSessions() {
+        let appSession = RecordingSession(
+            kind: .quickDictation,
+            phase: .recording,
+            source: "app"
+        )
+        XCTAssertTrue(appSession.hasActiveVoiceNoteWork)
+        XCTAssertFalse(appSession.isKeyboardOwnedVoiceNote)
+
+        let keyboardSession = RecordingSession(
+            kind: .keyboardDictation,
+            phase: .transcribing,
+            source: "keyboard"
+        )
+        XCTAssertTrue(keyboardSession.hasActiveVoiceNoteWork)
+        XCTAssertTrue(keyboardSession.isKeyboardOwnedVoiceNote)
+
+        let completedAppSession = RecordingSession(
+            kind: .quickDictation,
+            phase: .completed,
+            source: "app"
+        )
+        XCTAssertFalse(completedAppSession.hasActiveVoiceNoteWork)
+    }
 }

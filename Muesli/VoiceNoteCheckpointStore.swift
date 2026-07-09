@@ -31,6 +31,7 @@ actor VoiceNoteCheckpointStore {
         case missingManifest
         case noRecoverableAudio
         case incompatibleAudioFormat
+        case invalidCheckpoint
     }
 
     private let store: SharedStore
@@ -54,7 +55,18 @@ actor VoiceNoteCheckpointStore {
         let directory = try store.voiceNoteCheckpointDirectoryURL(sessionID: sessionID)
         var manifest = try load(from: directory)
         guard !manifest.entries.contains(where: { $0.index == checkpoint.index }) else { return manifest }
-        let frameCount = (try? AVAudioFile(forReading: checkpoint.url).length) ?? 0
+        let checkpointFile: AVAudioFile
+        do {
+            checkpointFile = try AVAudioFile(forReading: checkpoint.url)
+        } catch {
+            throw StoreError.invalidCheckpoint
+        }
+        guard checkpointFile.length > 0,
+              checkpointFile.processingFormat.sampleRate > 0
+        else {
+            throw StoreError.invalidCheckpoint
+        }
+        let frameCount = checkpointFile.length
         manifest.entries.append(.init(
             index: checkpoint.index,
             fileName: checkpoint.url.lastPathComponent,

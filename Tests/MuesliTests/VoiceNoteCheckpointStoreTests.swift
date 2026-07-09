@@ -55,7 +55,24 @@ final class VoiceNoteCheckpointStoreTests: XCTestCase {
         XCTAssertEqual(try AVAudioFile(forReading: output).length, 1_600, accuracy: 2)
     }
 
-    func testRecoveryIgnoresCorruptTrailingChunk() async throws {
+    func testRecordRejectsCorruptCheckpoint() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let corruptURL = fixture.directory.appendingPathComponent("chunk-0000.wav")
+        try Data("not audio".utf8).write(to: corruptURL)
+        let corrupt = Muesli.MeetingAudioChunk(index: 0, url: corruptURL, startTime: 0, duration: 0.1)
+
+        do {
+            _ = try await fixture.checkpoints.record(corrupt, sessionID: fixture.sessionID)
+            XCTFail("Corrupt checkpoint should not be added to the manifest")
+        } catch Muesli.VoiceNoteCheckpointStore.StoreError.invalidCheckpoint {
+            let manifest = try await fixture.checkpoints.manifest(sessionID: fixture.sessionID)
+            XCTAssertTrue(manifest.entries.isEmpty)
+        }
+    }
+
+    func testRecoveryIgnoresCorruptUnmanifestedTrailingChunk() async throws {
         let fixture = try await makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
@@ -63,8 +80,6 @@ final class VoiceNoteCheckpointStoreTests: XCTestCase {
         _ = try await fixture.checkpoints.record(first, sessionID: fixture.sessionID)
         let corruptURL = fixture.directory.appendingPathComponent("chunk-0001.wav")
         try Data("not audio".utf8).write(to: corruptURL)
-        let corrupt = Muesli.MeetingAudioChunk(index: 1, url: corruptURL, startTime: 0.1, duration: 0.1)
-        _ = try await fixture.checkpoints.record(corrupt, sessionID: fixture.sessionID)
         let output = fixture.root.appendingPathComponent("salvaged.wav")
 
         _ = try await fixture.checkpoints.reconstructAudio(

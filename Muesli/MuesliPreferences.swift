@@ -94,9 +94,12 @@ enum MuesliPreferences {
 
     static var openRouterModel: String {
         let value = UserDefaults.standard.string(forKey: openRouterModelKey) ?? ""
-        return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? MeetingSummaryBackend.defaultOpenRouterModel
-            : value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return MeetingSummaryBackend.defaultOpenRouterModel }
+        guard SummaryModelPreset.openRouterModels.contains(where: { $0.id == trimmedValue }) else {
+            return MeetingSummaryBackend.defaultOpenRouterModel
+        }
+        return trimmedValue
     }
 
     static var chatGPTModel: String {

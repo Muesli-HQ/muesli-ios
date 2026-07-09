@@ -33,7 +33,7 @@ actor MuesliLiveActivityController {
         } catch {
             await AppTelemetry.failure(
                 "live_activity_failed",
-                domain: .audio,
+                domain: .liveActivity,
                 stage: "request",
                 error: error,
                 parameters: ["session_kind": session.kind.title]

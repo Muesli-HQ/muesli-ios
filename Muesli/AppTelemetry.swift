@@ -6,10 +6,57 @@ enum AppTelemetryFailureDomain: String {
     case audio
     case cloudSync = "cloud_sync"
     case keyboardSession = "keyboard_session"
+    case liveActivity = "live_activity"
     case meeting
     case model
     case summary
     case transcription
+}
+
+enum AppTelemetryParameterSanitizer {
+    static let maxKeyLength = 48
+    static let maxValueLength = 96
+
+    private static let allowedKeyCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    )
+    private static let reservedKeys: Set<String> = [
+        "app_version",
+        "app_build",
+        "cloudkit_error",
+        "device_family",
+        "device_model",
+        "error_code",
+        "error_domain",
+        "error_type",
+        "failure_domain",
+        "failure_event",
+        "failure_reason",
+        "failure_stage",
+        "ios_version",
+        "network_error",
+        "timeout",
+    ]
+
+    static func normalizedKey(_ value: String) -> String {
+        let scalars = value.unicodeScalars.map { allowedKeyCharacters.contains($0) ? Character($0) : "_" }
+        let normalized = String(scalars).lowercased()
+        return normalized.isEmpty ? "unknown" : String(normalized.prefix(maxKeyLength))
+    }
+
+    static func normalizedValue(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "unknown" }
+        return String(trimmed.prefix(maxValueLength))
+    }
+
+    static func normalizedCustomParameters(_ parameters: [String: String]) -> [String: String] {
+        parameters.reduce(into: [:]) { result, element in
+            let key = normalizedKey(element.key)
+            let outputKey = reservedKeys.contains(key) ? normalizedKey("custom_\(key)") : key
+            result[outputKey] = normalizedValue(element.value)
+        }
+    }
 }
 
 @MainActor
@@ -17,7 +64,6 @@ enum AppTelemetry {
     private static let appIDInfoKey = "MuesliTelemetryDeckAppID"
     private static let fallbackAppID = "A851C6BD-4F55-41ED-A6BC-DA43C850B069"
     private static var isInitialized = false
-    private static let maxParameterLength = 96
 
     static func configure() {
         signal("app_launched")
@@ -39,9 +85,9 @@ enum AppTelemetry {
     ) {
         var enriched = runtimeParameters()
         enriched["failure_domain"] = domain.rawValue
-        enriched["failure_stage"] = normalizedParameterValue(stage)
+        enriched["failure_stage"] = AppTelemetryParameterSanitizer.normalizedValue(stage)
         if let reason {
-            enriched["failure_reason"] = normalizedParameterValue(reason)
+            enriched["failure_reason"] = AppTelemetryParameterSanitizer.normalizedValue(reason)
         }
         if isTimeout {
             enriched["timeout"] = "true"
@@ -49,12 +95,15 @@ enum AppTelemetry {
         if let error {
             enriched.merge(errorParameters(for: error), uniquingKeysWith: { _, new in new })
         }
-        enriched.merge(normalized(parameters), uniquingKeysWith: { _, new in new })
+        enriched.merge(
+            AppTelemetryParameterSanitizer.normalizedCustomParameters(parameters),
+            uniquingKeysWith: { _, new in new }
+        )
 
         signal(name, parameters: enriched)
 
         var aggregate = enriched
-        aggregate["failure_event"] = normalizedParameterValue(name)
+        aggregate["failure_event"] = AppTelemetryParameterSanitizer.normalizedValue(name)
         signal("failure_observed", parameters: aggregate)
     }
 
@@ -86,8 +135,8 @@ enum AppTelemetry {
     private static func errorParameters(for error: Error) -> [String: String] {
         let nsError = error as NSError
         var parameters = [
-            "error_type": normalizedParameterValue(String(describing: type(of: error))),
-            "error_domain": normalizedParameterValue(nsError.domain),
+            "error_type": AppTelemetryParameterSanitizer.normalizedValue(String(describing: type(of: error))),
+            "error_domain": AppTelemetryParameterSanitizer.normalizedValue(nsError.domain),
             "error_code": "\(nsError.code)",
         ]
 
@@ -99,25 +148,6 @@ enum AppTelemetry {
         }
 
         return parameters
-    }
-
-    private static func normalized(_ parameters: [String: String]) -> [String: String] {
-        parameters.reduce(into: [:]) { result, element in
-            result[normalizedParameterKey(element.key)] = normalizedParameterValue(element.value)
-        }
-    }
-
-    private static func normalizedParameterKey(_ value: String) -> String {
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
-        let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
-        let normalized = String(scalars).lowercased()
-        return normalized.isEmpty ? "unknown" : String(normalized.prefix(48))
-    }
-
-    private static func normalizedParameterValue(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "unknown" }
-        return String(trimmed.prefix(maxParameterLength))
     }
 
     private static func deviceModelIdentifier() -> String {

@@ -65,7 +65,9 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
             writer.onFailure = { [weak self] failure in
                 self?.onRecordingFailure?(failure)
             }
+            lock.lock()
             audioWriter = writer
+            lock.unlock()
 
             inputNode.installTap(onBus: 0, bufferSize: Self.bufferSize, format: nil) { [weak self] buffer, _ in
                 self?.handle(buffer: buffer, targetFormat: targetFormat)
@@ -85,7 +87,10 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
 
     func rotateChunk() -> MeetingAudioChunk? {
         guard isRunning else { return nil }
-        return audioWriter?.rotateCheckpoint()
+        lock.lock()
+        let writer = audioWriter
+        lock.unlock()
+        return writer?.rotateCheckpoint()
     }
 
     func stop() -> (finalChunk: MeetingAudioChunk?, retainedAudioURL: URL?) {
@@ -97,8 +102,11 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         }
         engine.stop()
 
-        let result = audioWriter?.finish()
+        lock.lock()
+        let writer = audioWriter
         audioWriter = nil
+        lock.unlock()
+        let result = writer?.finish()
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
@@ -113,11 +121,12 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         engine.stop()
         isRunning = false
 
-        audioWriter?.cancel()
-        audioWriter = nil
         lock.lock()
+        let writer = audioWriter
+        audioWriter = nil
         state = FileState()
         lock.unlock()
+        writer?.cancel()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -167,8 +176,8 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         let rms = sqrt(sumSquares / Float(frameCount))
         let powerDB = rms > 0.000_001 ? max(-160, min(0, 20 * log10(rms))) : -160
 
-        audioWriter?.append(monoBuffer)
         lock.lock()
+        audioWriter?.append(monoBuffer)
         state.latestPowerDB = powerDB
         lock.unlock()
 
@@ -207,11 +216,12 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
             tapInstalled = false
         }
         engine.stop()
-        audioWriter?.cancel()
-        audioWriter = nil
         lock.lock()
+        let writer = audioWriter
+        audioWriter = nil
         state = FileState()
         lock.unlock()
+        writer?.cancel()
         isRunning = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }

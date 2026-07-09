@@ -78,6 +78,14 @@ enum MuesliPreferences {
         min(max(value, 30), 600)
     }
 
+    static func longVoiceNoteThresholdLabel(_ value: Int) -> String {
+        let seconds = clampedLongVoiceNoteThreshold(value)
+        if seconds == 60 { return "1 min" }
+        if seconds % 60 == 0 { return "\(seconds / 60) min" }
+        if seconds > 60 { return "\(seconds / 60)m \(seconds % 60)s" }
+        return "\(seconds) sec"
+    }
+
     static var keepMeetingAudioRecordingsEnabled: Bool {
         bool(for: keepMeetingAudioRecordingsKey, defaultValue: false)
     }

@@ -1109,6 +1109,44 @@ final class DictationCoordinator {
             status: "\(selectedTranscriptionModel.shortName) ready",
             detail: "UI testing"
         )
+
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.longVoiceNoteUITestLaunchArgument) {
+            configureLongVoiceNoteUITestFixture()
+        }
+    }
+
+    private func configureLongVoiceNoteUITestFixture() {
+        let request = DictationRequest()
+        let session = RecordingSession(
+            requestID: request.id,
+            kind: .quickDictation,
+            startedAt: Date.now.addingTimeInterval(-61),
+            phase: .recording,
+            source: "app",
+            isLongForm: true,
+            longFormActivatedAt: .now,
+            longFormThresholdSeconds: 60,
+            protectedAudioUntilTranscriptCompletes: true
+        )
+
+        activeRequest = request
+        activeSession = session
+        recordingSessions = [session]
+        isRecording = true
+        recordingElapsedTime = 61
+        longVoiceNoteCheckpointCount = 2
+        longVoiceNoteAudioIsSecured = true
+        voiceNoteLifecycleRunner = VoiceNoteLifecycleRunner(sessionID: session.id)
+        voiceNoteLifecycleState = VoiceNoteLifecycleReducer.reduce(
+            voiceNoteLifecycleState,
+            event: .recordingStarted(session.id)
+        )
+        voiceNoteLifecycleState = VoiceNoteLifecycleReducer.reduce(
+            voiceNoteLifecycleState,
+            event: .longFormActivated(session.id)
+        )
+        presentedLongVoiceNoteSessionID = session.id
+        statusText = "Audio saved locally"
     }
     #endif
 

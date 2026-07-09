@@ -29,9 +29,28 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         )
     }
 
+    func testLifecycleRejectsLateEventsAfterFinishing() {
+        let id = UUID()
+        let idle = VoiceNoteLifecycleState()
+
+        XCTAssertEqual(
+            VoiceNoteLifecycleReducer.reduce(idle, event: .transcriptionQueued(id)),
+            idle
+        )
+        XCTAssertEqual(
+            VoiceNoteLifecycleReducer.reduce(idle, event: .transcriptionStarted(id)),
+            idle
+        )
+        XCTAssertEqual(
+            VoiceNoteLifecycleReducer.reduce(idle, event: .cancelRequested(id)),
+            idle
+        )
+    }
+
     func testFailureCanRetry() {
         let id = UUID()
-        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .transcriptionStarted(id))
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .retryRequested(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .transcriptionStarted(id))
         state = VoiceNoteLifecycleReducer.reduce(state, event: .transcriptionFailed(id))
         XCTAssertEqual(state.phase, .failedRetryable(id))
 

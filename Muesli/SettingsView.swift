@@ -763,14 +763,14 @@ private struct LongVoiceNoteSettingsRow: View {
 
                     Menu {
                         ForEach(commonValues, id: \.self) { value in
-                            Button(thresholdLabel(value)) {
+                            Button(MuesliPreferences.longVoiceNoteThresholdLabel(value)) {
                                 thresholdSeconds = value
                                 customText = String(value)
                             }
                         }
                     } label: {
                         HStack(spacing: 6) {
-                            Text(thresholdLabel(thresholdSeconds))
+                            Text(MuesliPreferences.longVoiceNoteThresholdLabel(thresholdSeconds))
                             Image(systemName: "chevron.up.chevron.down")
                                 .font(.system(size: 11, weight: .semibold))
                         }
@@ -798,8 +798,10 @@ private struct LongVoiceNoteSettingsRow: View {
                             let clamped = MuesliPreferences.clampedLongVoiceNoteThreshold(value)
                             if thresholdSeconds != clamped {
                                 thresholdSeconds = clamped
+                                return
                             }
                             customText = String(clamped)
+                            signalThresholdChanged(clamped)
                         }
                 }
 
@@ -833,17 +835,13 @@ private struct LongVoiceNoteSettingsRow: View {
         let value = Int(customText) ?? thresholdSeconds
         thresholdSeconds = MuesliPreferences.clampedLongVoiceNoteThreshold(value)
         customText = String(thresholdSeconds)
-        AppTelemetry.signal(
-            "long_voice_note_threshold_changed",
-            parameters: ["threshold_bucket": thresholdLabel(thresholdSeconds)]
-        )
     }
 
-    private func thresholdLabel(_ seconds: Int) -> String {
-        if seconds == 60 { return "1 min" }
-        if seconds % 60 == 0 { return "\(seconds / 60) min" }
-        if seconds > 60 { return "\(seconds / 60)m \(seconds % 60)s" }
-        return "\(seconds) sec"
+    private func signalThresholdChanged(_ seconds: Int) {
+        AppTelemetry.signal(
+            "long_voice_note_threshold_changed",
+            parameters: ["threshold_bucket": MuesliPreferences.longVoiceNoteThresholdLabel(seconds)]
+        )
     }
 }
 

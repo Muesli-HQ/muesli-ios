@@ -75,10 +75,10 @@ enum VoiceNoteLifecycleReducer {
             guard state.activeSessionID == id else { return state }
             return VoiceNoteLifecycleState(phase: .audioSaved(id))
         case .transcriptionQueued(let id):
-            guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
+            guard state.activeSessionID == id else { return state }
             return VoiceNoteLifecycleState(phase: .transcriptionQueued(id))
         case .transcriptionStarted(let id):
-            guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
+            guard state.activeSessionID == id else { return state }
             return VoiceNoteLifecycleState(phase: .transcribing(id))
         case .transcriptionFailed(let id):
             guard state.activeSessionID == id else { return state }
@@ -87,7 +87,7 @@ enum VoiceNoteLifecycleReducer {
             guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
             return VoiceNoteLifecycleState(phase: .transcriptionQueued(id))
         case .cancelRequested(let id):
-            guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
+            guard state.activeSessionID == id else { return state }
             return VoiceNoteLifecycleState(phase: .cancelling(id))
         case .finished(let id):
             guard state.activeSessionID == id else { return state }

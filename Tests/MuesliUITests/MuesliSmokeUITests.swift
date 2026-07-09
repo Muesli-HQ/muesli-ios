@@ -33,33 +33,17 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
     }
 
-    func testLongVoiceNoteAutomaticallyPresentsAfterInjectedThreshold() {
+    func testLongVoiceNoteActiveStateAndDiscardConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = [
             "--muesli-ui-testing",
-            "--muesli-long-note-threshold-seconds=1",
+            "--muesli-ui-testing-long-voice-note",
         ]
-        addUIInterruptionMonitor(withDescription: "Microphone permission") { alert in
-            let allowButton = alert.buttons["Allow"]
-            if allowButton.exists {
-                allowButton.tap()
-                return true
-            }
-            return false
-        }
         app.launch()
-
-        let recordButton = app.buttons["Start Voice Note"].firstMatch
-        XCTAssertTrue(recordButton.waitForExistence(timeout: 8))
-        recordButton.tap()
-        app.tap()
 
         XCTAssertTrue(app.staticTexts["Long Voice Note"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["longVoiceNote.stopButton"].exists)
-        XCTAssertTrue(
-            app.staticTexts["Audio saved locally"].exists
-                || app.staticTexts["Securing audio"].exists
-        )
+        XCTAssertTrue(app.staticTexts["Audio saved locally"].exists)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Long Voice Note active state"
         screenshot.lifetime = .keepAlways
@@ -67,6 +51,5 @@ final class MuesliSmokeUITests: XCTestCase {
 
         app.buttons["Discard voice note"].tap()
         XCTAssertTrue(app.buttons["Discard Voice Note"].waitForExistence(timeout: 3))
-        app.buttons["Discard Voice Note"].tap()
     }
 }

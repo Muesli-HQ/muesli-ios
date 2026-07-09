@@ -466,11 +466,7 @@ struct DictationView: View {
     }
 
     private var longModeThresholdLabel: String {
-        let seconds = MuesliPreferences.clampedLongVoiceNoteThreshold(longVoiceNoteThresholdSeconds)
-        if seconds == 60 { return "1 min" }
-        if seconds % 60 == 0 { return "\(seconds / 60) min" }
-        if seconds > 60 { return "\(seconds / 60)m \(seconds % 60)s" }
-        return "\(seconds) sec"
+        MuesliPreferences.longVoiceNoteThresholdLabel(longVoiceNoteThresholdSeconds)
     }
 
     private var microphoneMenu: some View {

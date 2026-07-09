@@ -8,6 +8,13 @@ final class MuesliPreferencesTests: XCTestCase {
         XCTAssertEqual(MuesliPreferences.clampedLongVoiceNoteThreshold(9_999), 600)
     }
 
+    func testLongVoiceNoteThresholdLabelsUseSharedFormatting() {
+        XCTAssertEqual(MuesliPreferences.longVoiceNoteThresholdLabel(30), "30 sec")
+        XCTAssertEqual(MuesliPreferences.longVoiceNoteThresholdLabel(60), "1 min")
+        XCTAssertEqual(MuesliPreferences.longVoiceNoteThresholdLabel(90), "1m 30s")
+        XCTAssertEqual(MuesliPreferences.longVoiceNoteThresholdLabel(120), "2 min")
+    }
+
     func testLongVoiceNotePreferencesDefaultEnabledAtSixtySeconds() {
         let defaults = UserDefaults.standard
         let enabled = defaults.object(forKey: MuesliPreferences.longVoiceNoteModeEnabledKey)

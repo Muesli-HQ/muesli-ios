@@ -253,6 +253,19 @@ enum VoiceNoteFailureSessionPolicy {
     }
 }
 
+enum VoiceNoteFailureTelemetryPolicy {
+    static func stage(
+        for reason: VoiceNoteTranscriptionFailureReason,
+        standard: String,
+        timeout: String
+    ) -> String {
+        switch reason {
+        case .timeout: timeout
+        default: standard
+        }
+    }
+}
+
 enum VoiceNoteCheckpointRetentionPolicy {
     static func shouldDeleteCheckpoints(for session: RecordingSession?) -> Bool {
         guard let session else { return true }

@@ -3115,7 +3115,11 @@ final class DictationCoordinator {
                 AppTelemetry.failure(
                     "keyboard_transcription_recovery_failed",
                     domain: .transcription,
-                    stage: "keyboard_recovery",
+                    stage: VoiceNoteFailureTelemetryPolicy.stage(
+                        for: failureReason,
+                        standard: "keyboard_recovery",
+                        timeout: "keyboard_recovery_timeout"
+                    ),
                     error: error,
                     reason: failureReason.rawValue,
                     isTimeout: failureReason == .timeout,
@@ -3490,7 +3494,11 @@ final class DictationCoordinator {
                         AppTelemetry.failure(
                             "long_voice_note_transcription_failed",
                             domain: .transcription,
-                            stage: "offline_transcription",
+                            stage: VoiceNoteFailureTelemetryPolicy.stage(
+                                for: failureReason,
+                                standard: "offline_transcription",
+                                timeout: "offline_transcription_timeout"
+                            ),
                             error: error,
                             reason: failureReason.rawValue,
                             isTimeout: failureReason == .timeout,
@@ -3546,7 +3554,11 @@ final class DictationCoordinator {
                 AppTelemetry.failure(
                     "dictation_failed",
                     domain: .transcription,
-                    stage: "transcription",
+                    stage: VoiceNoteFailureTelemetryPolicy.stage(
+                        for: failureReason,
+                        standard: "transcription",
+                        timeout: "transcription_timeout"
+                    ),
                     error: error,
                     reason: failureReason.rawValue,
                     isTimeout: failureReason == .timeout,

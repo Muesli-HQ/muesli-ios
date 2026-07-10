@@ -367,4 +367,23 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         XCTAssertTrue(recoverableLongSession.protectedAudioUntilTranscriptCompletes)
         XCTAssertFalse(unavailableLongSession.protectedAudioUntilTranscriptCompletes)
     }
+
+    func testFailureTelemetryPolicyPreservesTimeoutStageNames() {
+        XCTAssertEqual(
+            VoiceNoteFailureTelemetryPolicy.stage(
+                for: .timeout,
+                standard: "transcription",
+                timeout: "transcription_timeout"
+            ),
+            "transcription_timeout"
+        )
+        XCTAssertEqual(
+            VoiceNoteFailureTelemetryPolicy.stage(
+                for: .engineFailure,
+                standard: "transcription",
+                timeout: "transcription_timeout"
+            ),
+            "transcription"
+        )
+    }
 }

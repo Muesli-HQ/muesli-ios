@@ -466,6 +466,14 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         return audioFileName == nil ? .unavailable : .audioReferenceOnly
     }
 
+    var canRetryVoiceNoteTranscription: Bool {
+        kind != .meeting
+            && isLongForm
+            && phase == .failed
+            && voiceNoteDurabilityEvidence == .durableCheckpoint
+            && audioFileName != nil
+    }
+
     var syncOrigin: SyncOrigin {
         SyncOrigin.classify(
             source: source,

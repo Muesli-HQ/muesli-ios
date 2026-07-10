@@ -77,6 +77,29 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertEqual(referencedOnly.voiceNoteDurabilityEvidence, .audioReferenceOnly)
     }
 
+    func testTranscriptionRetryRequiresAFailedSessionWithDurableCheckpoint() {
+        let retryable = RecordingSession(
+            kind: .quickDictation,
+            phase: .failed,
+            audioFileName: "voice-note.wav",
+            isLongForm: true,
+            hasDurableAudioCheckpoint: true
+        )
+        XCTAssertTrue(retryable.canRetryVoiceNoteTranscription)
+
+        var referenceOnly = retryable
+        referenceOnly.hasDurableAudioCheckpoint = false
+        XCTAssertFalse(referenceOnly.canRetryVoiceNoteTranscription)
+
+        var missingAudio = retryable
+        missingAudio.audioFileName = nil
+        XCTAssertFalse(missingAudio.canRetryVoiceNoteTranscription)
+
+        var completed = retryable
+        completed.phase = .completed
+        XCTAssertFalse(completed.canRetryVoiceNoteTranscription)
+    }
+
     func testVoiceNoteWorkOwnershipDistinguishesAppAndKeyboardSessions() {
         let appSession = RecordingSession(
             kind: .quickDictation,

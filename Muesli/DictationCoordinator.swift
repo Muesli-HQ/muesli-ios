@@ -1336,7 +1336,9 @@ final class DictationCoordinator {
             detail: "UI testing"
         )
 
-        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.longVoiceNoteUITestLaunchArgument) {
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.completedLongVoiceNoteUITestLaunchArgument) {
+            configureCompletedLongVoiceNoteUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.longVoiceNoteUITestLaunchArgument) {
             configureLongVoiceNoteUITestFixture()
         }
     }
@@ -1376,6 +1378,31 @@ final class DictationCoordinator {
         )
         presentedLongVoiceNoteSessionID = session.id
         statusText = "Audio saved locally"
+    }
+
+    private func configureCompletedLongVoiceNoteUITestFixture() {
+        let request = DictationRequest()
+        let session = RecordingSession(
+            requestID: request.id,
+            kind: .quickDictation,
+            startedAt: Date.now.addingTimeInterval(-62),
+            endedAt: .now,
+            phase: .completed,
+            source: "app",
+            isLongForm: true,
+            longFormActivatedAt: Date.now.addingTimeInterval(-32),
+            longFormThresholdSeconds: 30
+        )
+        let transcript = Transcript(
+            sessionID: session.id,
+            text: "Completed long voice note transcript.",
+            engineIdentifier: selectedTranscriptionModel.engineIdentifier
+        )
+
+        recordingSessions = [session]
+        cacheTranscript(transcript)
+        presentedLongVoiceNoteSessionID = session.id
+        statusText = "Ready"
     }
     #endif
 
@@ -1630,8 +1657,7 @@ final class DictationCoordinator {
               !voiceNoteLifecycleState.isWorkActive,
               statusText != "Transcribing",
               var session = try? store.activeRecordingSession(id: sessionID),
-              session.kind != .meeting,
-              session.isLongForm,
+              session.canRetryVoiceNoteTranscription,
               let requestID = session.requestID,
               let audioFileName = session.audioFileName,
               let audioURL = try? store.audioFileURL(fileName: audioFileName)

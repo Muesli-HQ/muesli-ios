@@ -32,7 +32,9 @@ struct LongVoiceNoteView: View {
                             activeWaveform
                             scratchpadEditor
                         } else {
-                            processingStatus
+                            if session?.phase == .failed {
+                                failureRecoveryPanel
+                            }
                             completedTranscript
                             scratchpadEditor
                             recoveryAudio
@@ -204,35 +206,28 @@ struct LongVoiceNoteView: View {
     }
 
     @ViewBuilder
-    private var processingStatus: some View {
+    private var failureRecoveryPanel: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            Text(session?.phase == .completed ? "Voice note ready" : "Processing")
+            Text(session?.canRetryVoiceNoteTranscription == true ? "Transcription failed" : "Recovery unavailable")
                 .font(MuesliTheme.headline())
                 .foregroundStyle(MuesliTheme.textPrimary)
 
-            statusStep("Audio saved", complete: session?.audioFileName != nil, active: false)
-            statusStep(
-                "Transcribing",
-                complete: session?.phase == .completed,
-                active: session?.phase == .transcriptionQueued || session?.phase == .transcribing
-            )
-            statusStep(
-                session?.phase == .failed ? "Needs retry" : "Transcript ready",
-                complete: session?.phase == .completed,
-                active: session?.phase == .failed,
-                isFailure: session?.phase == .failed
-            )
-
-            if let error = session?.errorMessage, session?.phase == .failed {
+            if let error = session?.errorMessage {
                 Text(error)
                     .font(MuesliTheme.callout())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if session?.phase == .failed {
-                recoveryActions
+            if session?.canRetryVoiceNoteTranscription != true,
+               session?.audioFileName != nil {
+                Text("A durable audio checkpoint is not available, so this transcription cannot be retried safely.")
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            recoveryActions
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.surfacePrimary)
@@ -291,7 +286,7 @@ struct LongVoiceNoteView: View {
     private var recoveryActions: some View {
         MuesliGlassGroup(spacing: MuesliTheme.spacing8) {
             VStack(spacing: MuesliTheme.spacing8) {
-                if session?.audioFileName != nil {
+                if session?.canRetryVoiceNoteTranscription == true {
                     Button {
                         coordinator.retryVoiceNoteTranscription(sessionID: sessionID)
                     } label: {
@@ -303,7 +298,9 @@ struct LongVoiceNoteView: View {
                             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                }
 
+                if session?.audioFileName != nil {
                     HStack(spacing: MuesliTheme.spacing8) {
                         Button {
                             coordinator.keepVoiceNoteAudio(sessionID: sessionID)
@@ -325,7 +322,7 @@ struct LongVoiceNoteView: View {
                         .buttonStyle(.plain)
                     }
                     .font(MuesliTheme.captionMedium())
-                } else {
+                } else if session?.canRetryVoiceNoteTranscription != true {
                     Label("Audio unavailable", systemImage: "waveform.slash")
                         .font(MuesliTheme.callout())
                         .foregroundStyle(MuesliTheme.destructive)
@@ -352,17 +349,6 @@ struct LongVoiceNoteView: View {
         .padding(.vertical, MuesliTheme.spacing12)
         .background(.ultraThinMaterial)
         .accessibilityIdentifier("longVoiceNote.stopButton")
-    }
-
-    private func statusStep(_ title: String, complete: Bool, active: Bool, isFailure: Bool = false) -> some View {
-        HStack(spacing: MuesliTheme.spacing12) {
-            Image(systemName: complete ? "checkmark.circle.fill" : active ? (isFailure ? "exclamationmark.circle.fill" : "circle.dotted") : "circle")
-                .foregroundStyle(complete ? MuesliTheme.success : isFailure ? MuesliTheme.destructive : active ? MuesliTheme.accent : MuesliTheme.textTertiary)
-            Text(title)
-                .font(MuesliTheme.callout())
-                .foregroundStyle(active || complete ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
-            Spacer()
-        }
     }
 
     private var statusCopy: String {

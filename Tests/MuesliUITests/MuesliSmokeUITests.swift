@@ -52,4 +52,19 @@ final class MuesliSmokeUITests: XCTestCase {
         app.buttons["Discard voice note"].tap()
         XCTAssertTrue(app.buttons["Discard Voice Note"].waitForExistence(timeout: 3))
     }
+
+    func testCompletedLongVoiceNoteHidesProgressChecklist() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-completed-long-voice-note",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Long Voice Note"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Completed long voice note transcript."].exists)
+        XCTAssertFalse(app.staticTexts["Voice note ready"].exists)
+        XCTAssertFalse(app.staticTexts["Audio saved"].exists)
+        XCTAssertFalse(app.staticTexts["Transcribing"].exists)
+    }
 }

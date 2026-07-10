@@ -224,6 +224,35 @@ enum VoiceNoteFailureLifecycleDisposition: Equatable {
     }
 }
 
+enum VoiceNoteRecordingTerminationCause: Equatable {
+    case interrupted
+    case checkpointFailure
+
+    var failureReason: VoiceNoteTranscriptionFailureReason {
+        switch self {
+        case .interrupted: .interrupted
+        case .checkpointFailure: .checkpointFailure
+        }
+    }
+}
+
+enum VoiceNoteFailureSessionPolicy {
+    static func prepare(
+        _ session: RecordingSession,
+        reason: VoiceNoteTranscriptionFailureReason,
+        message: String,
+        hasRecoverableAudio: Bool
+    ) -> RecordingSession {
+        var failedSession = session
+        failedSession.phase = .failed
+        failedSession.errorMessage = message
+        failedSession.lastTranscriptionFailureReason = reason
+        failedSession.protectedAudioUntilTranscriptCompletes = session.isLongForm
+            && hasRecoverableAudio
+        return failedSession
+    }
+}
+
 enum VoiceNoteCheckpointRetentionPolicy {
     static func shouldDeleteCheckpoints(for session: RecordingSession?) -> Bool {
         guard let session else { return true }

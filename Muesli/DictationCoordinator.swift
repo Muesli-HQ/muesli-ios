@@ -458,7 +458,10 @@ final class DictationCoordinator {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.handleVoiceNoteRecordingInterruption(message: "Audio services restarted")
+                self?.handleVoiceNoteRecordingInterruption(
+                    message: "Audio services restarted",
+                    cause: .interrupted
+                )
             }
         }
         keyboardSessionKeeper.onRecordingFailure = { [weak self] failure in
@@ -675,6 +678,30 @@ final class DictationCoordinator {
         return await voiceNoteCheckpointStore.isReadableAudio(at: audioURL)
     }
 
+    private func persistVoiceNoteFailure(
+        _ session: RecordingSession,
+        reason: VoiceNoteTranscriptionFailureReason,
+        message: String,
+        unavailableAudioMessage: String? = nil
+    ) async -> RecordingSession {
+        let audioIsRecoverable = session.isLongForm
+            ? await hasRecoverableAudio(for: session)
+            : false
+        let resolvedMessage = session.isLongForm && !audioIsRecoverable
+            ? unavailableAudioMessage ?? message
+            : message
+        var failedSession = VoiceNoteFailureSessionPolicy.prepare(
+            session,
+            reason: reason,
+            message: resolvedMessage,
+            hasRecoverableAudio: audioIsRecoverable
+        )
+        cleanupNonRetainedAudio(for: &failedSession)
+        try? store.saveSession(failedSession)
+        settleVoiceNoteLifecycleAfterFailure(failedSession)
+        return failedSession
+    }
+
     private func settleVoiceNoteLifecycleAfterFailure(_ session: RecordingSession) {
         if VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: session) {
             let checkpointStore = voiceNoteCheckpointStore
@@ -813,10 +840,7 @@ final class DictationCoordinator {
             session.hasDurableAudioCheckpoint = false
         }
         longVoiceNoteDurabilityError = "Audio could not be saved reliably. The recording was stopped."
-        session.lastTranscriptionFailureReason = .checkpointFailure
-        session.errorMessage = longVoiceNoteDurabilityError
         activeSession = session
-        try? store.saveSession(session)
         AppTelemetry.failure(
             "long_voice_note_checkpoint_failed",
             domain: .audio,
@@ -827,14 +851,23 @@ final class DictationCoordinator {
                 checkpointCount: longVoiceNoteCheckpointCount
             )
         )
-        handleVoiceNoteRecordingInterruption(message: longVoiceNoteDurabilityError ?? "Audio save failed")
+        handleVoiceNoteRecordingInterruption(
+            message: longVoiceNoteDurabilityError ?? "Audio save failed",
+            cause: .checkpointFailure
+        )
     }
 
     private func handleAudioSessionInterruption() {
-        handleVoiceNoteRecordingInterruption(message: "Recording was interrupted by the system")
+        handleVoiceNoteRecordingInterruption(
+            message: "Recording was interrupted by the system",
+            cause: .interrupted
+        )
     }
 
-    private func handleVoiceNoteRecordingInterruption(message: String) {
+    private func handleVoiceNoteRecordingInterruption(
+        message: String,
+        cause: VoiceNoteRecordingTerminationCause
+    ) {
         guard isRecording,
               var session = activeSession,
               session.kind != .meeting,
@@ -847,7 +880,7 @@ final class DictationCoordinator {
             session.longFormActivatedAt = session.longFormActivatedAt ?? .now
             session.protectedAudioUntilTranscriptCompletes = session.hasDurableAudioCheckpoint
         }
-        session.lastTranscriptionFailureReason = .interrupted
+        session.lastTranscriptionFailureReason = cause.failureReason
         session.errorMessage = message
         activeSession = session
         try? store.saveSession(session)
@@ -1720,18 +1753,14 @@ final class DictationCoordinator {
                 ) else {
                     return
                 }
-                let audioIsRecoverable = await hasRecoverableAudio(for: session)
-                session.phase = .failed
-                session.errorMessage = audioIsRecoverable
-                    ? "Your audio is safe. Transcription was interrupted."
-                    : "Transcription was interrupted and the audio could not be recovered."
-                session.lastTranscriptionFailureReason = .interrupted
-                session.protectedAudioUntilTranscriptCompletes = audioIsRecoverable
-                cleanupNonRetainedAudio(for: &session)
-                try? store.saveSession(session)
+                session = await persistVoiceNoteFailure(
+                    session,
+                    reason: .interrupted,
+                    message: "Your audio is safe. Transcription was interrupted.",
+                    unavailableAudioMessage: "Transcription was interrupted and the audio could not be recovered."
+                )
                 activeSession = nil
                 statusText = session.errorMessage ?? "Transcription interrupted"
-                settleVoiceNoteLifecycleAfterFailure(session)
                 refreshHistory()
             } catch {
                 guard isCurrentVoiceNoteLifecycle(
@@ -1741,28 +1770,23 @@ final class DictationCoordinator {
                 ) else {
                     return
                 }
-                let audioIsRecoverable = await hasRecoverableAudio(for: session)
-                session.phase = .failed
-                session.errorMessage = audioIsRecoverable
-                    ? "Your audio is safe. We couldn't finish transcribing this note."
-                    : "We couldn't finish transcribing this note or recover its audio."
-                session.lastTranscriptionFailureReason = error is VoiceNoteRetryError
-                    ? .timeout
-                    : .engineFailure
-                session.protectedAudioUntilTranscriptCompletes = audioIsRecoverable
-                cleanupNonRetainedAudio(for: &session)
-                try? store.saveSession(session)
+                let failureReason = voiceNoteFailureReason(for: error)
+                session = await persistVoiceNoteFailure(
+                    session,
+                    reason: failureReason,
+                    message: "Your audio is safe. We couldn't finish transcribing this note.",
+                    unavailableAudioMessage: "We couldn't finish transcribing this note or recover its audio."
+                )
                 activeSession = nil
                 statusText = session.errorMessage ?? "Transcription failed"
-                settleVoiceNoteLifecycleAfterFailure(session)
                 refreshHistory()
                 AppTelemetry.failure(
                     "long_voice_note_transcription_failed",
                     domain: .transcription,
                     stage: "retry",
                     error: error,
-                    reason: session.lastTranscriptionFailureReason?.rawValue,
-                    isTimeout: session.lastTranscriptionFailureReason == .timeout,
+                    reason: failureReason.rawValue,
+                    isTimeout: failureReason == .timeout,
                     parameters: voiceNoteTelemetryParameters(session: session)
                 )
             }
@@ -2972,25 +2996,14 @@ final class DictationCoordinator {
                             message: message,
                             supportsBackgroundStart: self.canStartKeyboardRequestsInBackground
                         )
-                    }
-                ) { [weak self] in
-                    guard let self,
-                          self.isCurrentVoiceNoteLifecycle(
-                              sessionID: session.id,
-                              requestID: request.id,
-                              runnerID: lifecycleRunnerID
-                          )
-                    else { return }
-                    self.handleKeyboardTranscriptionTimeout(
-                        request: request,
-                        session: session,
-                        startedFromKeyboard: true,
-                        source: .recovery
-                    )
-                } operation: { [engine] progress in
+                    },
+                    onTimeout: {}
+                ) { [engine] progress in
                     try await engine.transcribe(audioURL: audioURL, progress: progress)
                 }
-                guard case .completed(let rawText) = outcome else { return }
+                guard case .completed(let rawText) = outcome else {
+                    throw VoiceNoteRetryError.timeout
+                }
                 guard isCurrentVoiceNoteLifecycle(
                     sessionID: session.id,
                     requestID: request.id,
@@ -3066,17 +3079,12 @@ final class DictationCoordinator {
                     requestID: request.id,
                     runnerID: lifecycleRunnerID
                 ) else { return }
-                var failedSession = session
-                failedSession.phase = .failed
-                failedSession.errorMessage = error.localizedDescription
-                failedSession.lastTranscriptionFailureReason = voiceNoteFailureReason(for: error)
-                if failedSession.isLongForm {
-                    failedSession.protectedAudioUntilTranscriptCompletes =
-                        await hasRecoverableAudio(for: failedSession)
-                }
-                cleanupNonRetainedAudio(for: &failedSession)
-                try? store.saveSession(failedSession)
-                settleVoiceNoteLifecycleAfterFailure(failedSession)
+                let failureReason = voiceNoteFailureReason(for: error)
+                _ = await persistVoiceNoteFailure(
+                    session,
+                    reason: failureReason,
+                    message: error.localizedDescription
+                )
                 try? store.saveStatus(.init(
                     requestID: request.id,
                     phase: .failed,
@@ -3089,6 +3097,8 @@ final class DictationCoordinator {
                 )
                 activeRequest = nil
                 activeSession = nil
+                try? store.clearPendingRequest()
+                try? store.clearPendingCommand()
                 let completedDeferredStop = completeDeferredKeyboardSessionStopIfNeeded()
                 transitionKeyboardSession(.requestFinished)
                 statusText = error.localizedDescription
@@ -3107,6 +3117,8 @@ final class DictationCoordinator {
                     domain: .transcription,
                     stage: "keyboard_recovery",
                     error: error,
+                    reason: failureReason.rawValue,
+                    isTimeout: failureReason == .timeout,
                     parameters: ["engine": engine.identifier]
                 )
             }
@@ -3337,10 +3349,11 @@ final class DictationCoordinator {
                     let outcome = try await runKeyboardTranscriptionJob(
                         audioURL: audioURL,
                         request: request,
-                        session: activeSession ?? session,
                         startedFromKeyboard: startedFromKeyboard
                     )
-                    guard case .completed(let rawText) = outcome else { return }
+                    guard case .completed(let rawText) = outcome else {
+                        throw VoiceNoteRetryError.timeout
+                    }
                     text = postProcessTranscript(rawText)
                 } else {
                     text = realtimeText
@@ -3465,24 +3478,22 @@ final class DictationCoordinator {
                 )
             } catch {
                 var failedVoiceNoteSession: RecordingSession?
+                let failureReason = voiceNoteFailureReason(for: error)
                 if var session = activeSession ?? session {
-                    session.phase = .failed
-                    session.errorMessage = error.localizedDescription
-                    session.lastTranscriptionFailureReason = voiceNoteFailureReason(for: error)
-                    if session.isLongForm {
-                        session.protectedAudioUntilTranscriptCompletes =
-                            await hasRecoverableAudio(for: session)
-                    }
-                    cleanupNonRetainedAudio(for: &session)
-                    try? store.saveSession(session)
+                    session = await persistVoiceNoteFailure(
+                        session,
+                        reason: failureReason,
+                        message: error.localizedDescription
+                    )
                     failedVoiceNoteSession = session
-                    settleVoiceNoteLifecycleAfterFailure(session)
                     if session.isLongForm {
                         AppTelemetry.failure(
                             "long_voice_note_transcription_failed",
                             domain: .transcription,
                             stage: "offline_transcription",
                             error: error,
+                            reason: failureReason.rawValue,
+                            isTimeout: failureReason == .timeout,
                             parameters: voiceNoteTelemetryParameters(
                                 session: session,
                                 checkpointCount: longVoiceNoteCheckpointCount
@@ -3492,6 +3503,8 @@ final class DictationCoordinator {
                 }
                 activeRequest = nil
                 activeSession = nil
+                try? store.clearPendingRequest()
+                try? store.clearPendingCommand()
                 let completedDeferredStop = completeDeferredKeyboardSessionStopIfNeeded()
                 if !completedDeferredStop {
                     saveKeyboardRuntimeStatus(
@@ -3535,6 +3548,8 @@ final class DictationCoordinator {
                     domain: .transcription,
                     stage: "transcription",
                     error: error,
+                    reason: failureReason.rawValue,
+                    isTimeout: failureReason == .timeout,
                     parameters: ["engine": engine.identifier]
                 )
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
@@ -4479,7 +4494,6 @@ final class DictationCoordinator {
     private func runKeyboardTranscriptionJob(
         audioURL: URL,
         request: DictationRequest,
-        session: RecordingSession?,
         startedFromKeyboard: Bool
     ) async throws -> OfflineTranscriptionJobOutcome<String> {
         try await runOfflineTranscriptionJob(
@@ -4490,93 +4504,10 @@ final class DictationCoordinator {
                     startedFromKeyboard: startedFromKeyboard,
                     update: update
                 )
-            }
-        ) { [weak self] in
-            self?.handleKeyboardTranscriptionTimeout(
-                request: request,
-                session: session,
-                startedFromKeyboard: startedFromKeyboard
-            )
-        } operation: { [engine] progress in
+            },
+            onTimeout: {}
+        ) { [engine] progress in
             try await engine.transcribe(audioURL: audioURL, progress: progress)
-        }
-    }
-
-    private func handleKeyboardTranscriptionTimeout(
-        request: DictationRequest,
-        session: RecordingSession?,
-        startedFromKeyboard: Bool,
-        source: KeyboardTranscriptionTimeoutSource = .activeDictation
-    ) {
-        let message = "Transcription stalled. Open Muesli to try again."
-        if var failedSession = activeSession ?? session {
-            failedSession.phase = .failed
-            failedSession.errorMessage = message
-            failedSession.lastTranscriptionFailureReason = .timeout
-            try? store.saveSession(failedSession)
-            if failedSession.isLongForm {
-                AppTelemetry.failure(
-                    "long_voice_note_transcription_failed",
-                    domain: .transcription,
-                    stage: "offline_transcription_timeout",
-                    reason: "timeout",
-                    isTimeout: true,
-                    parameters: voiceNoteTelemetryParameters(
-                        session: failedSession,
-                        checkpointCount: longVoiceNoteCheckpointCount
-                    )
-                )
-            }
-            settleVoiceNoteLifecycleAfterFailure(failedSession)
-        }
-        activeRequest = nil
-        activeSession = nil
-        liveDictationTranscript = ""
-        realtimeDictationCommittedText = ""
-        clearKeyboardLiveTranscript()
-        statusText = message
-        let completedDeferredStop = completeDeferredKeyboardSessionStopIfNeeded()
-        try? store.clearPendingRequest()
-        try? store.clearPendingCommand()
-        try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
-        if startedFromKeyboard {
-            saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
-            if !completedDeferredStop {
-                saveKeyboardRuntimeStatus(
-                    isActive: canStartKeyboardRequestsInBackground,
-                    activeRequestID: nil,
-                    phase: .failed,
-                    message: message,
-                    supportsBackgroundStart: canStartKeyboardRequestsInBackground
-                )
-            }
-        }
-        transitionKeyboardSession(.requestFinished)
-        if !completedDeferredStop {
-            resumeKeyboardSessionKeeperIfNeeded()
-            publishKeyboardSessionReadyIfAvailable()
-        }
-        clearKeyboardSessionLiveActivityRoute(for: request.id)
-        refreshHistory()
-        switch source {
-        case .activeDictation:
-            AppTelemetry.failure(
-                "dictation_failed",
-                domain: .transcription,
-                stage: "transcription_timeout",
-                reason: "timeout",
-                isTimeout: true,
-                parameters: ["engine": engine.identifier]
-            )
-        case .recovery:
-            AppTelemetry.failure(
-                "keyboard_transcription_recovery_failed",
-                domain: .transcription,
-                stage: "keyboard_recovery_timeout",
-                reason: "timeout",
-                isTimeout: true,
-                parameters: ["engine": engine.identifier]
-            )
         }
     }
 
@@ -5170,13 +5101,15 @@ private enum OfflineTranscriptionJobOutcome<Output: Sendable>: Sendable {
     case timedOut
 }
 
-private enum KeyboardTranscriptionTimeoutSource {
-    case activeDictation
-    case recovery
-}
-
-private enum VoiceNoteRetryError: Error {
+private enum VoiceNoteRetryError: LocalizedError {
     case timeout
+
+    var errorDescription: String? {
+        switch self {
+        case .timeout:
+            "Transcription stalled. Open Muesli to try again."
+        }
+    }
 }
 
 private enum VoiceNoteCaptureFailure: LocalizedError {

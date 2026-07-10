@@ -316,4 +316,55 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         XCTAssertEqual(VoiceNoteFailureLifecycleDisposition.resolve(for: short), .finished)
         XCTAssertEqual(VoiceNoteFailureLifecycleDisposition.resolve(for: long), .retryable)
     }
+
+    func testRecordingTerminationCausePreservesSpecificFailureReason() {
+        XCTAssertEqual(
+            VoiceNoteRecordingTerminationCause.interrupted.failureReason,
+            .interrupted
+        )
+        XCTAssertEqual(
+            VoiceNoteRecordingTerminationCause.checkpointFailure.failureReason,
+            .checkpointFailure
+        )
+    }
+
+    func testFailureSessionPolicyProtectsOnlyRecoverableLongFormAudio() {
+        let shortSession = Muesli.RecordingSession(
+            kind: .keyboardDictation,
+            phase: .transcribing,
+            audioFileName: "short.wav"
+        )
+        let failedShortSession = VoiceNoteFailureSessionPolicy.prepare(
+            shortSession,
+            reason: .timeout,
+            message: "Timed out",
+            hasRecoverableAudio: true
+        )
+
+        XCTAssertEqual(failedShortSession.phase, .failed)
+        XCTAssertEqual(failedShortSession.lastTranscriptionFailureReason, .timeout)
+        XCTAssertFalse(failedShortSession.protectedAudioUntilTranscriptCompletes)
+
+        let longSession = Muesli.RecordingSession(
+            kind: .keyboardDictation,
+            phase: .transcribing,
+            audioFileName: "long.wav",
+            isLongForm: true
+        )
+        let recoverableLongSession = VoiceNoteFailureSessionPolicy.prepare(
+            longSession,
+            reason: .timeout,
+            message: "Timed out",
+            hasRecoverableAudio: true
+        )
+        let unavailableLongSession = VoiceNoteFailureSessionPolicy.prepare(
+            longSession,
+            reason: .timeout,
+            message: "Timed out",
+            hasRecoverableAudio: false
+        )
+
+        XCTAssertTrue(recoverableLongSession.protectedAudioUntilTranscriptCompletes)
+        XCTAssertFalse(unavailableLongSession.protectedAudioUntilTranscriptCompletes)
+    }
 }

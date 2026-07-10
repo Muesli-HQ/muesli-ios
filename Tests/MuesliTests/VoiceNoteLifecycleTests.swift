@@ -29,6 +29,69 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         )
     }
 
+    func testLifecycleRejectsLongFormActivationAfterStop() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .stopRequested(id))
+
+        let transition = VoiceNoteLifecycleReducer.transition(
+            state,
+            event: .longFormActivated(id)
+        )
+
+        XCTAssertFalse(transition.accepted)
+        XCTAssertEqual(transition.state.phase, .stopping(id))
+    }
+
+    func testLifecycleRejectsOutOfOrderFinalizationAndQueueEvents() {
+        let id = UUID()
+        let recording = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+
+        let finalized = VoiceNoteLifecycleReducer.transition(
+            recording,
+            event: .audioFinalized(id)
+        )
+        let queued = VoiceNoteLifecycleReducer.transition(
+            recording,
+            event: .transcriptionQueued(id)
+        )
+
+        XCTAssertFalse(finalized.accepted)
+        XCTAssertFalse(queued.accepted)
+        XCTAssertEqual(finalized.state, recording)
+        XCTAssertEqual(queued.state, recording)
+    }
+
+    func testNewRecordingCanReplaceARecoverableFailedSession() {
+        let failedID = UUID()
+        let newID = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .retryRequested(failedID))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .transcriptionStarted(failedID))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .transcriptionFailed(failedID))
+
+        let transition = VoiceNoteLifecycleReducer.transition(
+            state,
+            event: .recordingStarted(newID)
+        )
+
+        XCTAssertTrue(transition.accepted)
+        XCTAssertEqual(transition.state.phase, .recordingShort(newID))
+    }
+
+    func testCheckpointDisabledPathCanMoveFromStoppingDirectlyToTranscribing() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .stopRequested(id))
+
+        let transition = VoiceNoteLifecycleReducer.transition(
+            state,
+            event: .transcriptionStarted(id)
+        )
+
+        XCTAssertTrue(transition.accepted)
+        XCTAssertEqual(transition.state.phase, .transcribing(id))
+    }
+
     func testLifecycleRejectsLateEventsAfterFinishing() {
         let id = UUID()
         let idle = VoiceNoteLifecycleState()
@@ -45,6 +108,95 @@ final class VoiceNoteLifecycleTests: XCTestCase {
             VoiceNoteLifecycleReducer.reduce(idle, event: .cancelRequested(id)),
             idle
         )
+    }
+
+    func testLifecycleTransitionGraphIsExplicit() {
+        let id = UUID()
+        let states: [(name: String, state: VoiceNoteLifecycleState)] = [
+            ("idle", .init()),
+            ("recordingShort", .init(phase: .recordingShort(id))),
+            ("recordingLongProtected", .init(phase: .recordingLongProtected(id))),
+            ("stopping", .init(phase: .stopping(id))),
+            ("audioSaved", .init(phase: .audioSaved(id))),
+            ("transcriptionQueued", .init(phase: .transcriptionQueued(id))),
+            ("transcribing", .init(phase: .transcribing(id))),
+            ("failedRetryable", .init(phase: .failedRetryable(id))),
+            ("cancelling", .init(phase: .cancelling(id))),
+        ]
+        let events: [(name: String, event: VoiceNoteLifecycleEvent)] = [
+            ("recordingStarted", .recordingStarted(id)),
+            ("longFormActivated", .longFormActivated(id)),
+            ("stopRequested", .stopRequested(id)),
+            ("audioFinalized", .audioFinalized(id)),
+            ("transcriptionQueued", .transcriptionQueued(id)),
+            ("transcriptionStarted", .transcriptionStarted(id)),
+            ("transcriptionFailed", .transcriptionFailed(id)),
+            ("retryRequested", .retryRequested(id)),
+            ("cancelRequested", .cancelRequested(id)),
+            ("finished", .finished(id)),
+        ]
+        let acceptedPairs: Set<String> = [
+            "idle.recordingStarted",
+            "idle.retryRequested",
+            "recordingShort.recordingStarted",
+            "recordingShort.longFormActivated",
+            "recordingShort.stopRequested",
+            "recordingShort.cancelRequested",
+            "recordingShort.finished",
+            "recordingLongProtected.stopRequested",
+            "recordingLongProtected.cancelRequested",
+            "recordingLongProtected.finished",
+            "stopping.audioFinalized",
+            "stopping.transcriptionStarted",
+            "stopping.transcriptionFailed",
+            "stopping.cancelRequested",
+            "stopping.finished",
+            "audioSaved.transcriptionQueued",
+            "audioSaved.transcriptionStarted",
+            "audioSaved.transcriptionFailed",
+            "audioSaved.finished",
+            "transcriptionQueued.transcriptionStarted",
+            "transcriptionQueued.transcriptionFailed",
+            "transcriptionQueued.finished",
+            "transcribing.transcriptionFailed",
+            "transcribing.finished",
+            "failedRetryable.recordingStarted",
+            "failedRetryable.retryRequested",
+            "failedRetryable.finished",
+            "cancelling.finished",
+        ]
+
+        for state in states {
+            for event in events {
+                let pair = "\(state.name).\(event.name)"
+                let transition = VoiceNoteLifecycleReducer.transition(
+                    state.state,
+                    event: event.event
+                )
+                XCTAssertEqual(
+                    transition.accepted,
+                    acceptedPairs.contains(pair),
+                    "Unexpected transition contract for \(pair)"
+                )
+                if !transition.accepted {
+                    XCTAssertEqual(transition.state, state.state)
+                }
+            }
+        }
+    }
+
+    func testFailedRetryRejectsAnotherSessionsRequest() {
+        let activeID = UUID()
+        let staleID = UUID()
+        let state = VoiceNoteLifecycleState(phase: .failedRetryable(activeID))
+
+        let transition = VoiceNoteLifecycleReducer.transition(
+            state,
+            event: .retryRequested(staleID)
+        )
+
+        XCTAssertFalse(transition.accepted)
+        XCTAssertEqual(transition.state, state)
     }
 
     func testFailureCanRetry() {
@@ -155,5 +307,13 @@ final class VoiceNoteLifecycleTests: XCTestCase {
 
         let retained = Muesli.RecordingSession(kind: .quickDictation, keepsAudioRecording: true)
         XCTAssertFalse(VoiceNoteAudioRetentionPolicy.shouldDeleteAudioAfterSuccess(retained))
+    }
+
+    func testFailureDispositionKeepsOnlyLongNotesRetryable() {
+        let short = Muesli.RecordingSession(kind: .quickDictation, isLongForm: false)
+        let long = Muesli.RecordingSession(kind: .quickDictation, isLongForm: true)
+
+        XCTAssertEqual(VoiceNoteFailureLifecycleDisposition.resolve(for: short), .finished)
+        XCTAssertEqual(VoiceNoteFailureLifecycleDisposition.resolve(for: long), .retryable)
     }
 }

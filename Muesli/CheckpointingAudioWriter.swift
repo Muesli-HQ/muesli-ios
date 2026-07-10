@@ -146,10 +146,12 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
         guard !state.isClosed else { return }
         let frameCount = AVAudioFramePosition(buffer.frameLength)
         guard frameCount > 0 else { return }
+        var wroteFrames = false
 
         if let continuousFile = state.continuousFile {
             do {
                 try continuousFile.write(from: buffer)
+                wroteFrames = true
             } catch {
                 state.continuousFile = nil
                 report(.continuousWrite)
@@ -160,12 +162,15 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
             do {
                 try checkpointFile.write(from: buffer)
                 state.checkpointFrames += frameCount
+                wroteFrames = true
             } catch {
                 state.checkpointFile = nil
                 report(.checkpointWrite)
             }
         }
-        state.totalFrames += frameCount
+        if wroteFrames {
+            state.totalFrames += frameCount
+        }
     }
 
     private func report(_ failure: CheckpointingAudioWriterFailure) {

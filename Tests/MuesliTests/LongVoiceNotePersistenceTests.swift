@@ -16,6 +16,7 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
             isLongForm: true,
             longFormActivatedAt: activatedAt,
             longFormThresholdSeconds: 60,
+            hasDurableAudioCheckpoint: true,
             protectedAudioUntilTranscriptCompletes: true,
             transcriptionRetryCount: 2,
             lastTranscriptionAttemptAt: attemptedAt,
@@ -29,11 +30,13 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertTrue(recovered.isLongForm)
         XCTAssertEqual(recovered.longFormActivatedAt, activatedAt)
         XCTAssertEqual(recovered.longFormThresholdSeconds, 60)
+        XCTAssertTrue(recovered.hasDurableAudioCheckpoint)
         XCTAssertTrue(recovered.protectedAudioUntilTranscriptCompletes)
         XCTAssertEqual(recovered.transcriptionRetryCount, 2)
         XCTAssertEqual(recovered.lastTranscriptionAttemptAt, attemptedAt)
         XCTAssertEqual(recovered.lastTranscriptionFailureReason, .timeout)
         XCTAssertEqual(recovered.scratchpadText, "Remember the second point")
+        XCTAssertEqual(recovered.voiceNoteDurabilityEvidence, .durableCheckpoint)
     }
 
     func testLegacySessionDecodesLongVoiceNoteDefaults() throws {
@@ -42,7 +45,7 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         for key in [
             "isLongForm", "longFormActivatedAt", "longFormThresholdSeconds",
-            "protectedAudioUntilTranscriptCompletes", "transcriptionRetryCount",
+            "hasDurableAudioCheckpoint", "protectedAudioUntilTranscriptCompletes", "transcriptionRetryCount",
             "lastTranscriptionAttemptAt", "lastTranscriptionFailureReason", "scratchpadText"
         ] {
             payload.removeValue(forKey: key)
@@ -56,10 +59,22 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertFalse(decoded.isLongForm)
         XCTAssertNil(decoded.longFormActivatedAt)
         XCTAssertNil(decoded.longFormThresholdSeconds)
+        XCTAssertFalse(decoded.hasDurableAudioCheckpoint)
         XCTAssertFalse(decoded.protectedAudioUntilTranscriptCompletes)
         XCTAssertEqual(decoded.transcriptionRetryCount, 0)
         XCTAssertNil(decoded.lastTranscriptionFailureReason)
         XCTAssertNil(decoded.scratchpadText)
+        XCTAssertEqual(decoded.voiceNoteDurabilityEvidence, .unavailable)
+    }
+
+    func testDurabilityEvidenceDoesNotTreatAFileNameAsACheckpoint() {
+        let referencedOnly = RecordingSession(
+            kind: .quickDictation,
+            phase: .failed,
+            audioFileName: "unverified.wav"
+        )
+
+        XCTAssertEqual(referencedOnly.voiceNoteDurabilityEvidence, .audioReferenceOnly)
     }
 
     func testVoiceNoteWorkOwnershipDistinguishesAppAndKeyboardSessions() {

@@ -81,6 +81,12 @@ enum VoiceNoteTranscriptionFailureReason: String, Codable, Sendable, Equatable {
     case unknown
 }
 
+enum VoiceNoteDurabilityEvidence: Sendable, Equatable {
+    case durableCheckpoint
+    case audioReferenceOnly
+    case unavailable
+}
+
 enum MeetingProcessingState: String, Codable, Sendable, Equatable {
     case notStarted
     case processing
@@ -377,6 +383,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var isLongForm: Bool
     var longFormActivatedAt: Date?
     var longFormThresholdSeconds: Int?
+    var hasDurableAudioCheckpoint: Bool
     var protectedAudioUntilTranscriptCompletes: Bool
     var transcriptionRetryCount: Int
     var lastTranscriptionAttemptAt: Date?
@@ -403,6 +410,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         isLongForm: Bool = false,
         longFormActivatedAt: Date? = nil,
         longFormThresholdSeconds: Int? = nil,
+        hasDurableAudioCheckpoint: Bool = false,
         protectedAudioUntilTranscriptCompletes: Bool = false,
         transcriptionRetryCount: Int = 0,
         lastTranscriptionAttemptAt: Date? = nil,
@@ -428,6 +436,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.isLongForm = isLongForm
         self.longFormActivatedAt = longFormActivatedAt
         self.longFormThresholdSeconds = longFormThresholdSeconds
+        self.hasDurableAudioCheckpoint = hasDurableAudioCheckpoint
         self.protectedAudioUntilTranscriptCompletes = protectedAudioUntilTranscriptCompletes
         self.transcriptionRetryCount = transcriptionRetryCount
         self.lastTranscriptionAttemptAt = lastTranscriptionAttemptAt
@@ -448,6 +457,13 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var hasActiveVoiceNoteWork: Bool {
         kind != .meeting
             && [.recording, .transcriptionQueued, .transcribing].contains(phase)
+    }
+
+    var voiceNoteDurabilityEvidence: VoiceNoteDurabilityEvidence {
+        if hasDurableAudioCheckpoint {
+            return .durableCheckpoint
+        }
+        return audioFileName == nil ? .unavailable : .audioReferenceOnly
     }
 
     var syncOrigin: SyncOrigin {
@@ -478,6 +494,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         case isLongForm
         case longFormActivatedAt
         case longFormThresholdSeconds
+        case hasDurableAudioCheckpoint
         case protectedAudioUntilTranscriptCompletes
         case transcriptionRetryCount
         case lastTranscriptionAttemptAt
@@ -506,6 +523,10 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         isLongForm = try container.decodeIfPresent(Bool.self, forKey: .isLongForm) ?? false
         longFormActivatedAt = try container.decodeIfPresent(Date.self, forKey: .longFormActivatedAt)
         longFormThresholdSeconds = try container.decodeIfPresent(Int.self, forKey: .longFormThresholdSeconds)
+        hasDurableAudioCheckpoint = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .hasDurableAudioCheckpoint
+        ) ?? false
         protectedAudioUntilTranscriptCompletes = try container.decodeIfPresent(
             Bool.self,
             forKey: .protectedAudioUntilTranscriptCompletes

@@ -10,6 +10,12 @@ struct MeetingAudioChunk: Sendable, Equatable {
 }
 
 final class StreamingMeetingRecorder: @unchecked Sendable {
+    struct StopResult: Sendable {
+        let finalChunk: MeetingAudioChunk?
+        let retainedAudioURL: URL?
+        let writerFailure: CheckpointingAudioWriterFailure?
+    }
+
     var onAudioSamples: (([Float]) -> Void)?
     var onAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
     var onRecordingFailure: (@Sendable (CheckpointingAudioWriterFailure) -> Void)?
@@ -93,8 +99,14 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         return writer?.rotateCheckpoint()
     }
 
-    func stop() -> (finalChunk: MeetingAudioChunk?, retainedAudioURL: URL?) {
-        guard isRunning else { return (nil, nil) }
+    func stop() -> StopResult {
+        guard isRunning else {
+            return StopResult(
+                finalChunk: nil,
+                retainedAudioURL: nil,
+                writerFailure: nil
+            )
+        }
         isRunning = false
         if tapInstalled {
             engine.inputNode.removeTap(onBus: 0)
@@ -110,7 +122,11 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
-        return (result?.finalCheckpoint, result?.continuousAudioURL)
+        return StopResult(
+            finalChunk: result?.finalCheckpoint,
+            retainedAudioURL: result?.continuousAudioURL,
+            writerFailure: result?.failure
+        )
     }
 
     func cancel() {

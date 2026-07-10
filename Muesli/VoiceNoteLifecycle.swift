@@ -11,6 +11,20 @@ struct VoiceNoteLifecycleState: Equatable {
         case transcribing(UUID)
         case failedRetryable(UUID)
         case cancelling(UUID)
+
+        var telemetryName: String {
+            switch self {
+            case .idle: "idle"
+            case .recordingShort: "recording_short"
+            case .recordingLongProtected: "recording_long_protected"
+            case .stopping: "stopping"
+            case .audioSaved: "audio_saved"
+            case .transcriptionQueued: "transcription_queued"
+            case .transcribing: "transcribing"
+            case .failedRetryable: "failed_retryable"
+            case .cancelling: "cancelling"
+            }
+        }
     }
 
     var phase: Phase = .idle
@@ -67,42 +81,92 @@ enum VoiceNoteLifecycleEvent {
     case retryRequested(UUID)
     case cancelRequested(UUID)
     case finished(UUID)
+
+    var telemetryName: String {
+        switch self {
+        case .recordingStarted: "recording_started"
+        case .longFormActivated: "long_form_activated"
+        case .stopRequested: "stop_requested"
+        case .audioFinalized: "audio_finalized"
+        case .transcriptionQueued: "transcription_queued"
+        case .transcriptionStarted: "transcription_started"
+        case .transcriptionFailed: "transcription_failed"
+        case .retryRequested: "retry_requested"
+        case .cancelRequested: "cancel_requested"
+        case .finished: "finished"
+        }
+    }
+}
+
+struct VoiceNoteLifecycleTransition: Equatable {
+    let state: VoiceNoteLifecycleState
+    let accepted: Bool
 }
 
 enum VoiceNoteLifecycleReducer {
-    static func reduce(_ state: VoiceNoteLifecycleState, event: VoiceNoteLifecycleEvent) -> VoiceNoteLifecycleState {
-        switch event {
-        case .recordingStarted(let id):
-            guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .recordingShort(id))
-        case .longFormActivated(let id):
-            guard state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .recordingLongProtected(id))
-        case .stopRequested(let id):
-            guard state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .stopping(id))
-        case .audioFinalized(let id):
-            guard state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .audioSaved(id))
-        case .transcriptionQueued(let id):
-            guard state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .transcriptionQueued(id))
-        case .transcriptionStarted(let id):
-            guard state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .transcribing(id))
-        case .transcriptionFailed(let id):
-            guard state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .failedRetryable(id))
-        case .retryRequested(let id):
-            guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .transcriptionQueued(id))
-        case .cancelRequested(let id):
-            guard state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState(phase: .cancelling(id))
-        case .finished(let id):
-            guard state.activeSessionID == id else { return state }
-            return VoiceNoteLifecycleState()
+    static func transition(
+        _ state: VoiceNoteLifecycleState,
+        event: VoiceNoteLifecycleEvent
+    ) -> VoiceNoteLifecycleTransition {
+        let nextState: VoiceNoteLifecycleState?
+        switch (state.phase, event) {
+        case (.idle, .recordingStarted(let id)):
+            nextState = VoiceNoteLifecycleState(phase: .recordingShort(id))
+        case (.failedRetryable, .recordingStarted(let id)):
+            nextState = VoiceNoteLifecycleState(phase: .recordingShort(id))
+        case (.recordingShort(let activeID), .recordingStarted(let id)) where activeID == id:
+            nextState = state
+        case (.recordingShort(let activeID), .longFormActivated(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .recordingLongProtected(id))
+        case (.recordingShort(let activeID), .stopRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .stopping(id))
+        case (.recordingLongProtected(let activeID), .stopRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .stopping(id))
+        case (.stopping(let activeID), .audioFinalized(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .audioSaved(id))
+        case (.audioSaved(let activeID), .transcriptionQueued(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .transcriptionQueued(id))
+        case (.stopping(let activeID), .transcriptionStarted(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .transcribing(id))
+        case (.audioSaved(let activeID), .transcriptionStarted(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .transcribing(id))
+        case (.transcriptionQueued(let activeID), .transcriptionStarted(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .transcribing(id))
+        case (.stopping(let activeID), .transcriptionFailed(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .failedRetryable(id))
+        case (.audioSaved(let activeID), .transcriptionFailed(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .failedRetryable(id))
+        case (.transcriptionQueued(let activeID), .transcriptionFailed(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .failedRetryable(id))
+        case (.transcribing(let activeID), .transcriptionFailed(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .failedRetryable(id))
+        case (.idle, .retryRequested(let id)):
+            nextState = VoiceNoteLifecycleState(phase: .transcriptionQueued(id))
+        case (.failedRetryable(let activeID), .retryRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .transcriptionQueued(id))
+        case (.recordingShort(let activeID), .cancelRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
+        case (.recordingLongProtected(let activeID), .cancelRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
+        case (.stopping(let activeID), .cancelRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
+        case (_, .finished(let id)) where state.activeSessionID == id:
+            nextState = VoiceNoteLifecycleState()
+        default:
+            nextState = nil
         }
+
+        guard let nextState else {
+            return VoiceNoteLifecycleTransition(state: state, accepted: false)
+        }
+        return VoiceNoteLifecycleTransition(state: nextState, accepted: true)
+    }
+
+    static func reduce(
+        _ state: VoiceNoteLifecycleState,
+        event: VoiceNoteLifecycleEvent
+    ) -> VoiceNoteLifecycleState {
+        transition(state, event: event).state
     }
 }
 
@@ -148,6 +212,15 @@ enum VoiceNoteAudioRetentionPolicy {
 
     static func shouldDeleteAudioAfterSuccess(_ session: RecordingSession) -> Bool {
         !session.keepsAudioRecording
+    }
+}
+
+enum VoiceNoteFailureLifecycleDisposition: Equatable {
+    case retryable
+    case finished
+
+    static func resolve(for session: RecordingSession) -> VoiceNoteFailureLifecycleDisposition {
+        session.isLongForm ? .retryable : .finished
     }
 }
 

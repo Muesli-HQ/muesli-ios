@@ -378,7 +378,12 @@ struct LongVoiceNoteView: View {
         case .transcriptionQueued: return "Waiting to transcribe"
         case .transcribing: return "Transcribing"
         case .completed: return "Transcript ready"
-        case .failed: return session.audioFileName == nil ? "Audio unavailable" : "Audio saved locally"
+        case .failed:
+            switch session.voiceNoteDurabilityEvidence {
+            case .durableCheckpoint: return "Audio saved locally"
+            case .audioReferenceOnly: return "Audio needs recovery"
+            case .unavailable: return "Audio unavailable"
+            }
         case .cancelled: return "Cancelled"
         }
     }

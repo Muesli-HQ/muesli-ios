@@ -553,29 +553,40 @@ final class DictationCoordinator {
         longVoiceNoteDurabilityError = nil
 
         guard let threshold else { return true }
-        let checkpointTask = Task { @MainActor [weak self] in
+        let recordingScheduleTask = Task { @MainActor [weak self] in
+            let clock = ContinuousClock()
+            let startedAt = clock.now
+            var schedule = VoiceNoteRecordingSchedule(thresholdSeconds: threshold)
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                let deadline = startedAt.advanced(by: .seconds(schedule.nextDeadlineSeconds))
+                do {
+                    try await clock.sleep(until: deadline)
+                } catch {
+                    return
+                }
                 guard !Task.isCancelled, let self else { return }
-                await self.rotateActiveVoiceNoteCheckpoint(sessionID: sessionID, isFinal: false)
+                for event in schedule.consumeNextDeadline() {
+                    guard !Task.isCancelled,
+                          self.voiceNoteLifecycleRunner?.sessionID == sessionID,
+                          self.isRecording
+                    else { return }
+                    switch event {
+                    case .checkpoint:
+                        await self.rotateActiveVoiceNoteCheckpoint(sessionID: sessionID)
+                    case .activateLongForm:
+                        await self.activateLongVoiceNote(sessionID: sessionID)
+                    }
+                }
             }
         }
-        let thresholdTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(threshold))
-            guard !Task.isCancelled, let self else { return }
-            await self.activateLongVoiceNote(sessionID: sessionID)
-        }
-        voiceNoteLifecycleRunner?.checkpointTask = checkpointTask
-        voiceNoteLifecycleRunner?.thresholdTask = thresholdTask
+        voiceNoteLifecycleRunner?.recordingScheduleTask = recordingScheduleTask
         return true
     }
 
     private func stopVoiceNoteRecordingTasks(sessionID: UUID) {
         guard voiceNoteLifecycleRunner?.sessionID == sessionID else { return }
-        voiceNoteLifecycleRunner?.checkpointTask?.cancel()
-        voiceNoteLifecycleRunner?.thresholdTask?.cancel()
-        voiceNoteLifecycleRunner?.checkpointTask = nil
-        voiceNoteLifecycleRunner?.thresholdTask = nil
+        voiceNoteLifecycleRunner?.recordingScheduleTask?.cancel()
+        voiceNoteLifecycleRunner?.recordingScheduleTask = nil
     }
 
     private func finishVoiceNoteLifecycle(sessionID: UUID) {
@@ -717,10 +728,12 @@ final class DictationCoordinator {
         }
     }
 
-    private func rotateActiveVoiceNoteCheckpoint(sessionID: UUID, isFinal: Bool) async {
-        guard voiceNoteLifecycleRunner?.sessionID == sessionID,
+    private func rotateActiveVoiceNoteCheckpoint(sessionID: UUID) async {
+        guard let runner = voiceNoteLifecycleRunner,
+              runner.sessionID == sessionID,
               activeSession?.id == sessionID,
-              activeSession?.longFormThresholdSeconds != nil
+              activeSession?.longFormThresholdSeconds != nil,
+              isRecording
         else { return }
 
         let checkpoint = keyboardSessionKeeper.rotateSegmentCheckpoint()
@@ -729,8 +742,15 @@ final class DictationCoordinator {
 
         do {
             let manifest = try await voiceNoteCheckpointStore.record(checkpoint, sessionID: sessionID)
-            guard var securedSession = activeSession,
-                  securedSession.id == sessionID
+            guard isCurrentVoiceNoteLifecycle(
+                sessionID: sessionID,
+                requestID: runner.requestID,
+                runnerID: runner.id
+            ),
+            voiceNoteLifecycleState.isRecording,
+            isRecording,
+            var securedSession = activeSession,
+            securedSession.id == sessionID
             else { return }
             longVoiceNoteCheckpointCount = manifest.entries.count
             longVoiceNoteAudioIsSecured = !manifest.entries.isEmpty
@@ -738,15 +758,6 @@ final class DictationCoordinator {
                 securedSession.hasDurableAudioCheckpoint = true
                 activeSession = securedSession
                 try? store.saveSession(securedSession)
-            }
-            if activeSession?.isLongForm == true, manifest.entries.count == 1 || isFinal {
-                AppTelemetry.contextualSignal(
-                    "long_voice_note_audio_checkpoint_saved",
-                    parameters: voiceNoteTelemetryParameters(
-                        session: activeSession,
-                        checkpointCount: manifest.entries.count
-                    )
-                )
             }
         } catch {
             handleVoiceNoteWriterFailure(.checkpointWrite)
@@ -760,10 +771,6 @@ final class DictationCoordinator {
               initialStateSessionID == sessionID,
               isRecording
         else { return }
-
-        if longVoiceNoteCheckpointCount == 0 {
-            await rotateActiveVoiceNoteCheckpoint(sessionID: sessionID, isFinal: false)
-        }
 
         guard isCurrentVoiceNoteLifecycle(
             sessionID: sessionID,

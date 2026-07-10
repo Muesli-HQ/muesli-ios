@@ -185,8 +185,7 @@ struct VoiceNoteLifecycleRunner {
     let id: UUID
     let sessionID: UUID
     let requestID: UUID
-    var checkpointTask: Task<Void, Never>?
-    var thresholdTask: Task<Void, Never>?
+    var recordingScheduleTask: Task<Void, Never>?
     var transcriptionTask: Task<Void, Never>?
 
     init(id: UUID = UUID(), sessionID: UUID, requestID: UUID) {
@@ -196,12 +195,44 @@ struct VoiceNoteLifecycleRunner {
     }
 
     mutating func cancelAll() {
-        checkpointTask?.cancel()
-        thresholdTask?.cancel()
+        recordingScheduleTask?.cancel()
         transcriptionTask?.cancel()
-        checkpointTask = nil
-        thresholdTask = nil
+        recordingScheduleTask = nil
         transcriptionTask = nil
+    }
+}
+
+struct VoiceNoteRecordingSchedule: Equatable {
+    enum Event: Equatable {
+        case checkpoint
+        case activateLongForm
+    }
+
+    static let checkpointIntervalSeconds = 30
+
+    let thresholdSeconds: Int
+    private(set) var nextCheckpointSeconds = checkpointIntervalSeconds
+    private(set) var didActivateLongForm = false
+
+    var nextDeadlineSeconds: Int {
+        if didActivateLongForm {
+            return nextCheckpointSeconds
+        }
+        return min(nextCheckpointSeconds, thresholdSeconds)
+    }
+
+    mutating func consumeNextDeadline() -> [Event] {
+        let deadline = nextDeadlineSeconds
+        var events: [Event] = []
+        if deadline == nextCheckpointSeconds {
+            events.append(.checkpoint)
+            nextCheckpointSeconds += Self.checkpointIntervalSeconds
+        }
+        if !didActivateLongForm, deadline == thresholdSeconds {
+            events.append(.activateLongForm)
+            didActivateLongForm = true
+        }
+        return events
     }
 }
 

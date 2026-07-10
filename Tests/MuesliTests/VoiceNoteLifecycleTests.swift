@@ -250,6 +250,38 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         XCTAssertNotEqual(first.id, retry.id)
     }
 
+    func testThirtySecondThresholdCheckpointsBeforeLongFormActivation() {
+        var schedule = VoiceNoteRecordingSchedule(thresholdSeconds: 30)
+
+        XCTAssertEqual(schedule.nextDeadlineSeconds, 30)
+        XCTAssertEqual(
+            schedule.consumeNextDeadline(),
+            [.checkpoint, .activateLongForm]
+        )
+        XCTAssertEqual(schedule.nextDeadlineSeconds, 60)
+    }
+
+    func testNonCheckpointThresholdActivatesAfterEarlierCheckpoint() {
+        var schedule = VoiceNoteRecordingSchedule(thresholdSeconds: 45)
+
+        XCTAssertEqual(schedule.consumeNextDeadline(), [.checkpoint])
+        XCTAssertEqual(schedule.nextDeadlineSeconds, 45)
+        XCTAssertEqual(schedule.consumeNextDeadline(), [.activateLongForm])
+        XCTAssertEqual(schedule.nextDeadlineSeconds, 60)
+    }
+
+    func testSixtySecondThresholdKeepsCheckpointAndActivationSerialized() {
+        var schedule = VoiceNoteRecordingSchedule(thresholdSeconds: 60)
+
+        XCTAssertEqual(schedule.consumeNextDeadline(), [.checkpoint])
+        XCTAssertEqual(schedule.nextDeadlineSeconds, 60)
+        XCTAssertEqual(
+            schedule.consumeNextDeadline(),
+            [.checkpoint, .activateLongForm]
+        )
+        XCTAssertEqual(schedule.nextDeadlineSeconds, 90)
+    }
+
     func testCheckpointRetentionPolicyKeepsOnlyRecoverableAudio() {
         let protectedFailure = Muesli.RecordingSession(
             kind: .quickDictation,

@@ -150,6 +150,12 @@ enum VoiceNoteLifecycleReducer {
             nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
         case (.stopping(let activeID), .cancelRequested(let id)) where activeID == id:
             nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
+        case (.audioSaved(let activeID), .cancelRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
+        case (.transcriptionQueued(let activeID), .cancelRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
+        case (.transcribing(let activeID), .cancelRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
         case (_, .finished(let id)) where state.activeSessionID == id:
             nextState = VoiceNoteLifecycleState()
         default:

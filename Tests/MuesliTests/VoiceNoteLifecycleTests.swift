@@ -43,6 +43,102 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         XCTAssertEqual(transition.state.phase, .stopping(id))
     }
 
+    func testDuplicateStopIsRejectedWithoutAdvancingState() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+
+        let firstStop = VoiceNoteLifecycleReducer.transition(state, event: .stopRequested(id))
+        XCTAssertTrue(firstStop.accepted)
+        state = firstStop.state
+
+        let duplicateStop = VoiceNoteLifecycleReducer.transition(state, event: .stopRequested(id))
+        XCTAssertFalse(duplicateStop.accepted)
+        XCTAssertEqual(duplicateStop.state.phase, .stopping(id))
+    }
+
+    func testCancelIsAcceptedDuringTranscriptionAndDuplicateIsRejected() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .stopRequested(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .transcriptionStarted(id))
+
+        let firstCancel = VoiceNoteLifecycleReducer.transition(state, event: .cancelRequested(id))
+        XCTAssertTrue(firstCancel.accepted)
+        XCTAssertEqual(firstCancel.state.phase, .cancelling(id))
+
+        let duplicateCancel = VoiceNoteLifecycleReducer.transition(
+            firstCancel.state,
+            event: .cancelRequested(id)
+        )
+        XCTAssertFalse(duplicateCancel.accepted)
+        XCTAssertEqual(duplicateCancel.state, firstCancel.state)
+    }
+
+    func testDuplicateRetryIsRejectedWhileFirstRetryIsQueued() {
+        let id = UUID()
+        let firstRetry = VoiceNoteLifecycleReducer.transition(.init(), event: .retryRequested(id))
+        XCTAssertTrue(firstRetry.accepted)
+        XCTAssertEqual(firstRetry.state.phase, .transcriptionQueued(id))
+
+        let duplicateRetry = VoiceNoteLifecycleReducer.transition(
+            firstRetry.state,
+            event: .retryRequested(id)
+        )
+        XCTAssertFalse(duplicateRetry.accepted)
+        XCTAssertEqual(duplicateRetry.state, firstRetry.state)
+    }
+
+    func testDuplicateAsyncCompletionEventsCannotAdvanceLifecycleTwice() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .stopRequested(id))
+
+        let firstFinalization = VoiceNoteLifecycleReducer.transition(state, event: .audioFinalized(id))
+        XCTAssertTrue(firstFinalization.accepted)
+        let duplicateFinalization = VoiceNoteLifecycleReducer.transition(
+            firstFinalization.state,
+            event: .audioFinalized(id)
+        )
+        XCTAssertFalse(duplicateFinalization.accepted)
+        XCTAssertEqual(duplicateFinalization.state, firstFinalization.state)
+
+        state = VoiceNoteLifecycleReducer.reduce(
+            firstFinalization.state,
+            event: .transcriptionQueued(id)
+        )
+        let firstTranscription = VoiceNoteLifecycleReducer.transition(
+            state,
+            event: .transcriptionStarted(id)
+        )
+        XCTAssertTrue(firstTranscription.accepted)
+        let duplicateTranscription = VoiceNoteLifecycleReducer.transition(
+            firstTranscription.state,
+            event: .transcriptionStarted(id)
+        )
+        XCTAssertFalse(duplicateTranscription.accepted)
+        XCTAssertEqual(duplicateTranscription.state, firstTranscription.state)
+    }
+
+    func testCancellationRejectsLateFailureAndCompletionEvents() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .stopRequested(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .transcriptionStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .cancelRequested(id))
+        XCTAssertEqual(state.phase, .cancelling(id))
+
+        for event in [
+            VoiceNoteLifecycleEvent.audioFinalized(id),
+            .transcriptionQueued(id),
+            .transcriptionStarted(id),
+            .transcriptionFailed(id),
+        ] {
+            let lateTransition = VoiceNoteLifecycleReducer.transition(state, event: event)
+            XCTAssertFalse(lateTransition.accepted)
+            XCTAssertEqual(lateTransition.state, state)
+        }
+    }
+
     func testLifecycleRejectsOutOfOrderFinalizationAndQueueEvents() {
         let id = UUID()
         let recording = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
@@ -154,11 +250,14 @@ final class VoiceNoteLifecycleTests: XCTestCase {
             "audioSaved.transcriptionQueued",
             "audioSaved.transcriptionStarted",
             "audioSaved.transcriptionFailed",
+            "audioSaved.cancelRequested",
             "audioSaved.finished",
             "transcriptionQueued.transcriptionStarted",
             "transcriptionQueued.transcriptionFailed",
+            "transcriptionQueued.cancelRequested",
             "transcriptionQueued.finished",
             "transcribing.transcriptionFailed",
+            "transcribing.cancelRequested",
             "transcribing.finished",
             "failedRetryable.recordingStarted",
             "failedRetryable.retryRequested",

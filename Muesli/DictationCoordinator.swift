@@ -517,7 +517,6 @@ final class DictationCoordinator {
         meetingLifecycleState = MeetingLifecycleReducer.reduce(meetingLifecycleState, event: event)
     }
 
-    @discardableResult
     private func transitionVoiceNoteLifecycle(_ event: VoiceNoteLifecycleEvent) -> Bool {
         let previousState = voiceNoteLifecycleState
         let transition = VoiceNoteLifecycleReducer.transition(previousState, event: event)
@@ -591,8 +590,12 @@ final class DictationCoordinator {
 
     private func finishVoiceNoteLifecycle(sessionID: UUID) {
         guard voiceNoteLifecycleRunner?.sessionID == sessionID else { return }
+        if voiceNoteLifecycleState.activeSessionID == sessionID {
+            guard transitionVoiceNoteLifecycle(.finished(sessionID)) else { return }
+        } else if voiceNoteLifecycleState.activeSessionID != nil {
+            return
+        }
         voiceNoteLifecycleRunner?.cancelAll()
-        transitionVoiceNoteLifecycle(.finished(sessionID))
         voiceNoteLifecycleRunner = nil
         longVoiceNoteCheckpointCount = 0
         longVoiceNoteAudioIsSecured = false
@@ -619,19 +622,6 @@ final class DictationCoordinator {
             && voiceNoteLifecycleRunner?.sessionID == sessionID
             && voiceNoteLifecycleRunner?.requestID == requestID
             && voiceNoteLifecycleState.activeSessionID == sessionID
-    }
-
-    private func isCurrentVoiceNoteLifecycle(
-        sessionID: UUID,
-        requestID: UUID,
-        runnerID: UUID?
-    ) -> Bool {
-        guard let runnerID else { return true }
-        return isCurrentVoiceNoteLifecycle(
-            sessionID: sessionID,
-            requestID: requestID,
-            runnerID: runnerID
-        )
     }
 
     @discardableResult
@@ -722,7 +712,11 @@ final class DictationCoordinator {
         }
         switch VoiceNoteFailureLifecycleDisposition.resolve(for: session) {
         case .retryable:
-            transitionVoiceNoteLifecycle(.transcriptionFailed(session.id))
+            if case .failedRetryable(let activeID) = voiceNoteLifecycleState.phase,
+               activeID == session.id {
+                return
+            }
+            guard transitionVoiceNoteLifecycle(.transcriptionFailed(session.id)) else { return }
         case .finished:
             finishVoiceNoteLifecycle(sessionID: session.id)
         }
@@ -1247,17 +1241,22 @@ final class DictationCoordinator {
         transitionKeyboardSession(.transcribing(request.id))
         activeRequest = request
         activeSession = session
-        var lifecycleRunnerID: UUID?
-        if session.isLongForm {
+        voiceNoteLifecycleRunner?.cancelAll()
+        voiceNoteLifecycleState = VoiceNoteLifecycleState()
+        voiceNoteLifecycleRunner = VoiceNoteLifecycleRunner(
+            sessionID: session.id,
+            requestID: request.id
+        )
+        guard let lifecycleRunnerID = voiceNoteLifecycleRunner?.id,
+              transitionVoiceNoteLifecycle(.retryRequested(session.id)),
+              transitionVoiceNoteLifecycle(.transcriptionStarted(session.id))
+        else {
             voiceNoteLifecycleRunner?.cancelAll()
+            voiceNoteLifecycleRunner = nil
             voiceNoteLifecycleState = VoiceNoteLifecycleState()
-            voiceNoteLifecycleRunner = VoiceNoteLifecycleRunner(
-                sessionID: session.id,
-                requestID: request.id
-            )
-            lifecycleRunnerID = voiceNoteLifecycleRunner?.id
-            transitionVoiceNoteLifecycle(.retryRequested(session.id))
-            transitionVoiceNoteLifecycle(.transcriptionStarted(session.id))
+            activeRequest = nil
+            activeSession = nil
+            return true
         }
         statusText = "Transcribing"
         try? store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: "Recovering transcription"))
@@ -1645,7 +1644,11 @@ final class DictationCoordinator {
             requestID: requestID
         )
         guard let runnerID = voiceNoteLifecycleRunner?.id else { return }
-        transitionVoiceNoteLifecycle(.retryRequested(sessionID))
+        guard transitionVoiceNoteLifecycle(.retryRequested(sessionID)) else {
+            voiceNoteLifecycleRunner?.cancelAll()
+            voiceNoteLifecycleRunner = nil
+            return
+        }
         session.phase = .transcriptionQueued
         session.transcriptionRetryCount += 1
         session.lastTranscriptionAttemptAt = .now
@@ -1679,10 +1682,12 @@ final class DictationCoordinator {
                     return
                 }
 
+                guard transitionVoiceNoteLifecycle(.transcriptionStarted(sessionID)) else {
+                    return
+                }
                 session.phase = .transcribing
                 try store.saveSession(session)
                 activeSession = session
-                transitionVoiceNoteLifecycle(.transcriptionStarted(sessionID))
                 statusText = "Transcribing"
                 await engine.selectModel(selectedTranscriptionModel)
                 let transcriptionURL = usableURL
@@ -2964,7 +2969,7 @@ final class DictationCoordinator {
         request: DictationRequest,
         session: RecordingSession,
         audioURL: URL,
-        lifecycleRunnerID: UUID?
+        lifecycleRunnerID: UUID
     ) {
         beginTranscriptionBackgroundTask()
         let task = Task {
@@ -3038,8 +3043,8 @@ final class DictationCoordinator {
                 try store.saveSession(completedSession)
                 if completedSession.longFormThresholdSeconds != nil {
                     try? await voiceNoteCheckpointStore.delete(sessionID: completedSession.id)
-                    finishVoiceNoteLifecycle(sessionID: completedSession.id)
                 }
+                finishVoiceNoteLifecycle(sessionID: completedSession.id)
                 exportRetainedAudioIfNeeded(for: completedSession)
 
                 let existingResult = try? store.result(for: request.id)
@@ -3134,9 +3139,7 @@ final class DictationCoordinator {
                 )
             }
         }
-        if lifecycleRunnerID != nil {
-            voiceNoteLifecycleRunner?.transcriptionTask = task
-        }
+        voiceNoteLifecycleRunner?.transcriptionTask = task
     }
 
     private func stopRecording(requestID: UUID) {
@@ -3157,6 +3160,8 @@ final class DictationCoordinator {
             saveKeyboardHandoff(requestID: requestID, phase: .failed, message: message)
             return
         }
+
+        guard isRecording else { return }
 
         if var thresholdSession = session,
            !thresholdSession.isLongForm,
@@ -3183,8 +3188,14 @@ final class DictationCoordinator {
         }
 
         let usesKeyboardSessionLiveActivity = usesKeyboardSessionLiveActivity(for: request.id)
+        let lifecycleRunnerID: UUID?
         if let session {
-            transitionVoiceNoteLifecycle(.stopRequested(session.id))
+            guard let runner = voiceNoteLifecycleRunner,
+                  runner.sessionID == session.id,
+                  runner.requestID == request.id,
+                  transitionVoiceNoteLifecycle(.stopRequested(session.id))
+            else { return }
+            lifecycleRunnerID = runner.id
             stopVoiceNoteRecordingTasks(sessionID: session.id)
             if session.isLongForm {
                 AppTelemetry.contextualSignal(
@@ -3195,6 +3206,8 @@ final class DictationCoordinator {
                     )
                 )
             }
+        } else {
+            lifecycleRunnerID = nil
         }
         isRecording = false
         stopMetering()
@@ -3292,6 +3305,13 @@ final class DictationCoordinator {
                         sessionID: currentSession.id,
                         finalCheckpoint: finalCheckpoint
                     )
+                    guard let lifecycleRunnerID,
+                          isCurrentVoiceNoteLifecycle(
+                              sessionID: currentSession.id,
+                              requestID: request.id,
+                              runnerID: lifecycleRunnerID
+                          )
+                    else { return }
                     longVoiceNoteCheckpointCount = manifest.entries.count
                     let checkpointFinalizationFailed = finalWriterFailure == .checkpointWrite
                         || finalWriterFailure == .checkpointRotation
@@ -3338,6 +3358,13 @@ final class DictationCoordinator {
                     throw VoiceNoteCaptureFailure.writer(finalWriterFailure)
                 }
                 if var currentSession = activeSession ?? session {
+                    guard let lifecycleRunnerID,
+                          isCurrentVoiceNoteLifecycle(
+                              sessionID: currentSession.id,
+                              requestID: request.id,
+                              runnerID: lifecycleRunnerID
+                          )
+                    else { return }
                     currentSession.phase = .transcribing
                     currentSession.lastTranscriptionAttemptAt = .now
                     activeSession = currentSession
@@ -3368,6 +3395,15 @@ final class DictationCoordinator {
                     text = postProcessTranscript(rawText)
                 } else {
                     text = realtimeText
+                }
+                if let currentSession = activeSession ?? session {
+                    guard let lifecycleRunnerID,
+                          isCurrentVoiceNoteLifecycle(
+                              sessionID: currentSession.id,
+                              requestID: request.id,
+                              runnerID: lifecycleRunnerID
+                          )
+                    else { return }
                 }
                 liveDictationTranscript = text
                 guard !isRecordingSessionCancelled(requestID: request.id) else {
@@ -3488,6 +3524,15 @@ final class DictationCoordinator {
                     ]
                 )
             } catch {
+                if let currentSession = activeSession ?? session {
+                    guard let lifecycleRunnerID,
+                          isCurrentVoiceNoteLifecycle(
+                              sessionID: currentSession.id,
+                              requestID: request.id,
+                              runnerID: lifecycleRunnerID
+                          )
+                    else { return }
+                }
                 var failedVoiceNoteSession: RecordingSession?
                 let failureReason = voiceNoteFailureReason(for: error)
                 if var session = activeSession ?? session {
@@ -5001,6 +5046,11 @@ final class DictationCoordinator {
             saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
             return
         }
+        if let session = activeSession {
+            guard transitionVoiceNoteLifecycle(.cancelRequested(session.id)) else { return }
+        } else {
+            guard isRecording else { return }
+        }
         isRecording = false
         let usesKeyboardSessionLiveActivity = usesKeyboardSessionLiveActivity(for: requestID)
         stopMetering()
@@ -5013,7 +5063,6 @@ final class DictationCoordinator {
             cleanupRealtimeDictationRecorder()
         }
         if var session = activeSession {
-            transitionVoiceNoteLifecycle(.cancelRequested(session.id))
             stopVoiceNoteRecordingTasks(sessionID: session.id)
             session.phase = .cancelled
             session.endedAt = .now

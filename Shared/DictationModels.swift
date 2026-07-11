@@ -21,6 +21,7 @@ enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
     case startAcknowledged
     case recordingStarted
     case stopRequested
+    case cancelRequested
     case stopAcknowledged
     case audioSaved
     case transcribingStarted
@@ -36,7 +37,7 @@ enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
             .idle
         case .startRequested, .startAcknowledged:
             .requested
-        case .recordingStarted, .stopRequested:
+        case .recordingStarted, .stopRequested, .cancelRequested:
             .recording
         case .stopAcknowledged, .audioSaved, .transcribingStarted, .resultReady:
             .transcribing
@@ -70,6 +71,21 @@ enum RecordingSessionPhase: String, Codable, Sendable, Equatable {
     case completed
     case failed
     case cancelled
+}
+
+enum VoiceNoteTranscriptionFailureReason: String, Codable, Sendable, Equatable {
+    case timeout
+    case interrupted
+    case engineFailure
+    case audioUnavailable
+    case checkpointFailure
+    case unknown
+}
+
+enum VoiceNoteDurabilityEvidence: Sendable, Equatable {
+    case durableCheckpoint
+    case audioReferenceOnly
+    case unavailable
 }
 
 enum MeetingProcessingState: String, Codable, Sendable, Equatable {
@@ -189,6 +205,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
     let phase: KeyboardHandoffPhase
     let message: String?
     let recoveryAttemptCount: Int
+    let recoveryAction: DictationCommandAction?
     let createdAt: Date
     let updatedAt: Date
 
@@ -197,6 +214,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         phase: KeyboardHandoffPhase,
         message: String? = nil,
         recoveryAttemptCount: Int = 0,
+        recoveryAction: DictationCommandAction? = nil,
         createdAt: Date = .now,
         updatedAt: Date = .now
     ) {
@@ -204,6 +222,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         self.phase = phase
         self.message = message
         self.recoveryAttemptCount = recoveryAttemptCount
+        self.recoveryAction = recoveryAction
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -212,6 +231,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         to phase: KeyboardHandoffPhase,
         message: String? = nil,
         recoveryAttemptCount: Int? = nil,
+        recoveryAction: DictationCommandAction? = nil,
         updatedAt: Date = .now
     ) -> KeyboardHandoffState {
         KeyboardHandoffState(
@@ -219,6 +239,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
             phase: phase,
             message: message,
             recoveryAttemptCount: recoveryAttemptCount ?? self.recoveryAttemptCount,
+            recoveryAction: recoveryAction ?? self.recoveryAction,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -245,7 +266,7 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
         staleRecordingInterval: 45,
         staleStopRequestInterval: 8,
         staleTranscribingInterval: 120,
-        runtimeFreshnessInterval: 8
+        runtimeFreshnessInterval: 15
     )
 
     func action(
@@ -282,6 +303,10 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
             threshold = staleStopRequestInterval
             retryAction = .stop
             recoveryMessage = "Open Muesli to finish"
+        case .cancelRequested:
+            threshold = staleStopRequestInterval
+            retryAction = .cancel
+            recoveryMessage = "Open Muesli to cancel"
         case .stopAcknowledged, .audioSaved, .transcribingStarted:
             threshold = staleTranscribingInterval
             retryAction = nil
@@ -297,9 +322,14 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
         }
 
         if let retryAction, state.recoveryAttemptCount == 0, canUseRuntimeStart {
+            let retryMessage = switch retryAction {
+            case .start: "Retrying start"
+            case .stop: "Retrying stop"
+            case .cancel: "Retrying cancellation"
+            }
             let retrying = state.advanced(
                 to: state.phase,
-                message: retryAction == .start ? "Retrying start" : "Retrying stop",
+                message: retryMessage,
                 recoveryAttemptCount: 1,
                 updatedAt: now
             )
@@ -310,6 +340,7 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
             to: .recoveryRequested,
             message: recoveryMessage,
             recoveryAttemptCount: max(state.recoveryAttemptCount, 1),
+            recoveryAction: retryAction,
             updatedAt: now
         )
         return .recover(recovery)
@@ -365,6 +396,16 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var cloudRecordName: String?
     var manualNotes: String?
     var errorMessage: String?
+    var isLongForm: Bool
+    var longFormActivatedAt: Date?
+    var longFormThresholdSeconds: Int?
+    var hasDurableAudioCheckpoint: Bool
+    var protectedAudioUntilTranscriptCompletes: Bool
+    var transcriptionRetryCount: Int
+    var lastTranscriptionAttemptAt: Date?
+    var lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason?
+    var scratchpadText: String?
+    var longFormRecoveryValidatedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -382,7 +423,17 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         source: String? = nil,
         cloudRecordName: String? = nil,
         manualNotes: String? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        isLongForm: Bool = false,
+        longFormActivatedAt: Date? = nil,
+        longFormThresholdSeconds: Int? = nil,
+        hasDurableAudioCheckpoint: Bool = false,
+        protectedAudioUntilTranscriptCompletes: Bool = false,
+        transcriptionRetryCount: Int = 0,
+        lastTranscriptionAttemptAt: Date? = nil,
+        lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason? = nil,
+        scratchpadText: String? = nil,
+        longFormRecoveryValidatedAt: Date? = nil
     ) {
         self.id = id
         self.requestID = requestID
@@ -400,11 +451,46 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.cloudRecordName = cloudRecordName
         self.manualNotes = manualNotes
         self.errorMessage = errorMessage
+        self.isLongForm = isLongForm
+        self.longFormActivatedAt = longFormActivatedAt
+        self.longFormThresholdSeconds = longFormThresholdSeconds
+        self.hasDurableAudioCheckpoint = hasDurableAudioCheckpoint
+        self.protectedAudioUntilTranscriptCompletes = protectedAudioUntilTranscriptCompletes
+        self.transcriptionRetryCount = transcriptionRetryCount
+        self.lastTranscriptionAttemptAt = lastTranscriptionAttemptAt
+        self.lastTranscriptionFailureReason = lastTranscriptionFailureReason
+        self.scratchpadText = scratchpadText
+        self.longFormRecoveryValidatedAt = longFormRecoveryValidatedAt
     }
 
     var duration: TimeInterval? {
         guard let startedAt else { return nil }
         return (endedAt ?? .now).timeIntervalSince(startedAt)
+    }
+
+    var isKeyboardOwnedVoiceNote: Bool {
+        kind == .keyboardDictation
+            || source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "keyboard"
+    }
+
+    var hasActiveVoiceNoteWork: Bool {
+        kind != .meeting
+            && [.recording, .transcriptionQueued, .transcribing].contains(phase)
+    }
+
+    var voiceNoteDurabilityEvidence: VoiceNoteDurabilityEvidence {
+        if hasDurableAudioCheckpoint {
+            return .durableCheckpoint
+        }
+        return audioFileName == nil ? .unavailable : .audioReferenceOnly
+    }
+
+    var canRetryVoiceNoteTranscription: Bool {
+        kind != .meeting
+            && isLongForm
+            && phase == .failed
+            && voiceNoteDurabilityEvidence == .durableCheckpoint
+            && audioFileName != nil
     }
 
     var syncOrigin: SyncOrigin {
@@ -432,6 +518,16 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         case cloudRecordName
         case manualNotes
         case errorMessage
+        case isLongForm
+        case longFormActivatedAt
+        case longFormThresholdSeconds
+        case hasDurableAudioCheckpoint
+        case protectedAudioUntilTranscriptCompletes
+        case transcriptionRetryCount
+        case lastTranscriptionAttemptAt
+        case lastTranscriptionFailureReason
+        case scratchpadText
+        case longFormRecoveryValidatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -452,6 +548,28 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         cloudRecordName = try container.decodeIfPresent(String.self, forKey: .cloudRecordName)
         manualNotes = try container.decodeIfPresent(String.self, forKey: .manualNotes)
         errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        isLongForm = try container.decodeIfPresent(Bool.self, forKey: .isLongForm) ?? false
+        longFormActivatedAt = try container.decodeIfPresent(Date.self, forKey: .longFormActivatedAt)
+        longFormThresholdSeconds = try container.decodeIfPresent(Int.self, forKey: .longFormThresholdSeconds)
+        hasDurableAudioCheckpoint = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .hasDurableAudioCheckpoint
+        ) ?? false
+        protectedAudioUntilTranscriptCompletes = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .protectedAudioUntilTranscriptCompletes
+        ) ?? false
+        transcriptionRetryCount = try container.decodeIfPresent(Int.self, forKey: .transcriptionRetryCount) ?? 0
+        lastTranscriptionAttemptAt = try container.decodeIfPresent(Date.self, forKey: .lastTranscriptionAttemptAt)
+        lastTranscriptionFailureReason = try container.decodeIfPresent(
+            VoiceNoteTranscriptionFailureReason.self,
+            forKey: .lastTranscriptionFailureReason
+        )
+        scratchpadText = try container.decodeIfPresent(String.self, forKey: .scratchpadText)
+        longFormRecoveryValidatedAt = try container.decodeIfPresent(
+            Date.self,
+            forKey: .longFormRecoveryValidatedAt
+        )
     }
 }
 

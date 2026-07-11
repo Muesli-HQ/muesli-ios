@@ -10,18 +10,17 @@ struct MeetingAudioChunk: Sendable, Equatable {
 }
 
 final class StreamingMeetingRecorder: @unchecked Sendable {
+    struct StopResult: Sendable {
+        let finalChunk: MeetingAudioChunk?
+        let retainedAudioURL: URL?
+        let writerFailure: CheckpointingAudioWriterFailure?
+    }
+
     var onAudioSamples: (([Float]) -> Void)?
     var onAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
+    var onRecordingFailure: (@Sendable (CheckpointingAudioWriterFailure) -> Void)?
 
     private struct FileState {
-        var chunkFile: AVAudioFile?
-        var chunkURL: URL?
-        var chunkIndex = 0
-        var chunkStartFrame: AVAudioFramePosition = 0
-        var chunkFrames: AVAudioFramePosition = 0
-        var retainedFile: AVAudioFile?
-        var retainedURL: URL?
-        var totalFrames: AVAudioFramePosition = 0
         var latestPowerDB: Float = -160
     }
 
@@ -29,6 +28,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var state = FileState()
     private var converter: AVAudioConverter?
+    private var audioWriter: CheckpointingAudioWriter?
     private var isRunning = false
     private var tapInstalled = false
     private var chunksDirectory: URL?
@@ -63,20 +63,16 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
                 ? AVAudioConverter(from: inputFormat, to: targetFormat)
                 : nil
 
-            let firstChunkURL = chunkURL(directory: chunksDirectory, index: 0)
-            let firstChunkFile = try AVAudioFile(forWriting: firstChunkURL, settings: targetFormat.settings)
-            let retainedFile = try retainedAudioURL.map { url in
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                return try AVAudioFile(forWriting: url, settings: targetFormat.settings)
-            }
-
-            lock.lock()
-            state = FileState(
-                chunkFile: firstChunkFile,
-                chunkURL: firstChunkURL,
-                retainedFile: retainedFile,
-                retainedURL: retainedAudioURL
+            let writer = try CheckpointingAudioWriter(
+                continuousAudioURL: retainedAudioURL,
+                checkpointDirectory: chunksDirectory,
+                format: targetFormat
             )
+            writer.onFailure = { [weak self] failure in
+                self?.onRecordingFailure?(failure)
+            }
+            lock.lock()
+            audioWriter = writer
             lock.unlock()
 
             inputNode.installTap(onBus: 0, bufferSize: Self.bufferSize, format: nil) { [weak self] buffer, _ in
@@ -96,53 +92,21 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
     }
 
     func rotateChunk() -> MeetingAudioChunk? {
-        guard isRunning, let chunksDirectory else { return nil }
-
+        guard isRunning else { return nil }
         lock.lock()
-        guard let completedURL = state.chunkURL, state.chunkFrames > 0 else {
-            lock.unlock()
-            return nil
-        }
-
-        state.chunkFile = nil
-        let completedIndex = state.chunkIndex
-        let completedStartFrame = state.chunkStartFrame
-        let completedFrames = state.chunkFrames
-        let nextIndex = completedIndex + 1
-        let nextURL = chunkURL(directory: chunksDirectory, index: nextIndex)
-
-        do {
-            guard let format = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: Self.sampleRate,
-                channels: 1,
-                interleaved: false
-            ) else {
-                lock.unlock()
-                return nil
-            }
-            let nextFile = try AVAudioFile(forWriting: nextURL, settings: format.settings)
-            state.chunkFile = nextFile
-            state.chunkURL = nextURL
-            state.chunkIndex = nextIndex
-            state.chunkStartFrame = state.totalFrames
-            state.chunkFrames = 0
-        } catch {
-            lock.unlock()
-            return nil
-        }
+        let writer = audioWriter
         lock.unlock()
-
-        return MeetingAudioChunk(
-            index: completedIndex,
-            url: completedURL,
-            startTime: Double(completedStartFrame) / Self.sampleRate,
-            duration: Double(completedFrames) / Self.sampleRate
-        )
+        return writer?.rotateCheckpoint()
     }
 
-    func stop() -> (finalChunk: MeetingAudioChunk?, retainedAudioURL: URL?) {
-        guard isRunning else { return (nil, nil) }
+    func stop() -> StopResult {
+        guard isRunning else {
+            return StopResult(
+                finalChunk: nil,
+                retainedAudioURL: nil,
+                writerFailure: nil
+            )
+        }
         isRunning = false
         if tapInstalled {
             engine.inputNode.removeTap(onBus: 0)
@@ -151,31 +115,18 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         engine.stop()
 
         lock.lock()
-        let finalURL = state.chunkURL
-        let finalIndex = state.chunkIndex
-        let finalStartFrame = state.chunkStartFrame
-        let finalFrames = state.chunkFrames
-        let retainedURL = state.retainedURL
-        state.chunkFile = nil
-        state.retainedFile = nil
-        state.chunkURL = nil
-        state.retainedURL = nil
+        let writer = audioWriter
+        audioWriter = nil
         lock.unlock()
+        let result = writer?.finish()
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
-        let finalChunk: MeetingAudioChunk?
-        if let finalURL, finalFrames > 0 {
-            finalChunk = MeetingAudioChunk(
-                index: finalIndex,
-                url: finalURL,
-                startTime: Double(finalStartFrame) / Self.sampleRate,
-                duration: Double(finalFrames) / Self.sampleRate
-            )
-        } else {
-            finalChunk = nil
-        }
-        return (finalChunk, retainedURL)
+        return StopResult(
+            finalChunk: result?.finalCheckpoint,
+            retainedAudioURL: result?.continuousAudioURL,
+            writerFailure: result?.failure
+        )
     }
 
     func cancel() {
@@ -187,17 +138,11 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         isRunning = false
 
         lock.lock()
-        let chunkURL = state.chunkURL
-        let retainedURL = state.retainedURL
+        let writer = audioWriter
+        audioWriter = nil
         state = FileState()
         lock.unlock()
-
-        if let chunkURL {
-            try? FileManager.default.removeItem(at: chunkURL)
-        }
-        if let retainedURL {
-            try? FileManager.default.removeItem(at: retainedURL)
-        }
+        writer?.cancel()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -248,15 +193,8 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         let powerDB = rms > 0.000_001 ? max(-160, min(0, 20 * log10(rms))) : -160
 
         lock.lock()
-        do {
-            try state.chunkFile?.write(from: monoBuffer)
-            try state.retainedFile?.write(from: monoBuffer)
-            state.chunkFrames += AVAudioFramePosition(frameCount)
-            state.totalFrames += AVAudioFramePosition(frameCount)
-            state.latestPowerDB = powerDB
-        } catch {
-            // Keep recording best-effort; UI will surface failure on stop if no chunks exist.
-        }
+        audioWriter?.append(monoBuffer)
+        state.latestPowerDB = powerDB
         lock.unlock()
 
         if let audioBuffer = Self.copyBuffer(monoBuffer) {
@@ -295,15 +233,13 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         }
         engine.stop()
         lock.lock()
+        let writer = audioWriter
+        audioWriter = nil
         state = FileState()
         lock.unlock()
+        writer?.cancel()
         isRunning = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    private func chunkURL(directory: URL, index: Int) -> URL {
-        directory
-            .appendingPathComponent("chunk-\(String(format: "%04d", index))")
-            .appendingPathExtension("wav")
-    }
 }

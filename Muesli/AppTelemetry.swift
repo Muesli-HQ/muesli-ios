@@ -9,6 +9,8 @@ enum AppTelemetryFailureDomain: String {
     case liveActivity = "live_activity"
     case meeting
     case model
+    case persistence
+    case stateMachine = "state_machine"
     case summary
     case transcription
 }
@@ -72,6 +74,15 @@ enum AppTelemetry {
     static func signal(_ name: String, parameters: [String: String] = [:]) {
         guard initializeIfNeeded() else { return }
         TelemetryDeck.signal("Muesli.iOS.\(name)", parameters: parameters)
+    }
+
+    static func contextualSignal(_ name: String, parameters: [String: String] = [:]) {
+        var enriched = runtimeParameters()
+        enriched.merge(
+            AppTelemetryParameterSanitizer.normalizedCustomParameters(parameters),
+            uniquingKeysWith: { _, new in new }
+        )
+        signal(name, parameters: enriched)
     }
 
     static func failure(

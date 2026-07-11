@@ -32,4 +32,39 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Meetings"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
     }
+
+    func testLongVoiceNoteActiveStateAndDiscardConfirmation() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-long-voice-note",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Long Voice Note"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["longVoiceNote.stopButton"].exists)
+        XCTAssertTrue(app.staticTexts["Audio saved locally"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Long Voice Note active state"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        app.buttons["Discard voice note"].tap()
+        XCTAssertTrue(app.buttons["Discard Voice Note"].waitForExistence(timeout: 3))
+    }
+
+    func testCompletedLongVoiceNoteHidesProgressChecklist() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-completed-long-voice-note",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Long Voice Note"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Completed long voice note transcript."].exists)
+        XCTAssertFalse(app.staticTexts["Voice note ready"].exists)
+        XCTAssertFalse(app.staticTexts["Audio saved"].exists)
+        XCTAssertFalse(app.staticTexts["Transcribing"].exists)
+    }
 }

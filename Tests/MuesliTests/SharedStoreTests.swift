@@ -3,6 +3,93 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    func testEventStreamBuffersEventPostedAfterSubscriptionBeforeConsumption() async {
+        let bus = TestCrossProcessEventBus()
+        let stream = bus.events()
+
+        bus.post(.ownershipChanged)
+
+        var iterator = stream.makeAsyncIterator()
+        let event = await iterator.next()
+        XCTAssertEqual(event, .ownershipChanged)
+    }
+
+    func testDarwinEventBusDeliversPayloadFreeInvalidation() async {
+        let bus = DarwinCrossProcessEventBus.shared
+        let delivered = expectation(description: "Darwin event delivered")
+        let observation = Task {
+            for await event in bus.events() where event == .ownershipChanged {
+                delivered.fulfill()
+                return
+            }
+        }
+        await Task.yield()
+
+        bus.post(.ownershipChanged)
+
+        await fulfillment(of: [delivered], timeout: 1)
+        observation.cancel()
+    }
+
+    func testSharedStorePostsCommandEventAfterCommandIsReadableBySecondStore() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bus = TestCrossProcessEventBus()
+        let writer = SharedStore(containerURL: directory, eventPoster: bus)
+        let reader = SharedStore(containerURL: directory, eventPoster: bus)
+        let requestID = UUID()
+
+        let observedCommand = Task { () throws -> DictationCommand? in
+            for await event in bus.events() where event == .commandChanged {
+                return try reader.pendingCommand()
+            }
+            return nil
+        }
+        await Task.yield()
+        try writer.saveCommand(.init(requestID: requestID, action: .start))
+
+        let command = try await observedCommand.value
+        XCTAssertEqual(command?.requestID, requestID)
+        XCTAssertEqual(command?.action, .start)
+    }
+
+    func testSharedStoreDoesNotPostWhenDatabaseMutationFails() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let invalidContainer = root.appendingPathComponent("not-a-directory")
+        try Data("file".utf8).write(to: invalidContainer)
+        let bus = TestCrossProcessEventBus()
+        let store = SharedStore(containerURL: invalidContainer, eventPoster: bus)
+
+        XCTAssertThrowsError(try store.saveCommand(.init(requestID: UUID(), action: .start)))
+        XCTAssertTrue(bus.postedEvents.isEmpty)
+    }
+
+    func testDuplicateCommandEventsDoNotDuplicatePersistedCommand() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bus = TestCrossProcessEventBus()
+        let store = SharedStore(containerURL: directory, eventPoster: bus)
+        let command = DictationCommand(requestID: UUID(), action: .stop)
+
+        try store.saveCommand(command)
+        bus.post(.commandChanged)
+        bus.post(.commandChanged)
+
+        XCTAssertEqual(try store.pendingCommand(), command)
+    }
+
+    func testPreparingRequestDoesNotSignalCommandBeforeCommandIsPersisted() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bus = TestCrossProcessEventBus()
+        let store = SharedStore(containerURL: directory, eventPoster: bus)
+
+        try store.saveRequest(DictationRequest())
+
+        XCTAssertFalse(bus.postedEvents.contains(.commandChanged))
+    }
+
     func testFreshSQLiteStoreCreatesV4Schema() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -221,6 +308,32 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(recoveryState.phase, .recoveryRequested)
         XCTAssertEqual(recoveryState.message, "Open Muesli to continue")
         XCTAssertEqual(recoveryState.recoveryAttemptCount, 1)
+    }
+
+    func testKeyboardHandoffRecoveryPolicyRetriesCancellationIntent() throws {
+        let requestID = UUID()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let staleCancellation = KeyboardHandoffState(
+            requestID: requestID,
+            phase: .cancelRequested,
+            message: "Cancelling",
+            createdAt: now.addingTimeInterval(-9),
+            updatedAt: now.addingTimeInterval(-9)
+        )
+
+        let action = KeyboardHandoffRecoveryPolicy.keyboardDefaults.action(
+            for: staleCancellation,
+            latestRuntimeStatus: nil,
+            canUseRuntimeStart: true,
+            now: now
+        )
+
+        guard case let .retry(retryAction, retryingState) = action else {
+            return XCTFail("Expected stale cancellation to retry once")
+        }
+        XCTAssertEqual(retryAction, .cancel)
+        XCTAssertEqual(retryingState.phase, .cancelRequested)
+        XCTAssertEqual(retryingState.recoveryAttemptCount, 1)
     }
 
     func testKeyboardHandoffRecoveryPolicyIgnoresFreshActiveRuntimeStatus() throws {
@@ -1325,3 +1438,40 @@ private enum SQLiteTestError: Error {
 }
 
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+private final class TestCrossProcessEventBus: CrossProcessEventStreaming, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuations: [UUID: AsyncStream<CrossProcessEvent>.Continuation] = [:]
+    private var eventsStorage: [CrossProcessEvent] = []
+
+    var postedEvents: [CrossProcessEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return eventsStorage
+    }
+
+    func post(_ event: CrossProcessEvent) {
+        lock.lock()
+        eventsStorage.append(event)
+        let currentContinuations = Array(continuations.values)
+        lock.unlock()
+        for continuation in currentContinuations {
+            continuation.yield(event)
+        }
+    }
+
+    func events() -> AsyncStream<CrossProcessEvent> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            lock.lock()
+            continuations[id] = continuation
+            lock.unlock()
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.lock.lock()
+                self.continuations[id] = nil
+                self.lock.unlock()
+            }
+        }
+    }
+}

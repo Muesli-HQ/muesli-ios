@@ -15,15 +15,18 @@ enum SharedStoreError: Error, LocalizedError {
 struct SharedStore: Sendable {
     private let appGroupIdentifier: String
     private let overrideContainerURL: URL?
+    private let eventPoster: any CrossProcessEventPosting
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
     init(
         appGroupIdentifier: String = MuesliAppConstants.appGroupIdentifier,
-        containerURL: URL? = nil
+        containerURL: URL? = nil,
+        eventPoster: any CrossProcessEventPosting = DarwinCrossProcessEventBus.shared
     ) {
         self.appGroupIdentifier = appGroupIdentifier
         self.overrideContainerURL = containerURL
+        self.eventPoster = eventPoster
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
     }
@@ -42,6 +45,7 @@ struct SharedStore: Sendable {
 
     func saveCommand(_ command: DictationCommand) throws {
         try database().saveValue(command, key: .pendingCommand)
+        eventPoster.post(.commandChanged)
     }
 
     func pendingCommand() throws -> DictationCommand? {
@@ -54,6 +58,7 @@ struct SharedStore: Sendable {
 
     func saveKeyboardHandoffState(_ state: KeyboardHandoffState) throws {
         try database().saveValue(state, key: .keyboardHandoffState)
+        eventPoster.post(.handoffStatusChanged)
     }
 
     func keyboardHandoffState() throws -> KeyboardHandoffState {
@@ -62,10 +67,12 @@ struct SharedStore: Sendable {
 
     func clearKeyboardHandoffState() throws {
         try database().clearValue(key: .keyboardHandoffState)
+        eventPoster.post(.handoffStatusChanged)
     }
 
     func saveStatus(_ status: DictationStatus) throws {
         try database().saveValue(status, key: .dictationStatus)
+        eventPoster.post(.ownershipChanged)
     }
 
     func status() throws -> DictationStatus {
@@ -74,6 +81,7 @@ struct SharedStore: Sendable {
 
     func saveResult(_ result: DictationResult) throws {
         try database().saveResult(result)
+        eventPoster.post(.resultChanged)
     }
 
     func result(for requestID: UUID) throws -> DictationResult? {
@@ -86,10 +94,12 @@ struct SharedStore: Sendable {
 
     func deleteResult(_ result: DictationResult) throws {
         try database().deleteResult(id: result.id, requestID: result.requestID)
+        eventPoster.post(.resultChanged)
     }
 
     func clearResult(for requestID: UUID) throws {
         try database().clearResult(for: requestID)
+        eventPoster.post(.resultChanged)
     }
 
     func saveKeyboardExtensionStatus(_ status: KeyboardExtensionStatus) throws {
@@ -102,6 +112,7 @@ struct SharedStore: Sendable {
 
     func saveKeyboardRuntimeStatus(_ status: KeyboardRuntimeStatus) throws {
         try database().saveValue(status, key: .keyboardRuntimeStatus)
+        eventPoster.post(.runtimeStatusChanged)
     }
 
     func keyboardRuntimeStatus() throws -> KeyboardRuntimeStatus? {
@@ -110,10 +121,12 @@ struct SharedStore: Sendable {
 
     func clearKeyboardRuntimeStatus() throws {
         try database().clearValue(key: .keyboardRuntimeStatus)
+        eventPoster.post(.runtimeStatusChanged)
     }
 
     func saveKeyboardLiveTranscript(_ transcript: KeyboardLiveTranscript) throws {
         try database().saveValue(transcript, key: .keyboardLiveTranscript)
+        eventPoster.post(.liveTranscriptChanged)
     }
 
     func keyboardLiveTranscript() throws -> KeyboardLiveTranscript? {
@@ -122,6 +135,7 @@ struct SharedStore: Sendable {
 
     func clearKeyboardLiveTranscript() throws {
         try database().clearValue(key: .keyboardLiveTranscript)
+        eventPoster.post(.liveTranscriptChanged)
     }
 
     func saveSession(_ session: RecordingSession) throws {
@@ -146,6 +160,7 @@ struct SharedStore: Sendable {
 
     func deleteRecordingSession(id: UUID) throws {
         try database().deleteRecordingSession(id: id)
+        eventPoster.post(.ownershipChanged)
     }
 
     @discardableResult
@@ -226,6 +241,39 @@ struct SharedStore: Sendable {
             try FileManager.default.removeItem(at: url)
         }
         try? deleteExportedAudioFile(fileName: fileName)
+    }
+
+    func voiceNoteCheckpointDirectoryURL(sessionID: UUID) throws -> URL {
+        let root = try recordingsDirectoryURL()
+            .appendingPathComponent("VoiceNoteCheckpoints", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableRoot = root
+        try? mutableRoot.setResourceValues(values)
+
+        let directory = root.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    func deleteVoiceNoteCheckpoints(sessionID: UUID) throws {
+        let directory = try recordingsDirectoryURL()
+            .appendingPathComponent("VoiceNoteCheckpoints", isDirectory: true)
+            .appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        try FileManager.default.removeItem(at: directory)
+    }
+
+    func voiceNoteCheckpointSessionIDs() throws -> [UUID] {
+        let root = try recordingsDirectoryURL()
+            .appendingPathComponent("VoiceNoteCheckpoints", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: root.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ).compactMap { UUID(uuidString: $0.lastPathComponent) }
     }
 
     @discardableResult

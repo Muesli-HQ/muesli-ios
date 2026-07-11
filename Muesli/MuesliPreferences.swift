@@ -10,6 +10,8 @@ enum MuesliPreferences {
     static let customDictionaryKey = "muesli.transcription.customDictionary"
     static let transcriptionModelKey = "muesli.transcription.localModel"
     static let keepDictationAudioRecordingsKey = "muesli.dictations.keepAudioRecordings"
+    static let longVoiceNoteModeEnabledKey = "muesli.dictations.longVoiceNoteMode.enabled"
+    static let longVoiceNoteThresholdSecondsKey = "muesli.dictations.longVoiceNoteMode.thresholdSeconds"
     static let keepMeetingAudioRecordingsKey = "muesli.meetings.keepAudioRecordings"
     static let recordingMicrophonePreferenceKey = "muesli.recording.microphonePreference"
     static let meetingSummariesEnabledKey = "muesli.meetings.summaries.enabled"
@@ -60,6 +62,28 @@ enum MuesliPreferences {
 
     static var keepDictationAudioRecordingsEnabled: Bool {
         bool(for: keepDictationAudioRecordingsKey, defaultValue: false)
+    }
+
+    static var longVoiceNoteModeEnabled: Bool {
+        bool(for: longVoiceNoteModeEnabledKey, defaultValue: true)
+    }
+
+    static var longVoiceNoteThresholdSeconds: Int {
+        clampedLongVoiceNoteThreshold(
+            UserDefaults.standard.object(forKey: longVoiceNoteThresholdSecondsKey) as? Int ?? 60
+        )
+    }
+
+    static func clampedLongVoiceNoteThreshold(_ value: Int) -> Int {
+        min(max(value, 30), 600)
+    }
+
+    static func longVoiceNoteThresholdLabel(_ value: Int) -> String {
+        let seconds = clampedLongVoiceNoteThreshold(value)
+        if seconds == 60 { return "1 min" }
+        if seconds % 60 == 0 { return "\(seconds / 60) min" }
+        if seconds > 60 { return "\(seconds / 60)m \(seconds % 60)s" }
+        return "\(seconds) sec"
     }
 
     static var keepMeetingAudioRecordingsEnabled: Bool {

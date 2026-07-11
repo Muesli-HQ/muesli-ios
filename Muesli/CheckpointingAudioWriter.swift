@@ -131,6 +131,8 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
     }
 
     func cancel() {
+        // Cancellation owns the entire per-recording checkpoint directory. Callers
+        // should not need a second cleanup pass to remove already-rotated chunks.
         let urls = queue.sync { () -> [URL] in
             state.isClosed = true
             state.checkpointFile = nil
@@ -139,6 +141,9 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
         }
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
+        }
+        if FileManager.default.fileExists(atPath: checkpointDirectory.path) {
+            try? FileManager.default.removeItem(at: checkpointDirectory)
         }
     }
 

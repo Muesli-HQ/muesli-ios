@@ -106,6 +106,49 @@ final class VoiceNoteCheckpointStoreTests: XCTestCase {
         XCTAssertTrue(salvaged.entries.allSatisfy { $0.frameCount > 0 })
     }
 
+    func testConcurrentRecordAndSalvageRemainOrderedAndDeduplicated() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let first = try writeChunk(index: 0, duration: 0.1, directory: fixture.directory)
+        _ = try writeChunk(index: 1, duration: 0.1, directory: fixture.directory)
+        async let recorded = fixture.checkpoints.record(first, sessionID: fixture.sessionID)
+        async let salvaged = fixture.checkpoints.salvageTrailingCheckpoint(sessionID: fixture.sessionID)
+        _ = try await (recorded, salvaged)
+
+        let manifest = try await fixture.checkpoints.manifest(sessionID: fixture.sessionID)
+        XCTAssertEqual(manifest.entries.map(\.index), [0, 1])
+        XCTAssertEqual(Set(manifest.entries.map(\.index)).count, manifest.entries.count)
+    }
+
+    func testCheckpointWriterCancellationRemovesRotatedChunksAndContinuousAudio() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-writer-cancel-\(UUID().uuidString)", isDirectory: true)
+        let checkpointDirectory = root.appendingPathComponent("checkpoints", isDirectory: true)
+        let continuousURL = root.appendingPathComponent("continuous.wav")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let writer = try Muesli.CheckpointingAudioWriter(
+            continuousAudioURL: continuousURL,
+            checkpointDirectory: checkpointDirectory,
+            format: format
+        )
+        writer.append(try makeBuffer(format: format, frameCount: 1_600))
+        let rotated = try XCTUnwrap(writer.rotateCheckpoint())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rotated.url.path))
+
+        writer.cancel()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: checkpointDirectory.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: continuousURL.path))
+    }
+
     private func makeFixture() async throws -> (
         root: URL,
         directory: URL,
@@ -146,5 +189,16 @@ final class VoiceNoteCheckpointStoreTests: XCTestCase {
             startTime: Double(index) * duration,
             duration: duration
         )
+    }
+
+    private func makeBuffer(format: AVAudioFormat, frameCount: AVAudioFrameCount) throws -> AVAudioPCMBuffer {
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+        if let samples = buffer.floatChannelData?[0] {
+            for frame in 0..<Int(frameCount) {
+                samples[frame] = sin(Float(frame) * 0.03) * 0.1
+            }
+        }
+        return buffer
     }
 }

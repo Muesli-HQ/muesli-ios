@@ -21,6 +21,7 @@ enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
     case startAcknowledged
     case recordingStarted
     case stopRequested
+    case cancelRequested
     case stopAcknowledged
     case audioSaved
     case transcribingStarted
@@ -36,7 +37,7 @@ enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
             .idle
         case .startRequested, .startAcknowledged:
             .requested
-        case .recordingStarted, .stopRequested:
+        case .recordingStarted, .stopRequested, .cancelRequested:
             .recording
         case .stopAcknowledged, .audioSaved, .transcribingStarted, .resultReady:
             .transcribing
@@ -204,6 +205,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
     let phase: KeyboardHandoffPhase
     let message: String?
     let recoveryAttemptCount: Int
+    let recoveryAction: DictationCommandAction?
     let createdAt: Date
     let updatedAt: Date
 
@@ -212,6 +214,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         phase: KeyboardHandoffPhase,
         message: String? = nil,
         recoveryAttemptCount: Int = 0,
+        recoveryAction: DictationCommandAction? = nil,
         createdAt: Date = .now,
         updatedAt: Date = .now
     ) {
@@ -219,6 +222,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         self.phase = phase
         self.message = message
         self.recoveryAttemptCount = recoveryAttemptCount
+        self.recoveryAction = recoveryAction
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -227,6 +231,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         to phase: KeyboardHandoffPhase,
         message: String? = nil,
         recoveryAttemptCount: Int? = nil,
+        recoveryAction: DictationCommandAction? = nil,
         updatedAt: Date = .now
     ) -> KeyboardHandoffState {
         KeyboardHandoffState(
@@ -234,6 +239,7 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
             phase: phase,
             message: message,
             recoveryAttemptCount: recoveryAttemptCount ?? self.recoveryAttemptCount,
+            recoveryAction: recoveryAction ?? self.recoveryAction,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -260,7 +266,7 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
         staleRecordingInterval: 45,
         staleStopRequestInterval: 8,
         staleTranscribingInterval: 120,
-        runtimeFreshnessInterval: 8
+        runtimeFreshnessInterval: 15
     )
 
     func action(
@@ -297,6 +303,10 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
             threshold = staleStopRequestInterval
             retryAction = .stop
             recoveryMessage = "Open Muesli to finish"
+        case .cancelRequested:
+            threshold = staleStopRequestInterval
+            retryAction = .cancel
+            recoveryMessage = "Open Muesli to cancel"
         case .stopAcknowledged, .audioSaved, .transcribingStarted:
             threshold = staleTranscribingInterval
             retryAction = nil
@@ -312,9 +322,14 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
         }
 
         if let retryAction, state.recoveryAttemptCount == 0, canUseRuntimeStart {
+            let retryMessage = switch retryAction {
+            case .start: "Retrying start"
+            case .stop: "Retrying stop"
+            case .cancel: "Retrying cancellation"
+            }
             let retrying = state.advanced(
                 to: state.phase,
-                message: retryAction == .start ? "Retrying start" : "Retrying stop",
+                message: retryMessage,
                 recoveryAttemptCount: 1,
                 updatedAt: now
             )
@@ -325,6 +340,7 @@ struct KeyboardHandoffRecoveryPolicy: Sendable, Equatable {
             to: .recoveryRequested,
             message: recoveryMessage,
             recoveryAttemptCount: max(state.recoveryAttemptCount, 1),
+            recoveryAction: retryAction,
             updatedAt: now
         )
         return .recover(recovery)
@@ -389,6 +405,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var lastTranscriptionAttemptAt: Date?
     var lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason?
     var scratchpadText: String?
+    var longFormRecoveryValidatedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -415,7 +432,8 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         transcriptionRetryCount: Int = 0,
         lastTranscriptionAttemptAt: Date? = nil,
         lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason? = nil,
-        scratchpadText: String? = nil
+        scratchpadText: String? = nil,
+        longFormRecoveryValidatedAt: Date? = nil
     ) {
         self.id = id
         self.requestID = requestID
@@ -442,6 +460,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.lastTranscriptionAttemptAt = lastTranscriptionAttemptAt
         self.lastTranscriptionFailureReason = lastTranscriptionFailureReason
         self.scratchpadText = scratchpadText
+        self.longFormRecoveryValidatedAt = longFormRecoveryValidatedAt
     }
 
     var duration: TimeInterval? {
@@ -508,6 +527,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         case lastTranscriptionAttemptAt
         case lastTranscriptionFailureReason
         case scratchpadText
+        case longFormRecoveryValidatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -546,6 +566,10 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
             forKey: .lastTranscriptionFailureReason
         )
         scratchpadText = try container.decodeIfPresent(String.self, forKey: .scratchpadText)
+        longFormRecoveryValidatedAt = try container.decodeIfPresent(
+            Date.self,
+            forKey: .longFormRecoveryValidatedAt
+        )
     }
 }
 

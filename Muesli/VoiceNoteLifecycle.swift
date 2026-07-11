@@ -187,6 +187,20 @@ struct VoiceNoteRequestOwnership: Equatable {
     }
 }
 
+enum KeyboardCommandArbitration {
+    static func shouldDeferUntilRecorderStarts(
+        action: DictationCommandAction,
+        activeRequestMatches: Bool,
+        hasActiveSession: Bool,
+        isRecording: Bool
+    ) -> Bool {
+        action != .start
+            && activeRequestMatches
+            && !hasActiveSession
+            && !isRecording
+    }
+}
+
 struct VoiceNoteLifecycleRunner {
     let id: UUID
     let sessionID: UUID

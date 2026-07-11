@@ -43,16 +43,16 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         controller.markKeyboardVisible()
-        controller.startPolling()
+        controller.startObservingSharedState()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        controller.startPolling()
+        controller.startObservingSharedState()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        controller.stopPolling()
+        controller.stopObservingSharedState()
     }
 }

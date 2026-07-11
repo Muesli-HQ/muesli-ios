@@ -9,6 +9,7 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         let store = SharedStore(containerURL: directory)
         let activatedAt = Date(timeIntervalSince1970: 200)
         let attemptedAt = Date(timeIntervalSince1970: 300)
+        let recoveryValidatedAt = Date(timeIntervalSince1970: 400)
         let session = RecordingSession(
             kind: .quickDictation,
             phase: .failed,
@@ -21,7 +22,8 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
             transcriptionRetryCount: 2,
             lastTranscriptionAttemptAt: attemptedAt,
             lastTranscriptionFailureReason: .timeout,
-            scratchpadText: "Remember the second point"
+            scratchpadText: "Remember the second point",
+            longFormRecoveryValidatedAt: recoveryValidatedAt
         )
 
         try store.saveSession(session)
@@ -36,6 +38,7 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertEqual(recovered.lastTranscriptionAttemptAt, attemptedAt)
         XCTAssertEqual(recovered.lastTranscriptionFailureReason, .timeout)
         XCTAssertEqual(recovered.scratchpadText, "Remember the second point")
+        XCTAssertEqual(recovered.longFormRecoveryValidatedAt, recoveryValidatedAt)
         XCTAssertEqual(recovered.voiceNoteDurabilityEvidence, .durableCheckpoint)
     }
 
@@ -46,7 +49,8 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         for key in [
             "isLongForm", "longFormActivatedAt", "longFormThresholdSeconds",
             "hasDurableAudioCheckpoint", "protectedAudioUntilTranscriptCompletes", "transcriptionRetryCount",
-            "lastTranscriptionAttemptAt", "lastTranscriptionFailureReason", "scratchpadText"
+            "lastTranscriptionAttemptAt", "lastTranscriptionFailureReason", "scratchpadText",
+            "longFormRecoveryValidatedAt"
         ] {
             payload.removeValue(forKey: key)
         }
@@ -64,6 +68,7 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertEqual(decoded.transcriptionRetryCount, 0)
         XCTAssertNil(decoded.lastTranscriptionFailureReason)
         XCTAssertNil(decoded.scratchpadText)
+        XCTAssertNil(decoded.longFormRecoveryValidatedAt)
         XCTAssertEqual(decoded.voiceNoteDurabilityEvidence, .unavailable)
     }
 

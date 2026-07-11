@@ -225,6 +225,7 @@ final class DictationCoordinator {
     private static let offlineTranscriptionNoProgressTimeout: TimeInterval = 90
 
     private let store: SharedStore
+    private let eventBus: any CrossProcessEventStreaming
     private let voiceNoteCheckpointStore: VoiceNoteCheckpointStore
     private let engine = FluidAudioTranscriptionEngine()
     private let recorder = AudioRecorder()
@@ -242,15 +243,15 @@ final class DictationCoordinator {
     private var modelPrewarmTask: Task<Void, Never>?
     private var meteringTask: Task<Void, Never>?
     private var recordingTimerTask: Task<Void, Never>?
-    private var commandPollingTask: Task<Void, Never>?
-    private var keyboardRuntimePollingTask: Task<Void, Never>?
-    private var keyboardRuntimeTickInProgress = false
+    @ObservationIgnored nonisolated(unsafe) private var sharedEventObservationTask: Task<Void, Never>?
+    @ObservationIgnored nonisolated(unsafe) private var longVoiceNoteRecoveryTask: Task<Void, Never>?
+    private var keyboardCommandProcessingInProgress = false
     private var keyboardSessionRetryTask: Task<Void, Never>?
     private var keyboardSessionRetryAttempt = 0
+    private var lastKeyboardRuntimeHeartbeatAt = Date.distantPast
     private var keyboardSessionLiveActivityRequestIDs = Set<UUID>()
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
-    private var lastKeyboardRuntimeLevelWriteAt = Date.distantPast
     private var pendingICloudSyncReason: String?
     private var onboardingModelReadyCueModel: LocalTranscriptionModel?
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
@@ -417,9 +418,13 @@ final class DictationCoordinator {
         }
     }
 
-    init() {
-        let store = SharedStore()
+    init(
+        store: SharedStore? = nil,
+        eventBus: any CrossProcessEventStreaming = DarwinCrossProcessEventBus.shared
+    ) {
+        let store = store ?? SharedStore(eventPoster: eventBus)
         self.store = store
+        self.eventBus = eventBus
         voiceNoteCheckpointStore = VoiceNoteCheckpointStore(store: store)
         ModelBackgroundDownloadService.shared.delegate = self
 
@@ -469,17 +474,11 @@ final class DictationCoordinator {
                 self?.handleVoiceNoteWriterFailure(failure)
             }
         }
-        keyboardSessionKeeper.setInputActivityHandler { [weak self] powerDB, isCapturing in
-            Task { @MainActor in
-                await self?.handleKeyboardSessionInputActivity(powerDB: powerDB, isCapturing: isCapturing)
-            }
-        }
+        startSharedEventObservation()
 
         refreshAudioInputRoute()
         refreshHistory()
-        Task { @MainActor in
-            await recoverLongVoiceNotesOnLaunch()
-        }
+        recoverLongVoiceNotesIfNeeded()
         Task {
             await liveActivityController.endAllActivities(
                 detail: "Recovered from interrupted session"
@@ -494,6 +493,8 @@ final class DictationCoordinator {
     }
 
     deinit {
+        sharedEventObservationTask?.cancel()
+        longVoiceNoteRecoveryTask?.cancel()
         if let audioRouteObserver {
             NotificationCenter.default.removeObserver(audioRouteObserver)
         }
@@ -774,7 +775,7 @@ final class DictationCoordinator {
         case .recordingShort(let currentStateSessionID) = voiceNoteLifecycleState.phase,
         currentStateSessionID == sessionID,
         isRecording,
-        var session = activeSession,
+        let session = activeSession,
         session.id == sessionID
         else { return }
 
@@ -784,20 +785,41 @@ final class DictationCoordinator {
             handleVoiceNoteWriterFailure(.checkpointRotation)
             return
         }
-        guard transitionVoiceNoteLifecycle(.longFormActivated(sessionID)) else { return }
+        _ = promoteActiveVoiceNoteToLongForm(sessionID: sessionID)
+    }
 
+    @discardableResult
+    private func promoteActiveVoiceNoteToLongForm(sessionID: UUID) -> RecordingSession? {
+        guard let runner = voiceNoteLifecycleRunner,
+              runner.sessionID == sessionID,
+              isRecording,
+              var session = activeSession,
+              session.id == sessionID
+        else { return nil }
+
+        switch voiceNoteLifecycleState.phase {
+        case .recordingShort(let activeID) where activeID == sessionID:
+            guard transitionVoiceNoteLifecycle(.longFormActivated(sessionID)) else { return nil }
+        case .recordingLongProtected(let activeID) where activeID == sessionID:
+            break
+        default:
+            return nil
+        }
+
+        let isFirstActivation = !session.isLongForm
         session.isLongForm = true
-        session.longFormActivatedAt = .now
-        session.protectedAudioUntilTranscriptCompletes = true
+        session.longFormActivatedAt = session.longFormActivatedAt ?? .now
+        session.protectedAudioUntilTranscriptCompletes = session.hasDurableAudioCheckpoint
         session.lastTranscriptionFailureReason = nil
         activeSession = session
+        try? store.saveSession(session)
+
+        guard isFirstActivation else { return session }
         if session.kind == .quickDictation {
             presentedLongVoiceNoteSessionID = session.id
         }
-        try? store.saveSession(session)
-        statusText = "Audio saved locally"
-
-        if longVoiceNoteAudioIsSecured {
+        if session.hasDurableAudioCheckpoint {
+            statusText = "Audio saved locally"
             var parameters = voiceNoteTelemetryParameters(
                 session: session,
                 checkpointCount: longVoiceNoteCheckpointCount
@@ -808,7 +830,6 @@ final class DictationCoordinator {
                 parameters: parameters
             )
         }
-
         AppTelemetry.contextualSignal(
             "long_voice_note_activated",
             parameters: voiceNoteTelemetryParameters(
@@ -816,20 +837,25 @@ final class DictationCoordinator {
                 checkpointCount: longVoiceNoteCheckpointCount
             )
         )
+
+        let durabilityDetail = session.hasDurableAudioCheckpoint
+            ? "Audio protected locally"
+            : "Securing audio"
         if session.kind == .keyboardDictation {
             refreshKeyboardSessionLiveActivity(
                 phase: "Long voice note",
-                detail: longVoiceNoteAudioIsSecured ? "Audio protected locally" : "Securing audio"
+                detail: durabilityDetail
             )
         } else {
             Task {
                 await liveActivityController.update(
                     phase: "Long voice note",
-                    detail: longVoiceNoteAudioIsSecured ? "Audio protected locally" : "Securing audio",
+                    detail: durabilityDetail,
                     session: session
                 )
             }
         }
+        return session
     }
 
     private func handleVoiceNoteWriterFailure(_ failure: CheckpointingAudioWriterFailure) {
@@ -876,10 +902,9 @@ final class DictationCoordinator {
         else { return }
 
         if let threshold = session.longFormThresholdSeconds,
-           recordingElapsedTime >= Double(threshold) {
-            session.isLongForm = true
-            session.longFormActivatedAt = session.longFormActivatedAt ?? .now
-            session.protectedAudioUntilTranscriptCompletes = session.hasDurableAudioCheckpoint
+           recordingElapsedTime >= Double(threshold),
+           let promotedSession = promoteActiveVoiceNoteToLongForm(sessionID: session.id) {
+            session = promotedSession
         }
         session.lastTranscriptionFailureReason = cause.failureReason
         session.errorMessage = message
@@ -889,8 +914,11 @@ final class DictationCoordinator {
     }
 
     func recoverLongVoiceNotesIfNeeded() {
-        Task { @MainActor in
+        guard longVoiceNoteRecoveryTask == nil else { return }
+        longVoiceNoteRecoveryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             await recoverLongVoiceNotesOnLaunch()
+            longVoiceNoteRecoveryTask = nil
         }
     }
 
@@ -933,7 +961,8 @@ final class DictationCoordinator {
                 && original.longFormThresholdSeconds != nil
             guard original.isLongForm || isCheckpointArmedRecording else { continue }
             guard [.recording, .transcriptionQueued, .transcribing, .failed].contains(original.phase),
-                  voiceNoteLifecycleRunner?.sessionID != original.id
+                  voiceNoteLifecycleRunner?.sessionID != original.id,
+                  original.phase != .failed || original.longFormRecoveryValidatedAt == nil
             else { continue }
 
             var session = original
@@ -979,7 +1008,9 @@ final class DictationCoordinator {
                 session.lastTranscriptionFailureReason = .audioUnavailable
                 session.errorMessage = "The saved audio is unavailable."
                 session.audioFileName = nil
+                try? await voiceNoteCheckpointStore.delete(sessionID: session.id)
             }
+            session.longFormRecoveryValidatedAt = .now
             try? store.saveSession(session)
             didChange = true
         }
@@ -1115,18 +1146,40 @@ final class DictationCoordinator {
 
         let action = components.queryItems?.first(where: { $0.name == MuesliAppConstants.actionQueryItem })?.value
             ?? MuesliAppConstants.startAction
+        if action == MuesliAppConstants.cancelAction {
+            guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .cancel) else {
+                try? store.clearPendingCommand()
+                return
+            }
+            saveKeyboardHandoff(
+                requestID: requestID,
+                phase: .cancelled,
+                message: "Cancelled"
+            )
+            cancelRecording(requestID: requestID)
+            try? store.clearPendingCommand()
+            return
+        }
         if action == MuesliAppConstants.stopAction {
-            guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .stop) else { return }
+            guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .stop) else {
+                try? store.clearPendingCommand()
+                return
+            }
             saveKeyboardHandoff(
                 requestID: requestID,
                 phase: .stopAcknowledged,
                 message: "Stopping"
             )
             stopRecording(requestID: requestID)
+            try? store.clearPendingCommand()
             return
         }
 
-        guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .start) else { return }
+        guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .start) else {
+            try? store.clearPendingCommand()
+            return
+        }
+        defer { try? store.clearPendingCommand() }
 
         let pendingRequest = try? store.pendingRequest()
         let request = pendingRequest?.id == requestID
@@ -1139,7 +1192,6 @@ final class DictationCoordinator {
             return
         }
         transitionKeyboardSession(.handoffStarted(request.id))
-        startKeyboardRuntimePolling()
         startRecording(for: request, source: "keyboard")
     }
 
@@ -1160,8 +1212,6 @@ final class DictationCoordinator {
         guard activeRequest?.id == request.id else { return false }
 
         transitionKeyboardSession(.handoffStarted(request.id))
-        startKeyboardRuntimePolling()
-
         if isRecording {
             transitionKeyboardSession(.recordingStarted(request.id))
             saveKeyboardHandoff(
@@ -2120,8 +2170,7 @@ final class DictationCoordinator {
                     activeRequestID: activeRequest?.id,
                     phase: isRecording ? .recording : .transcribing,
                     message: "Turns off after this keyboard voice note",
-                    supportsBackgroundStart: false,
-                    inputLevel: inputLevel
+                    supportsBackgroundStart: false
                 )
                 return
             }
@@ -2172,8 +2221,6 @@ final class DictationCoordinator {
             keyboardSessionRetryAttempt = 0
             prewarmModelIfNeeded(reason: "keyboard_session")
             transitionKeyboardSession(.startSucceeded)
-            startKeyboardRuntimePolling()
-
             let session = RecordingSession(
                 kind: .keyboardDictation,
                 title: "Keyboard Session",
@@ -2904,7 +2951,6 @@ final class DictationCoordinator {
                         phase: .recordingStarted,
                         message: "Listening"
                     )
-                    startKeyboardRuntimePolling()
                     saveKeyboardRuntimeStatus(
                         isActive: true,
                         activeRequestID: request.id,
@@ -2917,16 +2963,16 @@ final class DictationCoordinator {
                     guard let self else { return }
                     self.inputLevel = level
                     if source == "keyboard" {
-                        self.publishKeyboardRuntimeLevel(level, requestID: request.id)
+                        self.publishKeyboardRecordingHeartbeat(requestID: request.id)
                     }
-                }
-                if source == "keyboard" {
-                    startCommandPolling(for: request.id)
                 }
                 statusText = "Recording"
                 AppTelemetry.signal("dictation_started", parameters: ["source": source])
                 try store.saveRequest(request)
                 try store.saveStatus(.init(requestID: request.id, phase: .recording))
+                if source == "keyboard" {
+                    await processPendingKeyboardCommand()
+                }
                 Task {
                     if usesKeyboardSessionLiveActivity {
                         refreshKeyboardSessionLiveActivity(
@@ -2976,6 +3022,9 @@ final class DictationCoordinator {
                 )
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
                 if source == "keyboard" {
+                    if let command = try? store.pendingCommand(), command.requestID == request.id {
+                        try? store.clearPendingCommand()
+                    }
                     saveKeyboardHandoff(
                         requestID: request.id,
                         phase: .failed,
@@ -3189,28 +3238,12 @@ final class DictationCoordinator {
 
         guard isRecording else { return }
 
-        if var thresholdSession = session,
+        if let thresholdSession = session,
            !thresholdSession.isLongForm,
            let threshold = thresholdSession.longFormThresholdSeconds,
            recordingElapsedTime >= Double(threshold),
-           transitionVoiceNoteLifecycle(.longFormActivated(thresholdSession.id)) {
-            thresholdSession.isLongForm = true
-            thresholdSession.longFormActivatedAt = .now
-            thresholdSession.protectedAudioUntilTranscriptCompletes =
-                thresholdSession.hasDurableAudioCheckpoint
-            session = thresholdSession
-            activeSession = thresholdSession
-            try? store.saveSession(thresholdSession)
-            if thresholdSession.kind == .quickDictation {
-                presentedLongVoiceNoteSessionID = thresholdSession.id
-            }
-            AppTelemetry.contextualSignal(
-                "long_voice_note_activated",
-                parameters: voiceNoteTelemetryParameters(
-                    session: thresholdSession,
-                    checkpointCount: longVoiceNoteCheckpointCount
-                )
-            )
+           let promotedSession = promoteActiveVoiceNoteToLongForm(sessionID: thresholdSession.id) {
+            session = promotedSession
         }
 
         let usesKeyboardSessionLiveActivity = usesKeyboardSessionLiveActivity(for: request.id)
@@ -3238,9 +3271,6 @@ final class DictationCoordinator {
         isRecording = false
         stopMetering()
         stopRecordingTimer()
-        if !usesKeyboardSessionLiveActivity {
-            stopCommandPolling()
-        }
         statusText = "Saving audio"
         if isKeyboardHandoffActive {
             transitionKeyboardSession(.transcribing(request.id))
@@ -3284,7 +3314,6 @@ final class DictationCoordinator {
         beginTranscriptionBackgroundTask()
         let transcriptionTask = Task {
             defer {
-                stopCommandPolling()
                 endTranscriptionBackgroundTask()
             }
             let startedFromKeyboard = isKeyboardHandoffActive
@@ -4659,83 +4688,40 @@ final class DictationCoordinator {
         onboardingTestInputLevel = 0
     }
 
-    private func startCommandPolling(for requestID: UUID) {
-        commandPollingTask?.cancel()
-        commandPollingTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                if let command = try? self.store.pendingCommand(), command.requestID == requestID {
-                    try? self.store.clearPendingCommand()
-                    switch command.action {
-                    case .start:
-                        break
-                    case .stop:
-                        self.saveKeyboardHandoff(
-                            requestID: requestID,
-                            phase: .stopAcknowledged,
-                            message: "Stopping"
-                        )
-                        self.stopRecording(requestID: requestID)
-                    case .cancel:
-                        self.saveKeyboardHandoff(
-                            requestID: requestID,
-                            phase: .cancelled,
-                            message: "Cancelled"
-                        )
-                        self.cancelRecording(requestID: requestID)
-                    }
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(250))
+    private func startSharedEventObservation() {
+        sharedEventObservationTask?.cancel()
+        sharedEventObservationTask = Task { @MainActor [weak self, eventBus] in
+            for await event in eventBus.events() {
+                guard !Task.isCancelled, let self else { return }
+                guard event == .commandChanged else { continue }
+                await self.processPendingKeyboardCommand()
             }
         }
     }
 
-    private func stopCommandPolling() {
-        commandPollingTask?.cancel()
-        commandPollingTask = nil
-    }
-
-    private func startKeyboardRuntimePolling() {
-        guard keyboardRuntimePollingTask == nil else { return }
-        refreshKeyboardRuntimeHeartbeat()
-
-        keyboardRuntimePollingTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                await self.processKeyboardRuntimeTick()
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
-    }
-
-    private func handleKeyboardSessionInputActivity(powerDB: Float, isCapturing: Bool) async {
-        guard MuesliPreferences.keyboardSessionModeEnabled || isCapturing else { return }
-        let normalized = min(max((Double(powerDB) + 50) / 50, 0), 1)
-        await processKeyboardRuntimeTick(inputLevel: normalized)
-    }
-
-    private func processKeyboardRuntimeTick(inputLevel: Double? = nil) async {
-        guard !keyboardRuntimeTickInProgress else { return }
-        keyboardRuntimeTickInProgress = true
-        defer { keyboardRuntimeTickInProgress = false }
-
-        if isKeyboardSessionArmed,
-           !keyboardSessionKeeper.isRunning,
-           !isRecording,
-           !hasMeetingRecordingInProgress,
-           activeRequest == nil
-        {
-            _ = await ensureKeyboardSessionKeeperRunning(publishReady: false)
-        }
-        refreshKeyboardRuntimeHeartbeat(inputLevel: inputLevel)
+    private func processPendingKeyboardCommand() async {
+        guard !keyboardCommandProcessingInProgress else { return }
+        keyboardCommandProcessingInProgress = true
+        defer { keyboardCommandProcessingInProgress = false }
 
         guard let command = try? store.pendingCommand() else { return }
-        try? store.clearPendingCommand()
         guard !rejectConflictingKeyboardCommand(
             requestID: command.requestID,
             action: command.action
-        ) else { return }
+        ) else {
+            try? store.clearPendingCommand()
+            return
+        }
+        if KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
+            action: command.action,
+            activeRequestMatches: activeRequest?.id == command.requestID,
+            hasActiveSession: activeSession != nil,
+            isRecording: isRecording
+        ) {
+            // Recorder startup is still awaiting permission or audio setup. Keep
+            // the durable command in SQLite and consume it after startup settles.
+            return
+        }
         switch command.action {
         case .start:
             break
@@ -4746,6 +4732,7 @@ final class DictationCoordinator {
                 message: "Stopping"
             )
             stopRecording(requestID: command.requestID)
+            try? store.clearPendingCommand()
             return
         case .cancel:
             saveKeyboardHandoff(
@@ -4754,6 +4741,7 @@ final class DictationCoordinator {
                 message: "Cancelled"
             )
             cancelRecording(requestID: command.requestID)
+            try? store.clearPendingCommand()
             return
         }
 
@@ -4777,44 +4765,17 @@ final class DictationCoordinator {
                 phase: .failed,
                 message: "Muesli is busy"
             ))
+            try? store.clearPendingCommand()
             return
         }
 
         transitionKeyboardSession(.handoffStarted(request.id))
         startRecording(for: request, source: "keyboard")
-    }
-
-    private func refreshKeyboardRuntimeHeartbeat(inputLevel: Double? = nil) {
-        let phase: DictationPhase
-        let message: String
-
-        if isRecording {
-            phase = .recording
-            message = "Listening"
-        } else if activeRequest != nil && statusText == "Transcribing" {
-            phase = .transcribing
-            message = "Transcribing"
-        } else if isKeyboardSessionArmed {
-            phase = .idle
-            message = "Keyboard session ready"
-        } else {
-            phase = .idle
-            message = "Ready"
-        }
-
-        saveKeyboardRuntimeStatus(
-            isActive: isKeyboardHotMicEngineReady || isRecording || activeRequest != nil,
-            activeRequestID: activeRequest?.id,
-            phase: phase,
-            message: message,
-            supportsBackgroundStart: canStartKeyboardRequestsInBackground,
-            inputLevel: inputLevel
-        )
+        try? store.clearPendingCommand()
     }
 
     private func publishKeyboardSessionReadyIfAvailable() {
         guard MuesliPreferences.keyboardSessionModeEnabled, canStartKeyboardRequestsInBackground else { return }
-        startKeyboardRuntimePolling()
         saveKeyboardRuntimeStatus(
             isActive: true,
             activeRequestID: nil,
@@ -4900,10 +4861,8 @@ final class DictationCoordinator {
         activeRequestID: UUID?,
         phase: DictationPhase,
         message: String?,
-        supportsBackgroundStart: Bool = false,
-        inputLevel: Double? = nil
+        supportsBackgroundStart: Bool = false
     ) {
-        let runtimeInputLevel = inputLevel ?? (phase == .recording ? self.inputLevel : 0)
         let canAcceptStartCommand = isActive
             && supportsBackgroundStart
             && activeRequestID == nil
@@ -4915,23 +4874,21 @@ final class DictationCoordinator {
             message: message,
             supportsBackgroundStart: supportsBackgroundStart,
             canAcceptStartCommand: canAcceptStartCommand,
-            inputLevel: runtimeInputLevel
+            inputLevel: 0
         ))
     }
 
-    private func publishKeyboardRuntimeLevel(_ level: Double, requestID: UUID) {
+    private func publishKeyboardRecordingHeartbeat(requestID: UUID) {
         guard activeRequest?.id == requestID, isRecording else { return }
-
         let now = Date()
-        guard now.timeIntervalSince(lastKeyboardRuntimeLevelWriteAt) >= 0.08 else { return }
-        lastKeyboardRuntimeLevelWriteAt = now
+        guard now.timeIntervalSince(lastKeyboardRuntimeHeartbeatAt) >= 10 else { return }
+        lastKeyboardRuntimeHeartbeatAt = now
         saveKeyboardRuntimeStatus(
             isActive: true,
             activeRequestID: requestID,
             phase: .recording,
             message: "Listening",
-            supportsBackgroundStart: canStartKeyboardRequestsInBackground,
-            inputLevel: level
+            supportsBackgroundStart: false
         )
     }
 
@@ -5081,7 +5038,6 @@ final class DictationCoordinator {
         let usesKeyboardSessionLiveActivity = usesKeyboardSessionLiveActivity(for: requestID)
         stopMetering()
         stopRecordingTimer()
-        stopCommandPolling()
         if usesKeyboardSessionLiveActivity {
             keyboardSessionKeeper.cancelSegment()
         } else {

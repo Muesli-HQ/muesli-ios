@@ -794,15 +794,6 @@ private struct LongVoiceNoteSettingsRow: View {
 
                     Stepper("Threshold seconds", value: $thresholdSeconds, in: 30...600, step: 5)
                         .labelsHidden()
-                        .onChange(of: thresholdSeconds) { _, value in
-                            let clamped = MuesliPreferences.clampedLongVoiceNoteThreshold(value)
-                            if thresholdSeconds != clamped {
-                                thresholdSeconds = clamped
-                                return
-                            }
-                            customText = String(clamped)
-                            signalThresholdChanged(clamped)
-                        }
                 }
 
                 Text("30 seconds to 10 minutes")
@@ -813,6 +804,15 @@ private struct LongVoiceNoteSettingsRow: View {
         .onAppear {
             thresholdSeconds = MuesliPreferences.clampedLongVoiceNoteThreshold(thresholdSeconds)
             customText = String(thresholdSeconds)
+        }
+        .onChange(of: thresholdSeconds) { _, value in
+            let clamped = MuesliPreferences.clampedLongVoiceNoteThreshold(value)
+            if thresholdSeconds != clamped {
+                thresholdSeconds = clamped
+                return
+            }
+            customText = String(clamped)
+            signalThresholdChanged(clamped)
         }
         .onChange(of: isEnabled) { _, enabled in
             AppTelemetry.signal(

@@ -17,4 +17,5 @@ enum MuesliAppConstants {
     static let sourceQueryItem = "source"
     static let startAction = "start"
     static let stopAction = "stop"
+    static let cancelAction = "cancel"
 }

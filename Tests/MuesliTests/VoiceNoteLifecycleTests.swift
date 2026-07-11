@@ -2,6 +2,29 @@ import XCTest
 @testable import Muesli
 
 final class VoiceNoteLifecycleTests: XCTestCase {
+    func testStopAndCancelRemainDeferredWhileRecorderStartupIsInFlight() {
+        for action in [Muesli.DictationCommandAction.stop, .cancel] {
+            XCTAssertTrue(KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
+                action: action,
+                activeRequestMatches: true,
+                hasActiveSession: false,
+                isRecording: false
+            ))
+        }
+        XCTAssertFalse(KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
+            action: Muesli.DictationCommandAction.start,
+            activeRequestMatches: true,
+            hasActiveSession: false,
+            isRecording: false
+        ))
+        XCTAssertFalse(KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
+            action: Muesli.DictationCommandAction.cancel,
+            activeRequestMatches: true,
+            hasActiveSession: true,
+            isRecording: false
+        ))
+    }
+
     func testLifecycleMovesThroughProtectedRecordingAndCompletion() {
         let id = UUID()
         var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))

@@ -85,6 +85,15 @@ enum MuesliTheme {
     static let cornerLarge: CGFloat = 16
     static let cornerXL: CGFloat = 22
 
+    enum Navigation {
+        static let horizontalInset: CGFloat = 28
+        static let itemSpacing: CGFloat = 4
+        static let itemHeight: CGFloat = 44
+        static let containerPadding: CGFloat = 2
+        static let containerCornerRadius: CGFloat = 24
+        static let selectionCornerRadius: CGFloat = 23
+    }
+
     static func color(for accent: MuesliAccentTheme) -> Color {
         Color.adaptive(dark: accent.darkHex, light: accent.lightHex)
     }
@@ -286,7 +295,10 @@ private struct MuesliNavigationSelectionModifier: ViewModifier {
 
     @ViewBuilder
     private func selected(_ content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 23, style: .continuous)
+        let shape = RoundedRectangle(
+            cornerRadius: MuesliTheme.Navigation.selectionCornerRadius,
+            style: .continuous
+        )
 
         #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
@@ -294,7 +306,7 @@ private struct MuesliNavigationSelectionModifier: ViewModifier {
                 .background(tint.opacity(0.12), in: shape)
                 .glassEffect(
                     .regular.tint(tint.opacity(0.30)).interactive(),
-                    in: .rect(cornerRadius: 23)
+                    in: .rect(cornerRadius: MuesliTheme.Navigation.selectionCornerRadius)
                 )
                 .glassEffectID("navigation-selection", in: namespace)
                 .overlay(shape.strokeBorder(Color.white.opacity(0.23), lineWidth: 0.9))

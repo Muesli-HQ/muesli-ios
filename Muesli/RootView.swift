@@ -93,7 +93,7 @@ struct RootView: View {
                         selectedSection: $selectedSection,
                         pinnedSections: pinnedSections
                     )
-                        .padding(.horizontal, 28)
+                        .padding(.horizontal, MuesliTheme.Navigation.horizontalInset)
                         .padding(.bottom, MuesliTheme.spacing8)
                         .padding(.top, MuesliTheme.spacing4)
                         .background(MuesliTheme.backgroundBase)
@@ -384,7 +384,7 @@ private struct MuesliTabSwitcher: View {
 
     var body: some View {
         MuesliGlassGroup(spacing: MuesliTheme.spacing8) {
-            HStack(spacing: MuesliTheme.spacing4) {
+            HStack(spacing: MuesliTheme.Navigation.itemSpacing) {
                 ForEach(pinnedSections, id: \.self) { section in
                     let isSelected = selectedSection == section
 
@@ -406,13 +406,18 @@ private struct MuesliTabSwitcher: View {
                         }
                             .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 44)
+                            .frame(height: MuesliTheme.Navigation.itemHeight)
                             .muesliNavigationSelection(
                                 isSelected: isSelected,
                                 tint: accent,
                                 namespace: glassNamespace
                             )
-                            .contentShape(RoundedRectangle(cornerRadius: 23, style: .continuous))
+                            .contentShape(
+                                RoundedRectangle(
+                                    cornerRadius: MuesliTheme.Navigation.selectionCornerRadius,
+                                    style: .continuous
+                                )
+                            )
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(section.title)
@@ -420,8 +425,10 @@ private struct MuesliTabSwitcher: View {
                     .accessibilityIdentifier("tab.\(section.rawValue)")
                 }
             }
-            .padding(2)
-            .muesliNavigationGlassSurface(cornerRadius: 24)
+            .padding(MuesliTheme.Navigation.containerPadding)
+            .muesliNavigationGlassSurface(
+                cornerRadius: MuesliTheme.Navigation.containerCornerRadius
+            )
         }
     }
 }

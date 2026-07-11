@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 #if canImport(UIKit)
+import CoreText
 import UIKit
 #endif
 
@@ -1583,15 +1584,25 @@ private struct VoiceNoteAttributeIcon: View {
 private struct ExpandableTranscriptPreview: View {
     let text: String
     let resultID: UUID
+    @Environment(\.sizeCategory) private var sizeCategory
     @State private var isExpanded = false
-    @State private var collapsedHeight: CGFloat = 0
-    @State private var fullHeight: CGFloat = 0
+    @State private var availableWidth: CGFloat = 0
+    @State private var isTruncated = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
             transcript(lineLimit: isExpanded ? nil : 4)
-                .background(measuredTranscript(lineLimit: 4, key: "collapsed"))
-                .background(measuredTranscript(lineLimit: nil, key: "full"))
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear {
+                                updateOverflow(for: proxy.size.width)
+                            }
+                            .onChange(of: proxy.size.width) { _, width in
+                                updateOverflow(for: width)
+                            }
+                    }
+                }
                 .textSelection(.enabled)
 
             if isTruncated {
@@ -1606,14 +1617,12 @@ private struct ExpandableTranscriptPreview: View {
                 .accessibilityIdentifier("dictation.readMore.\(resultID.uuidString)")
             }
         }
-        .onPreferenceChange(TranscriptPreviewHeightKey.self) { heights in
-            collapsedHeight = heights["collapsed"] ?? collapsedHeight
-            fullHeight = heights["full"] ?? fullHeight
+        .onChange(of: text) { _, _ in
+            updateOverflow(for: availableWidth)
         }
-    }
-
-    private var isTruncated: Bool {
-        fullHeight > collapsedHeight + 1
+        .onChange(of: sizeCategory) { _, _ in
+            updateOverflow(for: availableWidth)
+        }
     }
 
     private func transcript(lineLimit: Int?) -> some View {
@@ -1626,26 +1635,78 @@ private struct ExpandableTranscriptPreview: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func measuredTranscript(lineLimit: Int?, key: String) -> some View {
-        transcript(lineLimit: lineLimit)
-            .hidden()
-            .accessibilityHidden(true)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: TranscriptPreviewHeightKey.self,
-                        value: [key: proxy.size.height]
-                    )
-                }
-            }
+    private func updateOverflow(for width: CGFloat) {
+        guard width > 0 else { return }
+        if abs(availableWidth - width) > 0.5 {
+            availableWidth = width
+        }
+        let overflow = TranscriptOverflowDetector.isTruncated(
+            text,
+            width: width,
+            lineLimit: 4,
+            sizeCategory: sizeCategory
+        )
+        if isTruncated != overflow {
+            isTruncated = overflow
+        }
     }
 }
 
-private struct TranscriptPreviewHeightKey: PreferenceKey {
-    static let defaultValue: [String: CGFloat] = [:]
+@MainActor
+enum TranscriptOverflowDetector {
+    private static let sampleCharacterLimit = 2_048
 
-    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    static func isTruncated(
+        _ text: String,
+        width: CGFloat,
+        lineLimit: Int,
+        sizeCategory: ContentSizeCategory
+    ) -> Bool {
+        guard !text.isEmpty, width > 0, lineLimit > 0 else { return false }
+
+        let traits = UITraitCollection(preferredContentSizeCategory: sizeCategory.uiKitCategory)
+        let font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits)
+        let sampleEnd = text.index(
+            text.startIndex,
+            offsetBy: sampleCharacterLimit,
+            limitedBy: text.endIndex
+        ) ?? text.endIndex
+        let omittedRemainder = sampleEnd < text.endIndex
+        let attributedText = NSAttributedString(
+            string: String(text[..<sampleEnd]),
+            attributes: [.font: font]
+        )
+        let typesetter = CTTypesetterCreateWithAttributedString(attributedText)
+        var location = 0
+
+        for _ in 0..<lineLimit {
+            guard location < attributedText.length else { return false }
+            let lineLength = CTTypesetterSuggestLineBreak(typesetter, location, width)
+            guard lineLength > 0 else { return true }
+            location += lineLength
+        }
+
+        return location < attributedText.length || omittedRemainder
+    }
+}
+
+private extension ContentSizeCategory {
+    var uiKitCategory: UIContentSizeCategory {
+        switch self {
+        case .extraSmall: .extraSmall
+        case .small: .small
+        case .medium: .medium
+        case .large: .large
+        case .extraLarge: .extraLarge
+        case .extraExtraLarge: .extraExtraLarge
+        case .extraExtraExtraLarge: .extraExtraExtraLarge
+        case .accessibilityMedium: .accessibilityMedium
+        case .accessibilityLarge: .accessibilityLarge
+        case .accessibilityExtraLarge: .accessibilityExtraLarge
+        case .accessibilityExtraExtraLarge: .accessibilityExtraExtraLarge
+        case .accessibilityExtraExtraExtraLarge: .accessibilityExtraExtraExtraLarge
+        @unknown default: .large
+        }
     }
 }
 

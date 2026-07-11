@@ -3,6 +3,17 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    func testEventStreamBuffersEventPostedAfterSubscriptionBeforeConsumption() async {
+        let bus = TestCrossProcessEventBus()
+        let stream = bus.events()
+
+        bus.post(.ownershipChanged)
+
+        var iterator = stream.makeAsyncIterator()
+        let event = await iterator.next()
+        XCTAssertEqual(event, .ownershipChanged)
+    }
+
     func testDarwinEventBusDeliversPayloadFreeInvalidation() async {
         let bus = DarwinCrossProcessEventBus.shared
         let delivered = expectation(description: "Darwin event delivered")

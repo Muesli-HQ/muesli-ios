@@ -2,6 +2,22 @@ import XCTest
 @testable import Muesli
 
 final class VoiceNoteLifecycleTests: XCTestCase {
+    private enum RecoveryInventoryError: Error {
+        case unavailable
+    }
+
+    func testRecoveryInventoryDistinguishesLoadFailureFromEmptyInventory() throws {
+        let failure = VoiceNoteRecoveryInventory.load {
+            throw RecoveryInventoryError.unavailable
+        }
+        if case .success = failure {
+            XCTFail("A failed inventory load must abort destructive recovery cleanup")
+        }
+
+        let empty = VoiceNoteRecoveryInventory.load { [] }
+        XCTAssertEqual(try empty.get().sessions.count, 0)
+    }
+
     func testStopAndCancelRemainDeferredWhileRecorderStartupIsInFlight() {
         for action in [Muesli.DictationCommandAction.stop, .cancel] {
             XCTAssertTrue(KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
@@ -319,6 +335,20 @@ final class VoiceNoteLifecycleTests: XCTestCase {
 
         XCTAssertFalse(transition.accepted)
         XCTAssertEqual(transition.state, state)
+    }
+
+    func testPersistedRetryReleasesPreviousInactiveFailureThroughReducer() {
+        let previousID = UUID()
+        let retryID = UUID()
+        var state = VoiceNoteLifecycleState(phase: .failedRetryable(previousID))
+
+        let release = VoiceNoteLifecycleReducer.transition(state, event: .finished(previousID))
+        XCTAssertTrue(release.accepted)
+        state = release.state
+
+        let retry = VoiceNoteLifecycleReducer.transition(state, event: .retryRequested(retryID))
+        XCTAssertTrue(retry.accepted)
+        XCTAssertEqual(retry.state.phase, .transcriptionQueued(retryID))
     }
 
     func testFailureCanRetry() {

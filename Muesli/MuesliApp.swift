@@ -6,6 +6,10 @@ struct MuesliApp: App {
     @State private var coordinator = DictationCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 
+    private var isUITesting: Bool {
+        ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.uiTestingLaunchArgument)
+    }
+
     init() {
         AppTelemetry.configure()
     }
@@ -19,7 +23,7 @@ struct MuesliApp: App {
                     coordinator.handleOpenURL(url)
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active {
+                    if phase == .active, !isUITesting {
                         coordinator.prewarmModelIfNeeded(reason: "foreground")
                         coordinator.syncICloudTextIfEnabled(reason: "foreground")
                         coordinator.recoverLongVoiceNotesIfNeeded()

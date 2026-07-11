@@ -266,6 +266,18 @@ enum VoiceNoteAudioRetentionPolicy {
     }
 }
 
+struct VoiceNoteRecoveryInventory {
+    let sessions: [RecordingSession]
+
+    static func load(
+        _ loader: () throws -> [RecordingSession]
+    ) -> Result<VoiceNoteRecoveryInventory, Error> {
+        Result {
+            VoiceNoteRecoveryInventory(sessions: try loader())
+        }
+    }
+}
+
 enum VoiceNoteFailureLifecycleDisposition: Equatable {
     case retryable
     case finished

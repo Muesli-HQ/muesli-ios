@@ -381,11 +381,12 @@ final class KeyboardController {
 
     func startObservingSharedState() {
         markKeyboardVisible()
+        eventObservationTask?.cancel()
+        let events = eventBus.events()
         refreshLatestDictation()
         prepareLaunchRequestIfNeeded()
-        eventObservationTask?.cancel()
-        eventObservationTask = Task { @MainActor [weak self, eventBus] in
-            for await event in eventBus.events() {
+        eventObservationTask = Task { @MainActor [weak self] in
+            for await event in events {
                 guard !Task.isCancelled, let self else { return }
                 switch event {
                 case .runtimeStatusChanged:

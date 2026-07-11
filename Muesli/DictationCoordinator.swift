@@ -429,11 +429,14 @@ final class DictationCoordinator {
         ModelBackgroundDownloadService.shared.delegate = self
 
         #if DEBUG
-        if Self.shouldConfigureForUITestingFromLaunchArguments() {
+        let isConfiguringForUITesting = Self.shouldConfigureForUITestingFromLaunchArguments()
+        if isConfiguringForUITesting {
             configureForUITesting()
         } else if Self.shouldResetOnboardingFromLaunchArguments() {
             resetOnboardingForTesting()
         }
+        #else
+        let isConfiguringForUITesting = false
         #endif
 
         audioRouteObserver = NotificationCenter.default.addObserver(
@@ -477,8 +480,10 @@ final class DictationCoordinator {
         startSharedEventObservation()
 
         refreshAudioInputRoute()
-        refreshHistory()
-        recoverLongVoiceNotesIfNeeded()
+        if !isConfiguringForUITesting {
+            refreshHistory()
+            recoverLongVoiceNotesIfNeeded()
+        }
         Task {
             await liveActivityController.endAllActivities(
                 detail: "Recovered from interrupted session"
@@ -535,6 +540,14 @@ final class DictationCoordinator {
             )
         }
         return transition.accepted
+    }
+
+    private func prepareVoiceNoteLifecycleForPersistedRetry(sessionID: UUID) -> Bool {
+        guard !voiceNoteLifecycleState.isWorkActive else { return false }
+        guard let previousSessionID = voiceNoteLifecycleState.activeSessionID,
+              previousSessionID != sessionID
+        else { return true }
+        return transitionVoiceNoteLifecycle(.finished(previousSessionID))
     }
 
     private func beginVoiceNoteLifecycle(
@@ -938,7 +951,22 @@ final class DictationCoordinator {
     }
 
     private func recoverLongVoiceNotesOnLaunch() async {
-        let sessions = (try? store.recordingSessions()) ?? []
+        let inventoryResult = VoiceNoteRecoveryInventory.load {
+            try store.recordingSessions()
+        }
+        let sessions: [RecordingSession]
+        switch inventoryResult {
+        case .success(let inventory):
+            sessions = inventory.sessions
+        case .failure(let error):
+            AppTelemetry.failure(
+                "long_voice_note_recovery_inventory_failed",
+                domain: .persistence,
+                stage: "load_sessions",
+                error: error
+            )
+            return
+        }
         let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
         let validIDs = Set(sessions.map(\.id))
         if let checkpointIDs = try? await voiceNoteCheckpointStore.checkpointSessionIDs() {
@@ -1288,11 +1316,15 @@ final class DictationCoordinator {
             return true
         }
 
+        guard prepareVoiceNoteLifecycleForPersistedRetry(sessionID: session.id) else {
+            let message = "Finish the active voice note first"
+            saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
+            return true
+        }
         transitionKeyboardSession(.transcribing(request.id))
         activeRequest = request
         activeSession = session
         voiceNoteLifecycleRunner?.cancelAll()
-        voiceNoteLifecycleState = VoiceNoteLifecycleState()
         voiceNoteLifecycleRunner = VoiceNoteLifecycleRunner(
             sessionID: session.id,
             requestID: request.id
@@ -1301,9 +1333,7 @@ final class DictationCoordinator {
               transitionVoiceNoteLifecycle(.retryRequested(session.id)),
               transitionVoiceNoteLifecycle(.transcriptionStarted(session.id))
         else {
-            voiceNoteLifecycleRunner?.cancelAll()
-            voiceNoteLifecycleRunner = nil
-            voiceNoteLifecycleState = VoiceNoteLifecycleState()
+            finishVoiceNoteLifecycle(sessionID: session.id)
             activeRequest = nil
             activeSession = nil
             return true
@@ -1508,6 +1538,9 @@ final class DictationCoordinator {
     }
 
     func refreshHistory() {
+        #if DEBUG
+        guard !Self.shouldConfigureForUITestingFromLaunchArguments() else { return }
+        #endif
         do {
             dictationHistory = try store.resultsHistory()
             recordingSessions = try store.recordingSessions()
@@ -1713,16 +1746,15 @@ final class DictationCoordinator {
               let audioURL = try? store.audioFileURL(fileName: audioFileName)
         else { return }
 
+        guard prepareVoiceNoteLifecycleForPersistedRetry(sessionID: sessionID) else { return }
         voiceNoteLifecycleRunner?.cancelAll()
-        voiceNoteLifecycleState = VoiceNoteLifecycleState()
         voiceNoteLifecycleRunner = VoiceNoteLifecycleRunner(
             sessionID: sessionID,
             requestID: requestID
         )
         guard let runnerID = voiceNoteLifecycleRunner?.id else { return }
         guard transitionVoiceNoteLifecycle(.retryRequested(sessionID)) else {
-            voiceNoteLifecycleRunner?.cancelAll()
-            voiceNoteLifecycleRunner = nil
+            finishVoiceNoteLifecycle(sessionID: sessionID)
             return
         }
         session.phase = .transcriptionQueued

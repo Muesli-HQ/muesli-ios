@@ -9,6 +9,7 @@ enum AppTelemetryFailureDomain: String {
     case liveActivity = "live_activity"
     case meeting
     case model
+    case persistence
     case stateMachine = "state_machine"
     case summary
     case transcription

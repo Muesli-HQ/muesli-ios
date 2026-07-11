@@ -7,7 +7,11 @@ struct MuesliApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     private var isUITesting: Bool {
+        #if DEBUG
         ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.uiTestingLaunchArgument)
+        #else
+        false
+        #endif
     }
 
     init() {

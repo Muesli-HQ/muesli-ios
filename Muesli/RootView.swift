@@ -93,9 +93,9 @@ struct RootView: View {
                         selectedSection: $selectedSection,
                         pinnedSections: pinnedSections
                     )
-                        .padding(.horizontal, MuesliTheme.spacing12)
-                        .padding(.bottom, MuesliTheme.spacing12)
-                        .padding(.top, MuesliTheme.spacing8)
+                        .padding(.horizontal, 28)
+                        .padding(.bottom, MuesliTheme.spacing8)
+                        .padding(.top, MuesliTheme.spacing4)
                         .background(MuesliTheme.backgroundBase)
                 }
                 .overlay(alignment: .topTrailing) {
@@ -380,34 +380,48 @@ private struct MuesliTabSwitcher: View {
     @Environment(\.muesliAccent) private var accent
     @Binding var selectedSection: AppSection
     let pinnedSections: [AppSection]
+    @Namespace private var glassNamespace
 
     var body: some View {
         MuesliGlassGroup(spacing: MuesliTheme.spacing8) {
             HStack(spacing: MuesliTheme.spacing4) {
                 ForEach(pinnedSections, id: \.self) { section in
+                    let isSelected = selectedSection == section
+
                     Button {
-                        withAnimation(.snappy(duration: 0.18)) {
+                        withAnimation(.snappy(duration: 0.24, extraBounce: 0.05)) {
                             selectedSection = section
                         }
                     } label: {
-                        Label(section.title, systemImage: section.icon)
-                            .labelStyle(.titleAndIcon)
-                            .font(.system(size: 13, weight: .semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.82)
-                            .foregroundStyle(selectedSection == section ? accent : MuesliTheme.textSecondary)
+                        VStack(spacing: 1) {
+                            Image(systemName: section.icon)
+                                .font(.system(size: 17, weight: .semibold))
+                                .symbolRenderingMode(.monochrome)
+                                .frame(height: 20)
+
+                            Text(section.title)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.78)
+                        }
+                            .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
-                            .background(selectedSection == section ? accent.opacity(0.13) : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
-                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                            .muesliNavigationSelection(
+                                isSelected: isSelected,
+                                tint: accent,
+                                namespace: glassNamespace
+                            )
+                            .contentShape(RoundedRectangle(cornerRadius: 23, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(section.title)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                     .accessibilityIdentifier("tab.\(section.rawValue)")
                 }
             }
-            .padding(MuesliTheme.spacing4)
-            .muesliGlassSurface(cornerRadius: MuesliTheme.cornerLarge, tint: accent, isInteractive: true)
+            .padding(2)
+            .muesliNavigationGlassSurface(cornerRadius: 24)
         }
     }
 }

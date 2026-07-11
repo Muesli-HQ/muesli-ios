@@ -129,4 +129,19 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         )
         XCTAssertFalse(completedAppSession.hasActiveVoiceNoteWork)
     }
+
+    func testUserAuthoredNotesRecognizeManualNotesAndScratchpadText() {
+        var session = RecordingSession(kind: .quickDictation, phase: .completed)
+        XCTAssertFalse(session.hasUserAuthoredNotes)
+
+        session.manualNotes = "  Follow up with the team.  "
+        XCTAssertTrue(session.hasUserAuthoredNotes)
+
+        session.manualNotes = "  \n "
+        session.scratchpadText = "Capture the launch idea."
+        XCTAssertTrue(session.hasUserAuthoredNotes)
+
+        session.scratchpadText = "\n  "
+        XCTAssertFalse(session.hasUserAuthoredNotes)
+    }
 }

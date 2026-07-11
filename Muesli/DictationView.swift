@@ -19,9 +19,10 @@ struct DictationView: View {
     @State private var shouldShowKeyboardSetupRow = false
     @State private var previewInputLevel = 0.0
     @State private var dashboardStats = DictationDashboardStats.empty
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     header
@@ -591,40 +592,24 @@ struct DictationView: View {
                                 coordinator.openLongVoiceNote(session)
                             }
                         case .completed(let result, let session):
-                        let hasRetainedAudio = session?.keepsAudioRecording == true
-                            && session.flatMap { coordinator.audioFileURL(for: $0) } != nil
-                            if session?.isLongForm == true {
-                                Button {
-                                    if let session {
-                                        coordinator.openLongVoiceNote(session)
-                                    }
-                                } label: {
-                                    DictationHistoryRow(
+                            let hasRetainedAudio = session?.keepsAudioRecording == true
+                                && session.flatMap { coordinator.audioFileURL(for: $0) } != nil
+                            let canOpen = session?.isLongForm == true || hasRetainedAudio
+
+                            DictationHistoryRow(
+                                result: result,
+                                session: session,
+                                hasRetainedAudio: hasRetainedAudio,
+                                onOpen: canOpen ? {
+                                    openCompletedVoiceNote(
                                         result: result,
-                                        hasRetainedAudio: hasRetainedAudio,
-                                        onCopy: { coordinator.copyToClipboard(result) },
-                                        onDelete: { coordinator.deleteDictation(result) }
+                                        session: session,
+                                        hasRetainedAudio: hasRetainedAudio
                                     )
-                                }
-                                .buttonStyle(.plain)
-                            } else if hasRetainedAudio {
-                                NavigationLink(value: result.id) {
-                                    DictationHistoryRow(
-                                        result: result,
-                                        hasRetainedAudio: true,
-                                        onCopy: { coordinator.copyToClipboard(result) },
-                                        onDelete: { coordinator.deleteDictation(result) }
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            } else {
-                                DictationHistoryRow(
-                                    result: result,
-                                    hasRetainedAudio: false,
-                                    onCopy: { coordinator.copyToClipboard(result) },
-                                    onDelete: { coordinator.deleteDictation(result) }
-                                )
-                            }
+                                } : nil,
+                                onCopy: { coordinator.copyToClipboard(result) },
+                                onDelete: { coordinator.deleteDictation(result) }
+                            )
                         }
                     }
                 }
@@ -641,8 +626,15 @@ struct DictationView: View {
     }
 
     private var voiceNoteTimeline: [VoiceNoteTimelineItem] {
+        var sessions = coordinator.recordingSessions
+        #if DEBUG
+        if shouldUseMockDictations {
+            sessions = Self.mockRecordingSessions
+        }
+        #endif
+
         let sessionsByID = Dictionary(
-            uniqueKeysWithValues: coordinator.recordingSessions.map { ($0.id, $0) }
+            uniqueKeysWithValues: sessions.map { ($0.id, $0) }
         )
         let completed = filteredHistory.map { result in
             VoiceNoteTimelineItem.completed(
@@ -652,6 +644,18 @@ struct DictationView: View {
         }
         let recoverable = filteredRecoverableVoiceNotes.map(VoiceNoteTimelineItem.recoverable)
         return VoiceNoteTimelineItem.mergeNewestFirst(completed, recoverable)
+    }
+
+    private func openCompletedVoiceNote(
+        result: DictationResult,
+        session: RecordingSession?,
+        hasRetainedAudio: Bool
+    ) {
+        if let session, session.isLongForm {
+            coordinator.openLongVoiceNote(session)
+        } else if hasRetainedAudio {
+            navigationPath.append(result.id)
+        }
     }
 
     private var statsHistory: [DictationResult] {
@@ -846,31 +850,68 @@ struct DictationView: View {
     }
 
     #if DEBUG
+    private static let mockLongVoiceNoteSessionID = UUID(uuidString: "B5D51EAA-7A0A-42CE-B25A-E01F71000001")!
+    private static let mockNotesSessionID = UUID(uuidString: "B5D51EAA-7A0A-42CE-B25A-E01F71000002")!
+
     private static let mockDictationHistory: [DictationResult] = {
         let calendar = Calendar.current
         let baseDate = calendar.date(from: DateComponents(year: 2026, month: 6, day: 30, hour: 13, minute: 30)) ?? .now
-        let samples: [(String, String?)] = [
-            ("Is this the best animation and UI that we could come up with", "ios"),
-            ("The capture screen should feel like a local first console, fast enough to open and start speaking without thinking about folders or setup.", "ios"),
-            ("Currently bleeding talent to the inference giants", "macOS"),
-            ("We should test the magnified top note while scrolling because this is the exact state people will read after recording a quick thought.", "ios"),
-            ("The Mac companion app can stay focused on longer workflows while the phone stays optimized for immediate capture.", "macOS"),
-            ("Meeting notes need the same private sync language, but the voice note screen should remain lighter and faster.", "ios"),
-            ("If a note is imported from the Mac, keep the provenance visible but do not let the chip overpower the transcript.", "macOS"),
-            ("The tab bar should feel stable and tappable, with blue as the active state and green reserved for sync confidence.", "ios"),
-            ("Keep the interface blue black white and green so the product feels consistent across phone and Mac.", "ios"),
-            ("When the top card grows, the surrounding cards should stay quiet so the reading focus feels intentional rather than busy.", "macOS")
+        let samples: [(String, String?, UUID?)] = [
+            (
+                "A longer voice note should stay easy to scan in the timeline even when the transcript contains several paragraphs. The preview needs a predictable height so one recording cannot take over the entire screen. Keep the first four lines visible, preserve the full transcript, and let the reader expand it only when they want the additional context.",
+                "ios",
+                mockLongVoiceNoteSessionID
+            ),
+            ("The capture screen should feel like a local first console, fast enough to open and start speaking without thinking about folders or setup.", "ios", mockNotesSessionID),
+            ("Currently bleeding talent to the inference giants", "macOS", nil),
+            ("We should test the magnified top note while scrolling because this is the exact state people will read after recording a quick thought.", "ios", nil),
+            ("The Mac companion app can stay focused on longer workflows while the phone stays optimized for immediate capture.", "macOS", nil),
+            ("Meeting notes need the same private sync language, but the voice note screen should remain lighter and faster.", "ios", nil),
+            ("If a note is imported from the Mac, keep the provenance visible but do not let the chip overpower the transcript.", "macOS", nil),
+            ("The tab bar should feel stable and tappable, with blue as the active state and green reserved for sync confidence.", "ios", nil),
+            ("Keep the interface blue black white and green so the product feels consistent across phone and Mac.", "ios", nil),
+            ("When the top card grows, the surrounding cards should stay quiet so the reading focus feels intentional rather than busy.", "macOS", nil)
         ]
 
         return samples.enumerated().map { index, sample in
             DictationResult(
                 requestID: UUID(),
+                sessionID: sample.2,
                 text: sample.0,
                 createdAt: calendar.date(byAdding: .minute, value: -index * 47, to: baseDate) ?? baseDate,
                 engineIdentifier: sample.1 == "macOS" ? "icloud" : "parakeet",
                 source: sample.1
             )
         }
+    }()
+
+    private static let mockRecordingSessions: [RecordingSession] = {
+        let now = Date.now
+        return [
+            RecordingSession(
+                id: mockLongVoiceNoteSessionID,
+                kind: .quickDictation,
+                createdAt: now,
+                startedAt: now.addingTimeInterval(-185),
+                endedAt: now,
+                phase: .completed,
+                source: "ios",
+                isLongForm: true,
+                longFormActivatedAt: now.addingTimeInterval(-125),
+                longFormThresholdSeconds: 60,
+                scratchpadText: "Follow up on the timeline design."
+            ),
+            RecordingSession(
+                id: mockNotesSessionID,
+                kind: .quickDictation,
+                createdAt: now.addingTimeInterval(-47 * 60),
+                startedAt: now.addingTimeInterval(-48 * 60),
+                endedAt: now.addingTimeInterval(-47 * 60),
+                phase: .completed,
+                source: "ios",
+                manualNotes: "Check the capture flow with the team."
+            )
+        ]
     }()
     #endif
 }
@@ -1398,12 +1439,38 @@ private struct DictationSourceFilterPicker: View {
 
 private struct DictationHistoryRow: View {
     let result: DictationResult
+    let session: RecordingSession?
     let hasRetainedAudio: Bool
+    let onOpen: (() -> Void)?
     let onCopy: () -> Void
     let onDelete: () -> Void
     @State private var isConfirmingDelete = false
 
     var body: some View {
+        Group {
+            if let onOpen {
+                rowSurface
+                    .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                    .onTapGesture(perform: onOpen)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction(named: "Open voice note", onOpen)
+            } else {
+                rowSurface
+            }
+        }
+        .confirmationDialog(
+            "Delete this voice note?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Voice Note", role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the voice note from local history.")
+        }
+    }
+
+    private var rowSurface: some View {
         MuesliSwipeActionRow(
             leadingAction: .init(
                 title: "Delete",
@@ -1432,16 +1499,6 @@ private struct DictationHistoryRow: View {
                 }
             }
         }
-        .confirmationDialog(
-            "Delete this voice note?",
-            isPresented: $isConfirmingDelete,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Voice Note", role: .destructive, action: onDelete)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes the voice note from local history.")
-        }
     }
 
     private var rowContent: some View {
@@ -1466,15 +1523,28 @@ private struct DictationHistoryRow: View {
                         .accessibilityHidden(true)
                 }
 
+                if session?.hasUserAuthoredNotes == true {
+                    VoiceNoteAttributeIcon(
+                        systemImage: "note.text",
+                        accessibilityLabel: "Has manual notes",
+                        identifier: "voiceNote.badge.notes",
+                        tint: MuesliTheme.textSecondary
+                    )
+                }
+
+                if session?.isLongForm == true {
+                    VoiceNoteAttributeIcon(
+                        systemImage: "clock",
+                        accessibilityLabel: "Long voice note",
+                        identifier: "voiceNote.badge.longForm",
+                        tint: MuesliTheme.accent
+                    )
+                }
+
                 DictationOriginChip(origin: origin)
             }
 
-            Text(result.text)
-                .font(MuesliTheme.transcript())
-                .foregroundStyle(MuesliTheme.textPrimary)
-                .lineSpacing(2)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            ExpandableTranscriptPreview(text: result.text, resultID: result.id)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1489,6 +1559,94 @@ private struct DictationHistoryRow: View {
         formatter.timeStyle = .short
         return formatter
     }()
+}
+
+private struct VoiceNoteAttributeIcon: View {
+    let systemImage: String
+    let accessibilityLabel: String
+    let identifier: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: 24, height: 24)
+            .background(tint.opacity(0.10))
+            .clipShape(Circle())
+            .overlay(Circle().strokeBorder(tint.opacity(0.18), lineWidth: 0.7))
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityIdentifier(identifier)
+    }
+}
+
+private struct ExpandableTranscriptPreview: View {
+    let text: String
+    let resultID: UUID
+    @State private var isExpanded = false
+    @State private var collapsedHeight: CGFloat = 0
+    @State private var fullHeight: CGFloat = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+            transcript(lineLimit: isExpanded ? nil : 4)
+                .background(measuredTranscript(lineLimit: 4, key: "collapsed"))
+                .background(measuredTranscript(lineLimit: nil, key: "full"))
+                .textSelection(.enabled)
+
+            if isTruncated {
+                Button(isExpanded ? "Show less" : "Read more") {
+                    withAnimation(.snappy(duration: 0.22)) {
+                        isExpanded.toggle()
+                    }
+                }
+                .font(MuesliTheme.captionMedium())
+                .foregroundStyle(MuesliTheme.accent)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("dictation.readMore.\(resultID.uuidString)")
+            }
+        }
+        .onPreferenceChange(TranscriptPreviewHeightKey.self) { heights in
+            collapsedHeight = heights["collapsed"] ?? collapsedHeight
+            fullHeight = heights["full"] ?? fullHeight
+        }
+    }
+
+    private var isTruncated: Bool {
+        fullHeight > collapsedHeight + 1
+    }
+
+    private func transcript(lineLimit: Int?) -> some View {
+        Text(text)
+            .font(MuesliTheme.transcript())
+            .foregroundStyle(MuesliTheme.textPrimary)
+            .lineSpacing(2)
+            .lineLimit(lineLimit)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func measuredTranscript(lineLimit: Int?, key: String) -> some View {
+        transcript(lineLimit: lineLimit)
+            .hidden()
+            .accessibilityHidden(true)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: TranscriptPreviewHeightKey.self,
+                        value: [key: proxy.size.height]
+                    )
+                }
+            }
+    }
+}
+
+private struct TranscriptPreviewHeightKey: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
 }
 
 private struct DictationAudioDetailView: View {

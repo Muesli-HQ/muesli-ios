@@ -56,7 +56,6 @@ targets:
     sources:
       - path: MuesliLiveActivityExtension
       - path: LiveActivityShared
-      - path: Shared/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.liveactivity

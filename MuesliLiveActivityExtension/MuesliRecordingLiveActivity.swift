@@ -14,7 +14,7 @@ struct MuesliRecordingLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    LiveActivityBrandMark()
+                    LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoLarge")
                         .frame(width: 38, height: 38)
                 }
 
@@ -40,13 +40,13 @@ struct MuesliRecordingLiveActivity: Widget {
                     }
                 }
             } compactLeading: {
-                LiveActivityBrandMark()
+                LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoSmall")
                     .frame(width: 22, height: 22)
             } compactTrailing: {
                 Image(systemName: iconName(for: context.state.phase))
                     .foregroundStyle(color(for: context.state.accent))
             } minimal: {
-                LiveActivityBrandMark()
+                LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoSmall")
                     .frame(width: 22, height: 22)
             }
             .keylineTint(color(for: context.state.accent))
@@ -71,7 +71,7 @@ private struct LockScreenLiveActivityView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            LiveActivityBrandMark()
+            LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoLarge")
                 .frame(width: 54, height: 54)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -114,6 +114,8 @@ private struct StopMeetingButton: View {
 }
 
 private struct LiveActivityBrandMark: View {
+    let assetName: String
+
     var body: some View {
         GeometryReader { geometry in
             brandImage
@@ -131,12 +133,12 @@ private struct LiveActivityBrandMark: View {
     @ViewBuilder
     private var brandImage: some View {
         if #available(iOS 18.0, *) {
-            Image("MuesliAppIcon")
+            Image(assetName)
                 .renderingMode(.original)
                 .resizable()
                 .widgetAccentedRenderingMode(.fullColor)
         } else {
-            Image("MuesliAppIcon")
+            Image(assetName)
                 .renderingMode(.original)
                 .resizable()
         }

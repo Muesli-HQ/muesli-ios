@@ -62,6 +62,25 @@ final class MuesliSmokeUITests: XCTestCase {
         add(collapsedScreenshot)
     }
 
+    func testLiveMeetingRemainsReachableWhenHistorySnapshotOmitsActiveSession() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-missing-active-meeting-history",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+
+        XCTAssertTrue(app.staticTexts["Live meeting"].waitForExistence(timeout: 5))
+        app.buttons["Return to Meeting"].tap()
+
+        XCTAssertTrue(app.staticTexts["Recovered Live Meeting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
+        XCTAssertFalse(app.staticTexts["Meeting not found"].exists)
+    }
+
     func testLongVoiceNoteActiveStateAndDiscardConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = [

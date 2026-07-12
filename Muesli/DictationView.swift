@@ -1453,6 +1453,7 @@ private struct DictationHistoryRow: View {
                 rowSurface
                     .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                     .onTapGesture(perform: onOpen)
+                    .accessibilityElement(children: .contain)
                     .accessibilityAddTraits(.isButton)
                     .accessibilityAction(named: "Open voice note", onOpen)
             } else {

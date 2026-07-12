@@ -87,8 +87,7 @@ private struct LockScreenLiveActivityView: View {
 private struct LiveActivityBrandMark: View {
     var body: some View {
         GeometryReader { geometry in
-            Image("MuesliAppIcon")
-                .resizable()
+            brandImage
                 .scaledToFit()
                 .clipShape(RoundedRectangle(
                     cornerRadius: geometry.size.width * 0.24,
@@ -96,6 +95,20 @@ private struct LiveActivityBrandMark: View {
                 ))
         }
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var brandImage: some View {
+        if #available(iOS 18.0, *) {
+            Image("MuesliAppIcon")
+                .renderingMode(.original)
+                .resizable()
+                .widgetAccentedRenderingMode(.fullColor)
+        } else {
+            Image("MuesliAppIcon")
+                .renderingMode(.original)
+                .resizable()
+        }
     }
 }
 

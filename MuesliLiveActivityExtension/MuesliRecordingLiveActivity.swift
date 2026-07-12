@@ -11,16 +11,16 @@ struct MuesliRecordingLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    LiveActivityBrandMark(accent: context.state.accent)
+                    LiveActivityBrandMark()
                         .frame(width: 38, height: 38)
                 }
 
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("muesli")
-                            .font(.headline)
+                            .font(LiveActivityTypography.wordmark)
                         Text(context.state.phase)
-                            .font(.caption)
+                            .font(LiveActivityTypography.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -31,13 +31,13 @@ struct MuesliRecordingLiveActivity: Widget {
                         .foregroundStyle(.secondary)
                 }
             } compactLeading: {
-                LiveActivityBrandMark(accent: context.state.accent)
+                LiveActivityBrandMark()
                     .frame(width: 22, height: 22)
             } compactTrailing: {
                 Image(systemName: iconName(for: context.state.phase))
                     .foregroundStyle(color(for: context.state.accent))
             } minimal: {
-                LiveActivityBrandMark(accent: context.state.accent)
+                LiveActivityBrandMark()
                     .frame(width: 22, height: 22)
             }
             .keylineTint(color(for: context.state.accent))
@@ -61,15 +61,15 @@ private struct LockScreenLiveActivityView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            LiveActivityBrandMark(accent: state.accent)
+            LiveActivityBrandMark()
                 .frame(width: 54, height: 54)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("muesli")
-                    .font(.headline)
+                    .font(LiveActivityTypography.wordmark)
                     .foregroundStyle(.white)
                 Text(state.detail)
-                    .font(.subheadline)
+                    .font(LiveActivityTypography.body)
                     .foregroundStyle(.white.opacity(0.72))
                     .lineLimit(1)
             }
@@ -85,45 +85,24 @@ private struct LockScreenLiveActivityView: View {
 }
 
 private struct LiveActivityBrandMark: View {
-    let accent: String
-
     var body: some View {
         GeometryReader { geometry in
-            let inset = max(3, geometry.size.width * 0.2)
-            ZStack {
-                RoundedRectangle(cornerRadius: geometry.size.width * 0.24, style: .continuous)
-                    .fill(.black)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: geometry.size.width * 0.24, style: .continuous)
-                            .stroke(.white.opacity(0.08), lineWidth: 1)
-                    }
-                LiveActivityWaveform(accent: accent)
-                    .padding(inset)
-            }
+            Image("MuesliAppIcon")
+                .resizable()
+                .scaledToFit()
+                .clipShape(RoundedRectangle(
+                    cornerRadius: geometry.size.width * 0.24,
+                    style: .continuous
+                ))
         }
         .accessibilityHidden(true)
     }
 }
 
-private struct LiveActivityWaveform: View {
-    let accent: String
-
-    private let bars: [CGFloat] = [0.35, 0.65, 0.9, 0.45, 1.0, 0.72, 0.38]
-
-    var body: some View {
-        GeometryReader { geometry in
-            let spacing: CGFloat = 2
-            let width = max(2, (geometry.size.width - spacing * CGFloat(bars.count - 1)) / CGFloat(bars.count))
-            HStack(spacing: spacing) {
-                ForEach(Array(bars.enumerated()), id: \.offset) { _, bar in
-                    RoundedRectangle(cornerRadius: width / 2, style: .continuous)
-                        .fill(color(for: accent))
-                        .frame(width: width, height: max(4, geometry.size.height * bar))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
+private enum LiveActivityTypography {
+    static let wordmark = Font.system(.callout, design: .default, weight: .semibold)
+    static let body = Font.system(.subheadline, design: .default, weight: .regular)
+    static let caption = Font.system(.caption, design: .default, weight: .regular)
 }
 
 private func color(for accent: String) -> Color {

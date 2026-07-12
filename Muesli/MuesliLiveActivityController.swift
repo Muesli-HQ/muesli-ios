@@ -3,7 +3,7 @@ import Foundation
 
 actor MuesliLiveActivityController {
     private var activity: Activity<MuesliLiveActivityAttributes>?
-    private var endedSessionIDs = Set<UUID>()
+    private var endedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
 
     func start(session: RecordingSession, requestID: UUID?, phase: String, detail: String) async {
         guard !endedSessionIDs.contains(session.id) else { return }
@@ -200,5 +200,33 @@ actor MuesliLiveActivityController {
         default:
             "blue"
         }
+    }
+}
+
+struct BoundedRecentSessionIDs {
+    private let capacity: Int
+    private var membership = Set<UUID>()
+    private var insertionOrder: [UUID] = []
+    private var evictionIndex = 0
+
+    init(capacity: Int) {
+        precondition(capacity > 0)
+        self.capacity = capacity
+    }
+
+    func contains(_ sessionID: UUID) -> Bool {
+        membership.contains(sessionID)
+    }
+
+    mutating func insert(_ sessionID: UUID) {
+        guard membership.insert(sessionID).inserted else { return }
+        guard insertionOrder.count == capacity else {
+            insertionOrder.append(sessionID)
+            return
+        }
+
+        membership.remove(insertionOrder[evictionIndex])
+        insertionOrder[evictionIndex] = sessionID
+        evictionIndex = (evictionIndex + 1) % capacity
     }
 }

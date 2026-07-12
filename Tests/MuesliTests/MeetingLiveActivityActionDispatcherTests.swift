@@ -3,6 +3,22 @@ import XCTest
 
 @MainActor
 final class MeetingLiveActivityActionDispatcherTests: XCTestCase {
+    func testOnlyMeetingAttributesExposeTheMeetingStopControl() {
+        let meeting = MuesliLiveActivityAttributes(
+            sessionID: UUID().uuidString,
+            requestID: nil,
+            kind: RecordingSessionKind.meeting.title
+        )
+        let dictation = MuesliLiveActivityAttributes(
+            sessionID: UUID().uuidString,
+            requestID: nil,
+            kind: RecordingSessionKind.quickDictation.title
+        )
+
+        XCTAssertTrue(meeting.isMeeting)
+        XCTAssertFalse(dictation.isMeeting)
+    }
+
     func testStopDispatchesTheLiveActivitySessionIdentifier() {
         defer { MeetingLiveActivityActionDispatcher.register(stopHandler: nil) }
         let sessionID = UUID()
@@ -37,5 +53,21 @@ final class MeetingLiveActivityActionDispatcherTests: XCTestCase {
             MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: UUID()),
             .unavailable
         )
+    }
+
+    func testRecentEndedSessionIDsRemainBoundedAndEvictTheOldest() {
+        var sessionIDs = BoundedRecentSessionIDs(capacity: 2)
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        sessionIDs.insert(first)
+        sessionIDs.insert(second)
+        sessionIDs.insert(first)
+        sessionIDs.insert(third)
+
+        XCTAssertFalse(sessionIDs.contains(first))
+        XCTAssertTrue(sessionIDs.contains(second))
+        XCTAssertTrue(sessionIDs.contains(third))
     }
 }

@@ -7,7 +7,8 @@ struct MuesliRecordingLiveActivity: Widget {
         ActivityConfiguration(for: MuesliLiveActivityAttributes.self) { context in
             LockScreenLiveActivityView(
                 state: context.state,
-                sessionID: context.attributes.sessionID
+                sessionID: context.attributes.sessionID,
+                showsStopControl: context.attributes.isMeeting
             )
                 .activityBackgroundTint(.black)
                 .activitySystemActionForegroundColor(.white)
@@ -33,10 +34,12 @@ struct MuesliRecordingLiveActivity: Widget {
                         Text(context.state.startedAt, style: .timer)
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        StopMeetingButton(
-                            sessionID: context.attributes.sessionID,
-                            size: 34
-                        )
+                        if context.attributes.isMeeting {
+                            StopMeetingButton(
+                                sessionID: context.attributes.sessionID,
+                                size: 34
+                            )
+                        }
                     }
                 }
             } compactLeading: {
@@ -68,6 +71,7 @@ struct MuesliRecordingLiveActivity: Widget {
 private struct LockScreenLiveActivityView: View {
     let state: MuesliLiveActivityAttributes.ContentState
     let sessionID: String
+    let showsStopControl: Bool
 
     var body: some View {
         HStack(spacing: 14) {
@@ -90,7 +94,9 @@ private struct LockScreenLiveActivityView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.72))
 
-            StopMeetingButton(sessionID: sessionID, size: 46)
+            if showsStopControl {
+                StopMeetingButton(sessionID: sessionID, size: 46)
+            }
         }
         .padding()
     }

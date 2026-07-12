@@ -116,6 +116,24 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["meetingDetail.discardButton"].exists)
     }
 
+    func testProcessedMeetingDefaultsFromRawTranscriptToGeneratedSummary() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-processing-meeting-summary",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+        XCTAssertTrue(app.buttons["Return to Meeting"].waitForExistence(timeout: 5))
+        app.buttons["Return to Meeting"].tap()
+
+        XCTAssertTrue(app.staticTexts["Raw transcript should no longer be selected after processing."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["The generated meeting summary is selected by default."].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["Raw transcript should no longer be selected after processing."].exists)
+    }
+
     func testLiveMeetingDisplaysCompletedTranscriptChunksWithoutLeavingRecording() {
         let app = XCUIApplication()
         app.launchArguments = [

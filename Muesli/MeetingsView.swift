@@ -1048,6 +1048,16 @@ private struct MeetingSessionDetailView: View {
             guard manualNotesSaveState != .saving else { return }
             manualNotesDraft = newValue
         }
+        .onChange(of: session.phase) { _, phase in
+            if phase == .completed, hasMeetingSummary {
+                selectedContent = .notes
+            }
+        }
+        .onChange(of: hasMeetingSummary) { hadSummary, hasSummary in
+            if !hadSummary, hasSummary, session.phase == .completed {
+                selectedContent = .notes
+            }
+        }
         .onDisappear {
             guard !isLeavingAfterDestructiveAction else { return }
             flushPendingManualNotes()
@@ -1531,6 +1541,10 @@ private struct MeetingSessionDetailView: View {
 
     private var isCompletedMeeting: Bool {
         session.phase == .completed
+    }
+
+    private var hasMeetingSummary: Bool {
+        !(transcript?.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     private var canEditManualNotes: Bool {

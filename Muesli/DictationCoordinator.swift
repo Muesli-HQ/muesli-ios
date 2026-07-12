@@ -1502,7 +1502,9 @@ final class DictationCoordinator {
             detail: "UI testing"
         )
 
-        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.liveMeetingTranscriptUITestLaunchArgument) {
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
+            configureProcessingMeetingSummaryUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.liveMeetingTranscriptUITestLaunchArgument) {
             configureLiveMeetingTranscriptUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingUITestLaunchArgument) {
             configureProcessingMeetingUITestFixture()
@@ -1514,6 +1516,54 @@ final class DictationCoordinator {
             configureCompletedLongVoiceNoteUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.longVoiceNoteUITestLaunchArgument) {
             configureLongVoiceNoteUITestFixture()
+        }
+    }
+
+    private func configureProcessingMeetingSummaryUITestFixture() {
+        let operationID = UUID()
+        var session = RecordingSession(
+            kind: .meeting,
+            title: "Summary Selection Meeting",
+            startedAt: Date.now.addingTimeInterval(-90),
+            endedAt: .now,
+            phase: .transcribing,
+            source: "iphone"
+        )
+        session.meetingOperationID = operationID
+        let partialTranscript = Transcript(
+            sessionID: session.id,
+            text: "Raw transcript should no longer be selected after processing.",
+            engineIdentifier: "ui-test",
+            diarizationState: .processing,
+            summaryState: .processing
+        )
+        session.transcriptID = partialTranscript.id
+        activeSession = session
+        recordingSessions = [session]
+        transcriptCache[session.id] = partialTranscript
+        meetingLifecycleRunner = MeetingLifecycleRunner(id: operationID, sessionID: session.id)
+        transitionMeetingLifecycle(.transcriptionStarted(session.id))
+        meetingStatusText = "Transcribing"
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard let self else { return }
+            let completedTranscript = Transcript(
+                id: partialTranscript.id,
+                sessionID: session.id,
+                text: partialTranscript.text,
+                engineIdentifier: "ui-test",
+                summaryText: "The generated meeting summary is selected by default.",
+                diarizationState: .completed,
+                summaryState: .completed
+            )
+            self.transcriptCache[session.id] = completedTranscript
+            var completedSession = session
+            completedSession.phase = .completed
+            completedSession.meetingOperationID = nil
+            self.recordingSessions = [completedSession]
+            self.finishMeetingLifecycle(sessionID: session.id)
+            self.meetingStatusText = "Ready"
         }
     }
 
@@ -4377,7 +4427,8 @@ final class DictationCoordinator {
             await liveActivityController.end(
                 phase: "Stopped",
                 detail: "Meeting recording stopped before audio capture",
-                session: session
+                session: session,
+                dismissal: .immediate
             )
         }
         AppTelemetry.signal("meeting_recording_startup_stopped")
@@ -4422,7 +4473,8 @@ final class DictationCoordinator {
             await liveActivityController.end(
                 phase: "Discarded",
                 detail: "Meeting recording discarded",
-                session: latestSession
+                session: latestSession,
+                dismissal: .immediate
             )
         }
         AppTelemetry.signal("meeting_recording_discarded")
@@ -4479,6 +4531,14 @@ final class DictationCoordinator {
             activeSession = queuedSession
             finishMeetingLifecycle(sessionID: session.id)
             refreshHistory()
+            Task {
+                await liveActivityController.end(
+                    phase: "Stopped",
+                    detail: "Meeting recording ended",
+                    session: queuedSession,
+                    dismissal: .immediate
+                )
+            }
             AppTelemetry.signal("meeting_recording_stopped", parameters: [
                 "queued": "true",
                 "automatic_transcription": queueForTranscription ? "true" : "false",
@@ -4487,13 +4547,6 @@ final class DictationCoordinator {
                 startMeetingTranscription(queuedSession, useStreamingChunks: true)
             } else {
                 cleanupMeetingChunks(cancelTasks: true)
-                Task {
-                    await liveActivityController.update(
-                        phase: "Paused",
-                        detail: "Audio saved and ready to transcribe",
-                        session: queuedSession
-                    )
-                }
             }
         } catch {
             _ = try? store.transitionMeetingSession(
@@ -4512,6 +4565,14 @@ final class DictationCoordinator {
             cleanupMeetingChunks(cancelTasks: true)
             finishMeetingLifecycle(sessionID: session.id)
             refreshHistory()
+            Task {
+                await liveActivityController.end(
+                    phase: "Stopped",
+                    detail: "Meeting recording ended with an error",
+                    session: session,
+                    dismissal: .immediate
+                )
+            }
             AppTelemetry.failure(
                 "meeting_recording_failed",
                 domain: .meeting,
@@ -4769,15 +4830,6 @@ final class DictationCoordinator {
         activeSession = session
         refreshHistory()
         meetingStatusText = "Transcribing"
-        Task {
-            await liveActivityController.start(
-                session: session,
-                requestID: nil,
-                phase: "Transcribing",
-                detail: "Transcribing meeting locally"
-            )
-        }
-
         if useStreamingChunks {
             finalizeStreamingMeeting(session, operationID: operationID)
             return

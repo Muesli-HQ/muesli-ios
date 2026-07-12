@@ -3,8 +3,10 @@ import Foundation
 
 actor MuesliLiveActivityController {
     private var activity: Activity<MuesliLiveActivityAttributes>?
+    private var endedSessionIDs = Set<UUID>()
 
     func start(session: RecordingSession, requestID: UUID?, phase: String, detail: String) async {
+        guard !endedSessionIDs.contains(session.id) else { return }
         guard MuesliPreferences.liveActivitiesEnabled(for: session.kind) else {
             await endActivities(for: session.kind, phase: "Off", detail: "Live Activities disabled")
             return
@@ -12,6 +14,7 @@ actor MuesliLiveActivityController {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         await endInactiveActivities()
+        guard !endedSessionIDs.contains(session.id) else { return }
         activity = resolvedActivity(for: session)
         if activity != nil {
             await update(phase: phase, detail: detail, session: session)
@@ -55,6 +58,7 @@ actor MuesliLiveActivityController {
     }
 
     func end(phase: String, detail: String, session: RecordingSession, dismissal: ActivityUIDismissalPolicy = .default) async {
+        endedSessionIDs.insert(session.id)
         guard let resolvedActivity = resolvedActivity(for: session) else { return }
         await resolvedActivity.end(
             ActivityContent(

@@ -106,7 +106,7 @@ struct MeetingsView: View {
                         session: session,
                         transcript: coordinator.transcript(for: session),
                         audioURL: coordinator.audioFileURL(for: session),
-                        isActiveRecording: coordinator.activeMeetingSessionID == session.id && coordinator.hasMeetingRecordingInProgress,
+                        isActiveRecording: coordinator.canStopMeetingCapture(sessionID: session.id),
                         isProcessingCurrentMeeting: session.phase == .transcribing,
                         inputLevel: coordinator.inputLevel,
                         statusText: coordinator.activeMeetingSessionID == session.id ? coordinator.effectiveMeetingStatusText : session.phase.title,
@@ -195,7 +195,13 @@ struct MeetingsView: View {
                 HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
                     MeetingIconTile(systemImage: coordinator.hasMeetingRecordingInProgress ? "waveform" : "mic.fill", tint: statusColor, size: 34)
 
-                    Text(coordinator.hasMeetingRecordingInProgress ? "Live meeting" : "Start a new meeting")
+                    Text(
+                        coordinator.isMeetingRecoveryNeeded
+                            ? "Meeting needs recovery"
+                            : (coordinator.isMeetingTranscribing
+                                ? "Meeting processing"
+                                : (coordinator.isMeetingCaptureVisible ? "Live meeting" : "Start a new meeting"))
+                    )
                         .font(MuesliTheme.headline())
                         .foregroundStyle(coordinator.hasMeetingRecordingInProgress ? statusColor : MuesliTheme.accent)
 
@@ -503,7 +509,7 @@ struct MeetingsView: View {
     }
 
     private var statusColor: Color {
-        if coordinator.hasMeetingRecordingInProgress {
+        if coordinator.isMeetingCaptureVisible {
             MuesliTheme.recording
         } else if coordinator.isMeetingTranscribing {
             MuesliTheme.transcribing

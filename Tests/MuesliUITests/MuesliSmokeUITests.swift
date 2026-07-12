@@ -81,6 +81,44 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Meeting not found"].exists)
     }
 
+    func testInterruptedPersistedMeetingIsPresentedAsRecoveryNotLiveCapture() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-interrupted-meeting-recovery",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+
+        XCTAssertTrue(app.staticTexts["Meeting needs recovery"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Live meeting"].exists)
+        app.buttons["Return to Meeting"].tap()
+        XCTAssertTrue(app.staticTexts["Interrupted Meeting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
+    }
+
+    func testProcessingMeetingDoesNotExposeCaptureControls() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-processing-meeting",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+
+        XCTAssertTrue(app.staticTexts["Meeting processing"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Live meeting"].exists)
+        app.buttons["Return to Meeting"].tap()
+        XCTAssertTrue(app.staticTexts["Processing Meeting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Processing audio"].exists)
+        XCTAssertFalse(app.buttons["meetingDetail.stopButton"].exists)
+        XCTAssertFalse(app.buttons["meetingDetail.discardButton"].exists)
+    }
+
     func testLongVoiceNoteActiveStateAndDiscardConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = [

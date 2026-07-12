@@ -129,106 +129,6 @@ private enum KeyboardSessionReducer {
     }
 }
 
-struct MeetingLifecycleState: Equatable {
-    enum Phase: Equatable {
-        case idle
-        case starting(UUID)
-        case recording(UUID)
-        case stopping(UUID)
-        case transcribing(UUID)
-        case cancelling(UUID)
-    }
-
-    var phase: Phase = .idle
-
-    var activeSessionID: UUID? {
-        switch phase {
-        case .idle:
-            nil
-        case .starting(let id), .recording(let id), .stopping(let id), .transcribing(let id), .cancelling(let id):
-            id
-        }
-    }
-
-    var isCancelling: Bool {
-        if case .cancelling = phase { true } else { false }
-    }
-
-    func isStarting(sessionID: UUID) -> Bool {
-        if case .starting(let id) = phase {
-            return id == sessionID
-        }
-        return false
-    }
-
-    var isRecordingVisible: Bool {
-        switch phase {
-        case .starting, .recording, .stopping:
-            true
-        case .idle, .transcribing, .cancelling:
-            false
-        }
-    }
-}
-
-enum MeetingLifecycleEvent {
-    case startRequested(UUID)
-    case recordingStarted(UUID)
-    case stopRequested(UUID)
-    case transcriptionStarted(UUID)
-    case cancelRequested(UUID)
-    case finished(UUID)
-}
-
-enum MeetingLifecycleReducer {
-    static func reduce(_ state: MeetingLifecycleState, event: MeetingLifecycleEvent) -> MeetingLifecycleState {
-        switch event {
-        case .startRequested(let id):
-            return MeetingLifecycleState(phase: .starting(id))
-        case .recordingStarted(let id):
-            guard state.activeSessionID == id else { return state }
-            return MeetingLifecycleState(phase: .recording(id))
-        case .stopRequested(let id):
-            guard state.activeSessionID == id else { return state }
-            return MeetingLifecycleState(phase: .stopping(id))
-        case .transcriptionStarted(let id):
-            return MeetingLifecycleState(phase: .transcribing(id))
-        case .cancelRequested(let id):
-            guard state.activeSessionID == nil || state.activeSessionID == id else { return state }
-            return MeetingLifecycleState(phase: .cancelling(id))
-        case .finished(let id):
-            guard state.activeSessionID == id else { return state }
-            return MeetingLifecycleState()
-        }
-    }
-}
-
-struct MeetingLifecycleRunner {
-    let sessionID: UUID
-    var startupTask: Task<Void, Never>?
-    var finalizationTask: Task<Void, Never>?
-
-    mutating func cancelAll() {
-        startupTask?.cancel()
-        finalizationTask?.cancel()
-        startupTask = nil
-        finalizationTask = nil
-    }
-}
-
-enum RecordingSessionInventory {
-    static func preservingActiveSession(
-        _ activeSession: RecordingSession?,
-        in persistedSessions: [RecordingSession]
-    ) -> [RecordingSession] {
-        guard let activeSession,
-              !persistedSessions.contains(where: { $0.id == activeSession.id })
-        else { return persistedSessions }
-
-        return [activeSession] + persistedSessions
-    }
-}
-
 @MainActor
 @Observable
 final class DictationCoordinator {
@@ -367,8 +267,10 @@ final class DictationCoordinator {
     var dictationHistory: [DictationResult] = []
     var recordingSessions: [RecordingSession] = []
     private var transcriptCache: [UUID: Transcript] = [:]
-    var isMeetingRecording = false
-    var isMeetingTranscribing = false
+    var isMeetingRecording: Bool {
+        meetingLifecycleState.isRecording && meetingRecorder != nil
+    }
+    var isMeetingTranscribing: Bool { meetingLifecycleState.isTranscribing }
     var activeMeetingTitle = "Untitled Meeting"
     var clipboardStatusText: String?
     var longVoiceNoteCheckpointCount = 0
@@ -403,14 +305,30 @@ final class DictationCoordinator {
     }
 
     var hasMeetingRecordingInProgress: Bool {
-        meetingLifecycleState.isRecordingVisible
-            || isMeetingRecording
-            || isMeetingTranscribing
+        meetingLifecycleState.isWorkActive
             || activeSession?.kind == .meeting
             || persistedRecordingMeetingSession != nil
     }
 
+    var isMeetingRecoveryNeeded: Bool {
+        !meetingLifecycleState.isWorkActive && persistedRecordingMeetingSession != nil
+    }
+
+    var isMeetingCaptureVisible: Bool {
+        meetingLifecycleState.isRecordingVisible || isMeetingRecoveryNeeded
+    }
+
+    func canStopMeetingCapture(sessionID: UUID) -> Bool {
+        if meetingLifecycleState.activeSessionID == sessionID {
+            return meetingLifecycleState.acceptsCaptureStopRequest
+        }
+        return isMeetingRecoveryNeeded && persistedRecordingMeetingSession?.id == sessionID
+    }
+
     var activeMeetingSessionID: UUID? {
+        if let lifecycleSessionID = meetingLifecycleState.activeSessionID {
+            return lifecycleSessionID
+        }
         if activeSession?.kind == .meeting {
             return activeSession?.id
         }
@@ -418,7 +336,9 @@ final class DictationCoordinator {
     }
 
     var effectiveMeetingStatusText: String {
-        if isMeetingRecording || persistedRecordingMeetingSession != nil {
+        if isMeetingRecoveryNeeded {
+            "Interrupted — choose Stop to recover the saved audio"
+        } else if isMeetingRecording {
             "Recording"
         } else {
             meetingStatusText
@@ -479,10 +399,7 @@ final class DictationCoordinator {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.handleVoiceNoteRecordingInterruption(
-                    message: "Audio services restarted",
-                    cause: .interrupted
-                )
+                self?.handleAudioServicesReset()
             }
         }
         keyboardSessionKeeper.onRecordingFailure = { [weak self] failure in
@@ -532,8 +449,24 @@ final class DictationCoordinator {
         keyboardSessionState = KeyboardSessionReducer.reduce(keyboardSessionState, event: event)
     }
 
-    private func transitionMeetingLifecycle(_ event: MeetingLifecycleEvent) {
-        meetingLifecycleState = MeetingLifecycleReducer.reduce(meetingLifecycleState, event: event)
+    @discardableResult
+    private func transitionMeetingLifecycle(_ event: MeetingLifecycleEvent) -> Bool {
+        let previousState = meetingLifecycleState
+        let transition = MeetingLifecycleReducer.transition(previousState, event: event)
+        meetingLifecycleState = transition.state
+        if !transition.accepted {
+            AppTelemetry.failure(
+                "meeting_lifecycle_transition_rejected",
+                domain: .stateMachine,
+                stage: "meeting_lifecycle",
+                reason: "invalid_transition",
+                parameters: [
+                    "from_phase": previousState.phase.telemetryName,
+                    "event": event.telemetryName,
+                ]
+            )
+        }
+        return transition.accepted
     }
 
     private func transitionVoiceNoteLifecycle(_ event: VoiceNoteLifecycleEvent) -> Bool {
@@ -911,10 +844,47 @@ final class DictationCoordinator {
     }
 
     private func handleAudioSessionInterruption() {
+        if meetingLifecycleState.isRecordingVisible || meetingRecorder != nil {
+            handleMeetingRecordingInterruption(message: "Meeting recording was interrupted by the system")
+            return
+        }
         handleVoiceNoteRecordingInterruption(
             message: "Recording was interrupted by the system",
             cause: .interrupted
         )
+    }
+
+    private func handleAudioServicesReset() {
+        if meetingLifecycleState.isRecordingVisible || meetingRecorder != nil {
+            handleMeetingRecordingInterruption(message: "Audio services restarted during the meeting")
+            return
+        }
+        handleVoiceNoteRecordingInterruption(
+            message: "Audio services restarted",
+            cause: .interrupted
+        )
+    }
+
+    private func handleMeetingRecordingInterruption(message: String) {
+        guard let session = activeSession ?? persistedRecordingMeetingSession,
+              session.kind == .meeting
+        else {
+            reconcileMeetingRuntime(reason: "audio_interruption_without_session")
+            return
+        }
+
+        meetingStatusText = message
+        AppTelemetry.failure(
+            "meeting_recording_interrupted",
+            domain: .meeting,
+            stage: "audio_interruption",
+            reason: "system_interruption"
+        )
+        if meetingLifecycleState.isStarting(sessionID: session.id) {
+            stopMeetingStartup(session)
+        } else {
+            stopMeetingRecording()
+        }
     }
 
     private func handleVoiceNoteRecordingInterruption(
@@ -1112,10 +1082,12 @@ final class DictationCoordinator {
         return MuesliPreferences.longVoiceNoteThresholdSeconds
     }
 
-    private func beginMeetingLifecycle(sessionID: UUID, event: MeetingLifecycleEvent) {
+    @discardableResult
+    private func beginMeetingLifecycle(sessionID: UUID, event: MeetingLifecycleEvent) -> Bool {
+        guard transitionMeetingLifecycle(event) else { return false }
         meetingLifecycleRunner?.cancelAll()
         meetingLifecycleRunner = MeetingLifecycleRunner(sessionID: sessionID)
-        transitionMeetingLifecycle(event)
+        return true
     }
 
     private func setMeetingStartupTask(_ task: Task<Void, Never>, sessionID: UUID) {
@@ -1134,20 +1106,29 @@ final class DictationCoordinator {
         meetingLifecycleRunner?.finalizationTask = task
     }
 
-    private func cancelMeetingLifecycle(sessionID: UUID) {
+    @discardableResult
+    private func cancelMeetingLifecycle(sessionID: UUID) -> Bool {
         guard meetingLifecycleRunner?.sessionID == sessionID || meetingLifecycleState.activeSessionID == sessionID else {
-            return
+            return false
         }
+        guard transitionMeetingLifecycle(.cancelRequested(sessionID)) else { return false }
         meetingLifecycleRunner?.cancelAll()
-        transitionMeetingLifecycle(.cancelRequested(sessionID))
+        return true
     }
 
-    private func finishMeetingLifecycle(sessionID: UUID) {
+    @discardableResult
+    private func finishMeetingLifecycle(sessionID: UUID) -> Bool {
         guard meetingLifecycleRunner?.sessionID == sessionID || meetingLifecycleState.activeSessionID == sessionID else {
-            return
+            return false
         }
+        guard transitionMeetingLifecycle(.finished(sessionID)) else { return false }
+        meetingLifecycleRunner?.cancelAll()
         meetingLifecycleRunner = nil
-        transitionMeetingLifecycle(.finished(sessionID))
+        if activeSession?.kind == .meeting, activeSession?.id == sessionID {
+            activeSession = nil
+        }
+        resumeKeyboardSessionKeeperIfNeeded()
+        return true
     }
 
     private func isCurrentMeetingLifecycle(sessionID: UUID) -> Bool {
@@ -1429,13 +1410,47 @@ final class DictationCoordinator {
             detail: "UI testing"
         )
 
-        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.missingActiveMeetingHistoryUITestLaunchArgument) {
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingUITestLaunchArgument) {
+            configureProcessingMeetingUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.interruptedMeetingRecoveryUITestLaunchArgument) {
+            configureInterruptedMeetingRecoveryUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.missingActiveMeetingHistoryUITestLaunchArgument) {
             configureMissingActiveMeetingHistoryUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.completedLongVoiceNoteUITestLaunchArgument) {
             configureCompletedLongVoiceNoteUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.longVoiceNoteUITestLaunchArgument) {
             configureLongVoiceNoteUITestFixture()
         }
+    }
+
+    private func configureProcessingMeetingUITestFixture() {
+        let session = RecordingSession(
+            kind: .meeting,
+            title: "Processing Meeting",
+            startedAt: Date.now.addingTimeInterval(-90),
+            endedAt: .now,
+            phase: .transcribing,
+            audioFileName: "processing-meeting.wav",
+            source: "iphone"
+        )
+        activeSession = session
+        recordingSessions = [session]
+        meetingLifecycleRunner = MeetingLifecycleRunner(sessionID: session.id)
+        transitionMeetingLifecycle(.transcriptionStarted(session.id))
+        meetingStatusText = "Transcribing"
+    }
+
+    private func configureInterruptedMeetingRecoveryUITestFixture() {
+        let session = RecordingSession(
+            kind: .meeting,
+            title: "Interrupted Meeting",
+            startedAt: Date.now.addingTimeInterval(-45),
+            phase: .recording,
+            audioFileName: "interrupted-meeting.wav",
+            source: "iphone"
+        )
+        recordingSessions = [session]
+        meetingStatusText = "Ready"
     }
 
     private func configureMissingActiveMeetingHistoryUITestFixture() {
@@ -1449,7 +1464,6 @@ final class DictationCoordinator {
 
         activeSession = session
         recordingSessions = []
-        isMeetingRecording = true
         meetingStatusText = "Recording"
         meetingLifecycleRunner = MeetingLifecycleRunner(sessionID: session.id)
         transitionMeetingLifecycle(.startRequested(session.id))
@@ -1576,7 +1590,21 @@ final class DictationCoordinator {
         #endif
         do {
             dictationHistory = try store.resultsHistory()
-            let persistedSessions = try store.recordingSessions()
+            var persistedSessions = try store.recordingSessions()
+            if let activeSession,
+               activeSession.kind == .meeting,
+               meetingLifecycleState.activeSessionID == activeSession.id,
+               !persistedSessions.contains(where: { $0.id == activeSession.id }) {
+                try store.saveSession(activeSession)
+                persistedSessions = try store.recordingSessions()
+                AppTelemetry.failure(
+                    "recording_session_inventory_repaired",
+                    domain: .stateMachine,
+                    stage: "history_refresh",
+                    reason: "active_meeting_repersisted",
+                    parameters: ["phase": meetingLifecycleState.phase.telemetryName]
+                )
+            }
             let repairedSessions = RecordingSessionInventory.preservingActiveSession(
                 activeSession,
                 in: persistedSessions
@@ -1595,11 +1623,151 @@ final class DictationCoordinator {
                 )
             }
             recordingSessions = repairedSessions
+            reconcileMeetingRuntime(with: persistedSessions, reason: "history_refresh")
             transcriptCache = transcriptsBySessionID(try store.transcripts())
             lastTranscript = dictationHistory.first?.text ?? lastTranscript
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    func reconcileMeetingRuntime(reason: String) {
+        do {
+            var persistedSessions = try store.recordingSessions()
+            if let activeSession,
+               activeSession.kind == .meeting,
+               meetingLifecycleState.activeSessionID == activeSession.id,
+               !persistedSessions.contains(where: { $0.id == activeSession.id }) {
+                try store.saveSession(activeSession)
+                persistedSessions = try store.recordingSessions()
+            }
+            reconcileMeetingRuntime(with: persistedSessions, reason: reason)
+        } catch {
+            AppTelemetry.failure(
+                "meeting_runtime_reconciliation_failed",
+                domain: .stateMachine,
+                stage: reason,
+                error: error,
+                reason: "inventory_unavailable"
+            )
+        }
+    }
+
+    private func reconcileMeetingRuntime(
+        with persistedSessions: [RecordingSession],
+        reason: String
+    ) {
+        let snapshot = MeetingRuntimeSnapshot(
+            lifecycle: meetingLifecycleState,
+            activeSessionID: activeSession?.kind == .meeting ? activeSession?.id : nil,
+            persistedSessionIDs: Set(
+                persistedSessions.lazy.filter { $0.kind == .meeting }.map(\.id)
+            ),
+            recorderIsPresent: meetingRecorder != nil
+        )
+        let issues = MeetingRuntimeInvariant.issues(in: snapshot)
+        guard !issues.isEmpty else { return }
+
+        AppTelemetry.failure(
+            "meeting_runtime_invariant_violated",
+            domain: .stateMachine,
+            stage: reason,
+            reason: issues.map(\.telemetryName).joined(separator: ","),
+            parameters: ["phase": meetingLifecycleState.phase.telemetryName]
+        )
+
+        guard let sessionID = meetingLifecycleState.activeSessionID else {
+            if activeSession?.kind == .meeting {
+                activeSession = nil
+            }
+            stopOrphanedMeetingCapture()
+            return
+        }
+
+        if let activeSession, activeSession.id != sessionID {
+            meetingVadController?.stop()
+            meetingRecorder?.cancel()
+            meetingRecorder = nil
+            meetingVadController = nil
+            cleanupMeetingChunks(cancelTasks: true)
+            stopMetering()
+            meetingStatusText = "Conflicting meeting state was safely stopped"
+            if activeSession.kind == .meeting {
+                self.activeSession = nil
+            }
+            finishMeetingLifecycle(sessionID: sessionID)
+            return
+        }
+
+        if !meetingLifecycleState.allowsRecorder, meetingRecorder != nil {
+            meetingVadController?.stop()
+            meetingRecorder?.cancel()
+            meetingRecorder = nil
+            meetingVadController = nil
+            stopMetering()
+        }
+
+        if activeSession?.id != sessionID,
+           let persistedSession = persistedSessions.first(where: {
+               $0.id == sessionID && $0.kind == .meeting
+           }),
+           activeSession == nil {
+            if [.completed, .failed, .cancelled].contains(persistedSession.phase) {
+                meetingStatusText = persistedSession.phase == .completed
+                    ? "Ready"
+                    : (persistedSession.errorMessage ?? "Meeting ended")
+                finishMeetingLifecycle(sessionID: sessionID)
+                return
+            }
+            activeSession = persistedSession
+        }
+
+        guard activeSession?.id == sessionID else {
+            cleanupMeetingChunks(cancelTasks: true)
+            stopMetering()
+            meetingStatusText = "Meeting session was unavailable and the stale state was cleared"
+            finishMeetingLifecycle(sessionID: sessionID)
+            return
+        }
+
+        guard meetingLifecycleState.requiresRecorder, meetingRecorder == nil else { return }
+        guard var interruptedSession = activeSession ?? persistedSessions.first(where: {
+            $0.id == sessionID && $0.kind == .meeting
+        }) else {
+            meetingStatusText = "Meeting recording ended unexpectedly"
+            finishMeetingLifecycle(sessionID: sessionID)
+            return
+        }
+
+        interruptedSession.endedAt = interruptedSession.endedAt ?? .now
+        if interruptedSession.audioFileName == nil {
+            interruptedSession.phase = .failed
+            interruptedSession.errorMessage = "Meeting audio was interrupted before it could be saved."
+        } else {
+            interruptedSession.phase = .transcriptionQueued
+            interruptedSession.errorMessage = "Meeting recording was interrupted. Audio is ready to transcribe."
+        }
+        try? store.saveSession(interruptedSession)
+        activeSession = nil
+        cleanupMeetingChunks(cancelTasks: true)
+        stopMetering()
+        meetingStatusText = interruptedSession.errorMessage ?? "Meeting recording interrupted"
+        finishMeetingLifecycle(sessionID: sessionID)
+        if let index = recordingSessions.firstIndex(where: { $0.id == sessionID }) {
+            recordingSessions[index] = interruptedSession
+        } else {
+            recordingSessions.insert(interruptedSession, at: 0)
+        }
+    }
+
+    private func stopOrphanedMeetingCapture() {
+        meetingVadController?.stop()
+        meetingRecorder?.cancel()
+        meetingRecorder = nil
+        meetingVadController = nil
+        stopMetering()
+        cleanupMeetingChunks(cancelTasks: true)
+        meetingStatusText = "Meeting recording recovered"
     }
 
     private func transcriptsBySessionID(_ transcripts: [Transcript]) -> [UUID: Transcript] {
@@ -1967,6 +2135,13 @@ final class DictationCoordinator {
 
     @discardableResult
     func deleteMeeting(_ session: RecordingSession) -> Bool {
+        guard !meetingLifecycleState.owns(sessionID: session.id),
+              activeSession?.id != session.id
+        else {
+            clipboardStatusText = "Stop or discard the active meeting first"
+            clearClipboardStatusSoon()
+            return false
+        }
         do {
             if let audioFileName = session.audioFileName {
                 try? store.deleteAudioFile(fileName: audioFileName)
@@ -1989,6 +2164,13 @@ final class DictationCoordinator {
 
     @discardableResult
     func deleteMeetingAudio(for session: RecordingSession) -> Bool {
+        guard !meetingLifecycleState.owns(sessionID: session.id),
+              activeSession?.id != session.id
+        else {
+            clipboardStatusText = "Stop the active meeting before deleting its audio"
+            clearClipboardStatusSoon()
+            return false
+        }
         do {
             guard var storedSession = try store.activeRecordingSession(id: session.id),
                   storedSession.kind == .meeting,
@@ -2034,6 +2216,9 @@ final class DictationCoordinator {
             let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
             session.title = trimmedTitle.isEmpty ? session.kind.title : trimmedTitle
             try store.saveSession(session)
+            if activeSession?.id == session.id {
+                activeSession = session
+            }
             if let index = recordingSessions.firstIndex(where: { $0.id == session.id }) {
                 recordingSessions[index] = session
             } else {
@@ -3802,7 +3987,12 @@ final class DictationCoordinator {
             recordingSessions.insert(session, at: 0)
         }
         meetingStatusText = "Preparing"
-        beginMeetingLifecycle(sessionID: session.id, event: .startRequested(session.id))
+        guard beginMeetingLifecycle(sessionID: session.id, event: .startRequested(session.id)) else {
+            activeSession = nil
+            recordingSessions.removeAll { $0.id == session.id }
+            meetingStatusText = "A meeting is already active"
+            return nil
+        }
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -3890,9 +4080,14 @@ final class DictationCoordinator {
             meetingChunkTasks.removeAll(keepingCapacity: true)
             meetingChunkTranscriptions.removeAll(keepingCapacity: true)
             activeSession = session
-            isMeetingRecording = true
             meetingStatusText = "Recording"
-            transitionMeetingLifecycle(.recordingStarted(session.id))
+            guard transitionMeetingLifecycle(.recordingStarted(session.id)) else {
+                vadController.stop()
+                streamingRecorder.cancel()
+                meetingRecorder = nil
+                meetingVadController = nil
+                throw CancellationError()
+            }
             startMeetingMetering()
             prewarmModelIfNeeded(reason: "meeting_recording")
             refreshHistory()
@@ -3930,28 +4125,57 @@ final class DictationCoordinator {
     }
 
     func stopCurrentMeetingRecording() {
-        if isMeetingRecording || meetingRecorder != nil {
-            stopMeetingRecording()
-            return
-        }
-
         guard var session = activeSession ?? persistedRecordingMeetingSession,
               session.kind == .meeting
         else { return }
 
-        if meetingLifecycleState.isStarting(sessionID: session.id) {
+        switch meetingLifecycleState.phase {
+        case .starting(let sessionID) where sessionID == session.id:
             stopMeetingStartup(session)
             return
+        case .recording(let sessionID) where sessionID == session.id:
+            guard meetingRecorder != nil else {
+                reconcileMeetingRuntime(reason: "stop_requested_without_recorder")
+                return
+            }
+            stopMeetingRecording()
+            return
+        case .stopping, .transcribing, .cancelling:
+            AppTelemetry.failure(
+                "meeting_capture_command_rejected",
+                domain: .stateMachine,
+                stage: "stop",
+                reason: "lifecycle_not_stoppable",
+                parameters: ["phase": meetingLifecycleState.phase.telemetryName]
+            )
+            return
+        case .starting, .recording:
+            AppTelemetry.failure(
+                "meeting_capture_command_rejected",
+                domain: .stateMachine,
+                stage: "stop",
+                reason: "session_mismatch",
+                parameters: ["phase": meetingLifecycleState.phase.telemetryName]
+            )
+            return
+        case .idle:
+            guard isMeetingRecoveryNeeded, persistedRecordingMeetingSession?.id == session.id else {
+                return
+            }
         }
 
         guard session.audioFileName != nil else {
-            stopMeetingStartup(session)
+            session.endedAt = session.endedAt ?? .now
+            session.phase = .failed
+            session.errorMessage = "Meeting audio is unavailable. The stale recording state was cleared."
+            try? store.saveSession(session)
+            activeSession = nil
+            meetingStatusText = session.errorMessage ?? "Meeting recovery failed"
+            refreshHistory()
             return
         }
 
         session.endedAt = .now
-        isMeetingRecording = false
-        isMeetingTranscribing = false
         meetingRecorder = nil
         meetingVadController = nil
         activeSession = nil
@@ -3966,7 +4190,7 @@ final class DictationCoordinator {
 
     private func stopMeetingStartup(_ session: RecordingSession) {
         MuesliHaptics.dictationStop()
-        cancelMeetingLifecycle(sessionID: session.id)
+        guard cancelMeetingLifecycle(sessionID: session.id) else { return }
         abortCancelledMeeting(session)
         Task {
             await liveActivityController.end(
@@ -3983,9 +4207,17 @@ final class DictationCoordinator {
         guard let session = activeSession ?? persistedRecordingMeetingSession, session.kind == .meeting else { return }
         let latestSession = (try? store.recordingSession(id: session.id)) ?? session
 
+        let didBeginCancellation: Bool
+        if meetingLifecycleState.activeSessionID == nil {
+            didBeginCancellation = beginMeetingLifecycle(
+                sessionID: latestSession.id,
+                event: .cancelRequested(latestSession.id)
+            )
+        } else {
+            didBeginCancellation = cancelMeetingLifecycle(sessionID: latestSession.id)
+        }
+        guard didBeginCancellation else { return }
         MuesliHaptics.dictationStop()
-        isMeetingRecording = false
-        isMeetingTranscribing = false
         stopMetering()
         meetingStatusText = "Ready"
 
@@ -3994,7 +4226,6 @@ final class DictationCoordinator {
         meetingRecorder = nil
         meetingVadController = nil
         activeSession = nil
-        cancelMeetingLifecycle(sessionID: latestSession.id)
         cleanupMeetingChunks(cancelTasks: true)
 
         if let audioFileName = latestSession.audioFileName {
@@ -4019,10 +4250,8 @@ final class DictationCoordinator {
     func stopMeetingRecording(queueForTranscription _: Bool = false) {
         guard isMeetingRecording || meetingRecorder != nil else { return }
         guard var session = activeSession ?? persistedRecordingMeetingSession, session.kind == .meeting else { return }
+        guard transitionMeetingLifecycle(.stopRequested(session.id)) else { return }
         MuesliHaptics.dictationStop()
-        transitionMeetingLifecycle(.stopRequested(session.id))
-        isMeetingRecording = false
-        isMeetingTranscribing = true
         stopMetering()
         meetingStatusText = "Finishing recording"
 
@@ -4042,8 +4271,10 @@ final class DictationCoordinator {
             session.endedAt = .now
             session.phase = .transcribing
             try store.saveSession(session)
-            activeSession = nil
-            transitionMeetingLifecycle(.transcriptionStarted(session.id))
+            activeSession = session
+            guard transitionMeetingLifecycle(.transcriptionStarted(session.id)) else {
+                throw CancellationError()
+            }
             refreshHistory()
             Task {
                 await liveActivityController.update(
@@ -4062,7 +4293,6 @@ final class DictationCoordinator {
             session.errorMessage = error.localizedDescription
             try? store.saveSession(session)
             activeSession = nil
-            isMeetingTranscribing = false
             meetingStatusText = error.localizedDescription
             finishMeetingLifecycle(sessionID: session.id)
             refreshHistory()
@@ -4157,7 +4387,6 @@ final class DictationCoordinator {
             guard let self else { return }
             defer {
                 endTranscriptionBackgroundTask()
-                isMeetingTranscribing = false
             }
 
             var session = session
@@ -4205,7 +4434,6 @@ final class DictationCoordinator {
                 scheduleICloudSyncAfterLocalChange(reason: "meeting_completed")
                 cleanupMeetingChunks()
                 meetingStatusText = "Ready"
-                refreshHistory()
                 await liveActivityController.end(
                     phase: "Completed",
                     detail: finalTranscript.transcript.summaryText == nil ? "Meeting transcript saved" : "Meeting notes saved",
@@ -4219,7 +4447,11 @@ final class DictationCoordinator {
                     "chunked": "true"
                 ])
                 finishMeetingLifecycle(sessionID: session.id)
+                refreshHistory()
             } catch is CancellationError {
+                if activeSession?.id == session.id {
+                    activeSession = nil
+                }
                 if isCurrentMeetingLifecycle(sessionID: session.id) {
                     finishMeetingLifecycle(sessionID: session.id)
                 }
@@ -4240,7 +4472,6 @@ final class DictationCoordinator {
                 _ = try? saveActiveMeetingSession(session)
                 cleanupMeetingChunks()
                 meetingStatusText = error.localizedDescription
-                refreshHistory()
                 await liveActivityController.end(
                     phase: "Failed",
                     detail: "Transcription failed",
@@ -4257,6 +4488,7 @@ final class DictationCoordinator {
                     ]
                 )
                 finishMeetingLifecycle(sessionID: session.id)
+                refreshHistory()
             }
         }
         setMeetingFinalizationTask(task, sessionID: session.id)
@@ -4265,13 +4497,15 @@ final class DictationCoordinator {
     func transcribeSession(_ session: RecordingSession) {
         guard !isRecording, !hasMeetingRecordingInProgress, !isMeetingTranscribing else { return }
         guard let audioFileName = session.audioFileName else { return }
+        guard beginMeetingLifecycle(sessionID: session.id, event: .transcriptionStarted(session.id)) else {
+            return
+        }
         var session = session
         session.phase = .transcribing
         session.errorMessage = nil
         try? store.saveSession(session)
+        activeSession = session
         refreshHistory()
-        beginMeetingLifecycle(sessionID: session.id, event: .transcriptionStarted(session.id))
-        isMeetingTranscribing = true
         meetingStatusText = "Transcribing"
         Task {
             await liveActivityController.start(
@@ -4287,7 +4521,6 @@ final class DictationCoordinator {
             guard let self else { return }
             defer {
                 endTranscriptionBackgroundTask()
-                isMeetingTranscribing = false
             }
 
             do {
@@ -4308,8 +4541,6 @@ final class DictationCoordinator {
                     self.cleanupNonRetainedAudio(for: &failedSession)
                     try? self.store.saveSession(failedSession)
                     self.meetingStatusText = message
-                    self.isMeetingTranscribing = false
-                    self.refreshHistory()
                     Task {
                         await self.liveActivityController.end(
                             phase: "Failed",
@@ -4326,6 +4557,7 @@ final class DictationCoordinator {
                         parameters: ["engine": self.engine.identifier]
                     )
                     self.finishMeetingLifecycle(sessionID: session.id)
+                    self.refreshHistory()
                 } operation: { [engine] progress in
                     try await engine.transcribeDetailed(audioURL: audioURL, progress: progress)
                 }
@@ -4355,7 +4587,6 @@ final class DictationCoordinator {
                 guard try saveActiveMeetingSession(session) else { return }
                 scheduleICloudSyncAfterLocalChange(reason: "meeting_completed")
                 meetingStatusText = "Ready"
-                refreshHistory()
                 await liveActivityController.end(
                     phase: "Completed",
                     detail: finalTranscript.transcript.summaryText == nil ? "Meeting transcript saved" : "Meeting notes saved",
@@ -4368,7 +4599,11 @@ final class DictationCoordinator {
                     "summarized": finalTranscript.transcript.summaryState == .completed ? "true" : "false"
                 ])
                 finishMeetingLifecycle(sessionID: session.id)
+                refreshHistory()
             } catch is CancellationError {
+                if activeSession?.id == session.id {
+                    activeSession = nil
+                }
                 if isCurrentMeetingLifecycle(sessionID: session.id) {
                     finishMeetingLifecycle(sessionID: session.id)
                 }
@@ -4381,7 +4616,6 @@ final class DictationCoordinator {
                 cleanupNonRetainedAudio(for: &session)
                 try? store.saveSession(session)
                 meetingStatusText = error.localizedDescription
-                refreshHistory()
                 await liveActivityController.end(
                     phase: "Failed",
                     detail: "Transcription failed",
@@ -4395,6 +4629,7 @@ final class DictationCoordinator {
                     parameters: ["engine": engine.identifier]
                 )
                 finishMeetingLifecycle(sessionID: session.id)
+                refreshHistory()
             }
         }
         setMeetingFinalizationTask(task, sessionID: session.id)
@@ -4552,8 +4787,6 @@ final class DictationCoordinator {
         activeSession = nil
         meetingRecorder = nil
         meetingVadController = nil
-        isMeetingRecording = false
-        isMeetingTranscribing = false
         meetingStatusText = "Ready"
         finishMeetingLifecycle(sessionID: session.id)
         refreshHistory()
@@ -4567,10 +4800,7 @@ final class DictationCoordinator {
     }
 
     private func shouldContinueMeetingFinalization(sessionID: UUID) -> Bool {
-        guard isCurrentMeetingLifecycle(sessionID: sessionID),
-              (try? store.activeRecordingSession(id: sessionID)) != nil
-        else { return false }
-        return true
+        isCurrentMeetingLifecycle(sessionID: sessionID)
     }
 
     private func startMetering(update: @escaping @MainActor (Double) -> Void) {

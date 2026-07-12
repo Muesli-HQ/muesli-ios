@@ -32,6 +32,24 @@ final class MuesliPreferencesTests: XCTestCase {
         XCTAssertEqual(MuesliPreferences.longVoiceNoteThresholdSeconds, 60)
     }
 
+    func testMeetingLiveActivitiesDefaultEnabledAndPreserveExplicitOptOut() {
+        let defaults = UserDefaults.standard
+        let originalValue = defaults.object(forKey: MuesliPreferences.liveActivitiesForMeetingsKey)
+        defer {
+            if let originalValue {
+                defaults.set(originalValue, forKey: MuesliPreferences.liveActivitiesForMeetingsKey)
+            } else {
+                defaults.removeObject(forKey: MuesliPreferences.liveActivitiesForMeetingsKey)
+            }
+        }
+
+        defaults.removeObject(forKey: MuesliPreferences.liveActivitiesForMeetingsKey)
+        XCTAssertTrue(MuesliPreferences.liveActivitiesForMeetingsEnabled)
+
+        defaults.set(false, forKey: MuesliPreferences.liveActivitiesForMeetingsKey)
+        XCTAssertFalse(MuesliPreferences.liveActivitiesForMeetingsEnabled)
+    }
+
     func testOpenRouterModelReturnsCustomStoredValue() {
         let defaults = UserDefaults.standard
         let originalValue = defaults.object(forKey: MuesliPreferences.openRouterModelKey)

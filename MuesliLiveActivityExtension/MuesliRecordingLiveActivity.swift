@@ -11,8 +11,8 @@ struct MuesliRecordingLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    LiveActivityWaveform(accent: context.state.accent)
-                        .frame(width: 48, height: 30)
+                    LiveActivityBrandMark(accent: context.state.accent)
+                        .frame(width: 38, height: 38)
                 }
 
                 DynamicIslandExpandedRegion(.center) {
@@ -31,14 +31,14 @@ struct MuesliRecordingLiveActivity: Widget {
                         .foregroundStyle(.secondary)
                 }
             } compactLeading: {
-                LiveActivityWaveform(accent: context.state.accent)
-                    .frame(width: 24, height: 16)
+                LiveActivityBrandMark(accent: context.state.accent)
+                    .frame(width: 22, height: 22)
             } compactTrailing: {
                 Image(systemName: iconName(for: context.state.phase))
                     .foregroundStyle(color(for: context.state.accent))
             } minimal: {
-                Image(systemName: "waveform")
-                    .foregroundStyle(color(for: context.state.accent))
+                LiveActivityBrandMark(accent: context.state.accent)
+                    .frame(width: 22, height: 22)
             }
             .keylineTint(color(for: context.state.accent))
         }
@@ -61,11 +61,8 @@ private struct LockScreenLiveActivityView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            LiveActivityWaveform(accent: state.accent)
-                .frame(width: 54, height: 34)
-                .padding(10)
-                .background(color(for: state.accent).opacity(0.18))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            LiveActivityBrandMark(accent: state.accent)
+                .frame(width: 54, height: 54)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("muesli")
@@ -84,6 +81,27 @@ private struct LockScreenLiveActivityView: View {
                 .foregroundStyle(.white.opacity(0.72))
         }
         .padding()
+    }
+}
+
+private struct LiveActivityBrandMark: View {
+    let accent: String
+
+    var body: some View {
+        GeometryReader { geometry in
+            let inset = max(3, geometry.size.width * 0.2)
+            ZStack {
+                RoundedRectangle(cornerRadius: geometry.size.width * 0.24, style: .continuous)
+                    .fill(.black)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: geometry.size.width * 0.24, style: .continuous)
+                            .stroke(.white.opacity(0.08), lineWidth: 1)
+                    }
+                LiveActivityWaveform(accent: accent)
+                    .padding(inset)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 

@@ -4244,7 +4244,7 @@ final class DictationCoordinator {
                     session: session,
                     requestID: nil,
                     phase: "Recording",
-                    detail: "Meeting recording active"
+                    detail: "Meeting recording in progress"
                 )
             }
         } catch is CancellationError {

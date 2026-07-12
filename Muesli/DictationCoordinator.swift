@@ -1502,7 +1502,9 @@ final class DictationCoordinator {
             detail: "UI testing"
         )
 
-        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingUITestLaunchArgument) {
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.liveMeetingTranscriptUITestLaunchArgument) {
+            configureLiveMeetingTranscriptUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingUITestLaunchArgument) {
             configureProcessingMeetingUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.interruptedMeetingRecoveryUITestLaunchArgument) {
             configureInterruptedMeetingRecoveryUITestFixture()
@@ -1513,6 +1515,32 @@ final class DictationCoordinator {
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.longVoiceNoteUITestLaunchArgument) {
             configureLongVoiceNoteUITestFixture()
         }
+    }
+
+    private func configureLiveMeetingTranscriptUITestFixture() {
+        let operationID = UUID()
+        var session = RecordingSession(
+            kind: .meeting,
+            title: "Live Transcript Meeting",
+            startedAt: Date.now.addingTimeInterval(-20),
+            phase: .recording,
+            source: "iphone"
+        )
+        session.meetingOperationID = operationID
+        let transcript = Transcript(
+            sessionID: session.id,
+            text: "This transcript appeared while the meeting was still recording.",
+            engineIdentifier: "ui-test"
+        )
+        session.transcriptID = transcript.id
+        activeSession = session
+        recordingSessions = [session]
+        transcriptCache[session.id] = transcript
+        meetingRecorder = StreamingMeetingRecorder()
+        meetingLifecycleRunner = MeetingLifecycleRunner(id: operationID, sessionID: session.id)
+        transitionMeetingLifecycle(.startRequested(session.id))
+        transitionMeetingLifecycle(.recordingStarted(session.id))
+        meetingStatusText = "Recording"
     }
 
     private func configureProcessingMeetingUITestFixture() {
@@ -4421,7 +4449,11 @@ final class DictationCoordinator {
                 throw VoiceNoteCaptureFailure.writer(writerFailure)
             }
             if let finalChunk = stoppedAudio?.finalChunk {
-                scheduleMeetingChunkTranscription(finalChunk, sessionID: session.id)
+                scheduleMeetingChunkTranscription(
+                    finalChunk,
+                    sessionID: session.id,
+                    operationID: operationID
+                )
             }
             session.audioFileName = session.audioFileName ?? stoppedAudio?.retainedAudioURL?.lastPathComponent
             session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
@@ -4503,12 +4535,21 @@ final class DictationCoordinator {
 
     private func rotateActiveMeetingChunk() {
         guard isMeetingRecording, let session = activeSession, session.kind == .meeting else { return }
+        guard let operationID = meetingLifecycleRunner?.id else { return }
         guard let chunk = meetingRecorder?.rotateChunk() else { return }
         meetingVadController?.notifyRotation()
-        scheduleMeetingChunkTranscription(chunk, sessionID: session.id)
+        scheduleMeetingChunkTranscription(
+            chunk,
+            sessionID: session.id,
+            operationID: operationID
+        )
     }
 
-    private func scheduleMeetingChunkTranscription(_ chunk: MeetingAudioChunk, sessionID: UUID) {
+    private func scheduleMeetingChunkTranscription(
+        _ chunk: MeetingAudioChunk,
+        sessionID: UUID,
+        operationID: UUID
+    ) {
         let task: Task<MeetingChunkTranscription?, Never> = Task { [engine] in
             do {
                 let result = try await engine.transcribeDetailed(audioURL: chunk.url)
@@ -4530,21 +4571,18 @@ final class DictationCoordinator {
         Task { @MainActor [weak self] in
             guard let self, let transcription = await task.value else { return }
             self.meetingChunkTranscriptions.append(transcription)
-            self.savePartialMeetingTranscript(sessionID: sessionID)
+            self.savePartialMeetingTranscript(
+                sessionID: sessionID,
+                operationID: operationID
+            )
         }
     }
 
-    private func savePartialMeetingTranscript(sessionID: UUID) {
+    private func savePartialMeetingTranscript(sessionID: UUID, operationID: UUID) {
         let merged = MeetingChunkTranscriptMerger.merge(meetingChunkTranscriptions)
         let text = postProcessTranscript(merged.text)
         guard !text.isEmpty else { return }
-        guard let operationID = meetingLifecycleRunner?.id,
-              isCurrentMeetingLifecycle(sessionID: sessionID, operationID: operationID),
-              let session = try? store.activeRecordingSession(id: sessionID),
-              session.kind == .meeting,
-              session.phase == .transcribing,
-              session.meetingOperationID == operationID
-        else { return }
+        guard isCurrentMeetingLifecycle(sessionID: sessionID, operationID: operationID) else { return }
 
         let transcript = Transcript(
             sessionID: sessionID,
@@ -4555,22 +4593,11 @@ final class DictationCoordinator {
             diarizationState: .processing,
             summaryState: MuesliPreferences.meetingSummariesEnabled ? .processing : .notStarted
         )
-        do {
-            try store.saveTranscript(transcript)
-        } catch {
-            return
-        }
+        guard (try? store.saveMeetingDraftTranscript(
+            transcript,
+            expectedOperationID: operationID
+        )) == true else { return }
         cacheTranscript(transcript)
-        _ = try? store.transitionMeetingSession(
-            id: sessionID,
-            expectedPhases: [.transcribing],
-            expectedOperationID: operationID,
-            update: { persisted in
-                persisted.transcriptID = transcript.id
-                persisted.engineIdentifier = engine.identifier
-            }
-        )
-        refreshHistory()
     }
 
     private func finalizeStreamingMeeting(_ initialSession: RecordingSession, operationID: UUID) {

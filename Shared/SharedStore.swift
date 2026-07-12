@@ -143,6 +143,17 @@ struct SharedStore: Sendable {
     }
 
     @discardableResult
+    func saveMeetingDraftTranscript(
+        _ transcript: Transcript,
+        expectedOperationID: UUID
+    ) throws -> Bool {
+        try database().saveMeetingDraftTranscript(
+            transcript,
+            expectedOperationID: expectedOperationID
+        )
+    }
+
+    @discardableResult
     func transitionMeetingSession(
         id: UUID,
         expectedPhases: Set<RecordingSessionPhase>,
@@ -543,6 +554,33 @@ private struct SharedStoreDatabase {
             try transaction(db: db) {
                 try upsertSession(session, db: db)
             }
+        }
+    }
+
+    func saveMeetingDraftTranscript(
+        _ transcript: Transcript,
+        expectedOperationID: UUID
+    ) throws -> Bool {
+        try withDatabase { db in
+            var didSave = false
+            try transaction(db: db) {
+                guard var session = try activeRecordingSession(id: transcript.sessionID, db: db),
+                      session.kind == .meeting,
+                      session.phase == .recording,
+                      session.meetingOperationID == expectedOperationID
+                else { return }
+
+                try execute("DELETE FROM transcripts WHERE id = ? OR session_id = ?", db: db) { statement in
+                    try bind(transcript.id.uuidString, to: statement, at: 1)
+                    try bind(transcript.sessionID.uuidString, to: statement, at: 2)
+                }
+                try insertTranscript(transcript, db: db)
+                session.transcriptID = transcript.id
+                session.engineIdentifier = transcript.engineIdentifier
+                try upsertSession(session, db: db)
+                didSave = true
+            }
+            return didSave
         }
     }
 

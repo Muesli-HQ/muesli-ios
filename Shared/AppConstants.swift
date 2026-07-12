@@ -15,6 +15,7 @@ enum MuesliAppConstants {
     static let missingActiveMeetingHistoryUITestLaunchArgument = "--muesli-ui-testing-missing-active-meeting-history"
     static let interruptedMeetingRecoveryUITestLaunchArgument = "--muesli-ui-testing-interrupted-meeting-recovery"
     static let processingMeetingUITestLaunchArgument = "--muesli-ui-testing-processing-meeting"
+    static let liveMeetingTranscriptUITestLaunchArgument = "--muesli-ui-testing-live-meeting-transcript"
     static let requestQueryItem = "request"
     static let actionQueryItem = "action"
     static let sourceQueryItem = "source"

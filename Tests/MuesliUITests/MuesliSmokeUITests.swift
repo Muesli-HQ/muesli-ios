@@ -116,6 +116,24 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["meetingDetail.discardButton"].exists)
     }
 
+    func testLiveMeetingDisplaysCompletedTranscriptChunksWithoutLeavingRecording() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-live-meeting-transcript",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+        XCTAssertTrue(app.staticTexts["Live meeting"].waitForExistence(timeout: 5))
+        app.buttons["Return to Meeting"].tap()
+
+        XCTAssertTrue(app.staticTexts["Live Transcript"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["This transcript appeared while the meeting was still recording."].exists)
+        XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
+    }
+
     func testLongVoiceNoteActiveStateAndDiscardConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = [

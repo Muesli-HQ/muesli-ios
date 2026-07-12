@@ -771,6 +771,73 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(transitioned?.phase, .transcriptionQueued)
     }
 
+    func testMeetingDraftTranscriptPersistsWithoutChangingRecordingLifecycle() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let operationID = UUID()
+        var session = RecordingSession(kind: .meeting, phase: .recording)
+        session.meetingOperationID = operationID
+        try store.saveSession(session)
+
+        let draft = Transcript(
+            sessionID: session.id,
+            text: "First live segment",
+            engineIdentifier: "test"
+        )
+        XCTAssertTrue(try store.saveMeetingDraftTranscript(
+            draft,
+            expectedOperationID: operationID
+        ))
+
+        let persistedSession = try XCTUnwrap(try store.recordingSession(id: session.id))
+        XCTAssertEqual(persistedSession.phase, .recording)
+        XCTAssertEqual(persistedSession.meetingOperationID, operationID)
+        XCTAssertEqual(persistedSession.transcriptID, draft.id)
+        XCTAssertEqual(try store.transcript(for: session.id)?.text, "First live segment")
+    }
+
+    func testLateMeetingDraftCannotOverwriteTranscriptAfterRecordingStops() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let operationID = UUID()
+        var session = RecordingSession(kind: .meeting, phase: .recording)
+        session.meetingOperationID = operationID
+        try store.saveSession(session)
+
+        let acceptedDraft = Transcript(
+            sessionID: session.id,
+            text: "Accepted while recording",
+            engineIdentifier: "test"
+        )
+        XCTAssertTrue(try store.saveMeetingDraftTranscript(
+            acceptedDraft,
+            expectedOperationID: operationID
+        ))
+        _ = try store.transitionMeetingSession(
+            id: session.id,
+            expectedPhases: [.recording],
+            expectedOperationID: operationID,
+            update: {
+                $0.phase = .transcriptionQueued
+                $0.meetingOperationID = nil
+            }
+        )
+
+        let lateDraft = Transcript(
+            sessionID: session.id,
+            text: "Late stale segment",
+            engineIdentifier: "test"
+        )
+        XCTAssertFalse(try store.saveMeetingDraftTranscript(
+            lateDraft,
+            expectedOperationID: operationID
+        ))
+        XCTAssertEqual(try store.transcript(for: session.id)?.text, "Accepted while recording")
+        XCTAssertEqual(try store.recordingSession(id: session.id)?.phase, .transcriptionQueued)
+    }
+
     func testAtomicMeetingCompletionRejectsLateCallbackAfterCancellation() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

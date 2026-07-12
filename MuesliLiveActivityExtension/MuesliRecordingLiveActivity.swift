@@ -146,6 +146,7 @@ private struct LiveActivityBrandMark: View {
 }
 
 private enum LiveActivityTypography {
+    // The extension is a separate target and cannot import the app-only MuesliTheme definitions.
     static let wordmark = Font.system(.callout, design: .default, weight: .semibold)
     static let body = Font.system(.subheadline, design: .default, weight: .regular)
     static let caption = Font.system(.caption, design: .default, weight: .regular)

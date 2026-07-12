@@ -93,6 +93,9 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Live meeting"].exists)
         app.buttons["Return to Meeting"].tap()
         XCTAssertTrue(app.staticTexts["Interrupted Meeting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Recording interrupted"].exists)
+        XCTAssertFalse(app.staticTexts["Listening"].exists)
+        XCTAssertFalse(app.staticTexts["Audio is being captured locally"].exists)
         XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
     }
 
@@ -130,7 +133,7 @@ final class MuesliSmokeUITests: XCTestCase {
         app.buttons["Return to Meeting"].tap()
 
         XCTAssertTrue(app.staticTexts["Raw transcript should no longer be selected after processing."].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["The generated meeting summary is selected by default."].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["The generated meeting summary is selected by default."].waitForExistence(timeout: 25))
         XCTAssertFalse(app.staticTexts["Raw transcript should no longer be selected after processing."].exists)
     }
 

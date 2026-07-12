@@ -45,7 +45,10 @@ struct MeetingLifecycleState: Equatable {
     }
     var acceptsCaptureStopRequest: Bool {
         switch phase {
-        case .starting, .recording:
+        case .starting:
+            // Before the recorder exists, the coordinator maps Stop to cancelRequested.
+            true
+        case .recording:
             true
         case .idle, .stopping, .transcribing, .cancelling:
             false

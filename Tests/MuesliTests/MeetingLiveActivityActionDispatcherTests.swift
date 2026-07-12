@@ -9,17 +9,33 @@ final class MeetingLiveActivityActionDispatcherTests: XCTestCase {
         var receivedSessionID: UUID?
         MeetingLiveActivityActionDispatcher.register { receivedID in
             receivedSessionID = receivedID
-            return true
+            return .accepted
         }
 
-        XCTAssertTrue(MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: sessionID))
+        XCTAssertEqual(
+            MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: sessionID),
+            .accepted
+        )
         XCTAssertEqual(receivedSessionID, sessionID)
+    }
+
+    func testStopPreservesAnIdempotentAlreadyHandledResult() {
+        defer { MeetingLiveActivityActionDispatcher.register(stopHandler: nil) }
+        MeetingLiveActivityActionDispatcher.register { _ in .alreadyHandled }
+
+        XCTAssertEqual(
+            MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: UUID()),
+            .alreadyHandled
+        )
     }
 
     func testStopIsRejectedWhenTheAppHasNoActiveHandler() {
         defer { MeetingLiveActivityActionDispatcher.register(stopHandler: nil) }
         MeetingLiveActivityActionDispatcher.register(stopHandler: nil)
 
-        XCTAssertFalse(MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: UUID()))
+        XCTAssertEqual(
+            MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: UUID()),
+            .unavailable
+        )
     }
 }

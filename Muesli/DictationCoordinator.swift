@@ -326,6 +326,14 @@ final class DictationCoordinator {
         return meetingPresentationState == .recovery(sessionID)
     }
 
+    func isActivelyRecordingMeeting(sessionID: UUID) -> Bool {
+        isMeetingRecording && activeMeetingSessionID == sessionID
+    }
+
+    func meetingNeedsRecovery(sessionID: UUID) -> Bool {
+        meetingPresentationState == .recovery(sessionID)
+    }
+
     var activeMeetingSessionID: UUID? {
         meetingPresentationState.sessionID
     }
@@ -424,7 +432,7 @@ final class DictationCoordinator {
         }
         startSharedEventObservation()
         MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
-            self?.stopMeetingRecordingFromLiveActivity(sessionID: sessionID) ?? false
+            self?.stopMeetingRecordingFromLiveActivity(sessionID: sessionID) ?? .unavailable
         }
 
         refreshAudioInputRoute()
@@ -939,7 +947,7 @@ final class DictationCoordinator {
             reason: cause.rawValue
         )
         if meetingLifecycleState.isStarting(sessionID: session.id) {
-            stopMeetingStartup(session)
+            _ = stopMeetingStartup(session)
         } else {
             stopMeetingRecording(queueForTranscription: false)
         }
@@ -4330,22 +4338,22 @@ final class DictationCoordinator {
         }
     }
 
-    func stopCurrentMeetingRecording() {
-        guard var session = activeSession ?? persistedRecordingMeetingSession,
+    @discardableResult
+    func stopCurrentMeetingRecording() -> Bool {
+        guard let session = activeSession ?? persistedRecordingMeetingSession,
               session.kind == .meeting
-        else { return }
+        else { return false }
 
         switch meetingLifecycleState.phase {
         case .starting(let sessionID) where sessionID == session.id:
-            stopMeetingStartup(session)
-            return
+            return stopMeetingStartup(session)
         case .recording(let sessionID) where sessionID == session.id:
             guard meetingRecorder != nil else {
                 reconcileMeetingRuntime(reason: "stop_requested_without_recorder")
-                return
+                return false
             }
             stopMeetingRecording(queueForTranscription: true)
-            return
+            return true
         case .stopping, .transcribing, .cancelling:
             AppTelemetry.failure(
                 "meeting_capture_command_rejected",
@@ -4354,7 +4362,7 @@ final class DictationCoordinator {
                 reason: "lifecycle_not_stoppable",
                 parameters: ["phase": meetingLifecycleState.phase.telemetryName]
             )
-            return
+            return false
         case .starting, .recording:
             AppTelemetry.failure(
                 "meeting_capture_command_rejected",
@@ -4363,10 +4371,10 @@ final class DictationCoordinator {
                 reason: "session_mismatch",
                 parameters: ["phase": meetingLifecycleState.phase.telemetryName]
             )
-            return
+            return false
         case .idle:
             guard isMeetingRecoveryNeeded, persistedRecordingMeetingSession?.id == session.id else {
-                return
+                return false
             }
         }
 
@@ -4390,7 +4398,7 @@ final class DictationCoordinator {
             activeSession = nil
             meetingStatusText = failed?.errorMessage ?? "Meeting recovery failed"
             refreshHistory()
-            return
+            return failed != nil
         }
 
         meetingRecorder = nil
@@ -4415,15 +4423,15 @@ final class DictationCoordinator {
         }
         guard let queued else {
             refreshHistory()
-            return
+            return false
         }
         refreshHistory()
         AppTelemetry.signal("meeting_recording_recovered_for_transcription")
         transcribeSession(queued)
+        return true
     }
 
-    @discardableResult
-    func stopMeetingRecordingFromLiveActivity(sessionID: UUID) -> Bool {
+    func stopMeetingRecordingFromLiveActivity(sessionID: UUID) -> MeetingLiveActivityStopResult {
         guard canStopMeetingCapture(sessionID: sessionID) else {
             AppTelemetry.failure(
                 "meeting_capture_command_rejected",
@@ -4431,16 +4439,24 @@ final class DictationCoordinator {
                 stage: "live_activity_stop",
                 reason: "session_not_stoppable"
             )
-            return false
+            return .alreadyHandled
         }
-        stopCurrentMeetingRecording()
+        guard stopCurrentMeetingRecording() else {
+            AppTelemetry.failure(
+                "meeting_capture_command_failed",
+                domain: .stateMachine,
+                stage: "live_activity_stop",
+                reason: "stop_did_not_complete"
+            )
+            return .failed
+        }
         AppTelemetry.signal("meeting_recording_stopped_from_live_activity")
-        return true
+        return .accepted
     }
 
-    private func stopMeetingStartup(_ session: RecordingSession) {
+    private func stopMeetingStartup(_ session: RecordingSession) -> Bool {
         MuesliHaptics.dictationStop()
-        guard cancelMeetingLifecycle(sessionID: session.id) else { return }
+        guard cancelMeetingLifecycle(sessionID: session.id) else { return false }
         abortCancelledMeeting(session)
         Task {
             await liveActivityController.end(
@@ -4451,6 +4467,7 @@ final class DictationCoordinator {
             )
         }
         AppTelemetry.signal("meeting_recording_startup_stopped")
+        return true
     }
 
     func cancelCurrentMeetingRecording() {

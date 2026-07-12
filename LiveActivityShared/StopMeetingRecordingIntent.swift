@@ -19,16 +19,42 @@ struct StopMeetingRecordingIntent: LiveActivityIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         guard let sessionID = UUID(uuidString: sessionID) else {
-            return .result()
+            throw StopMeetingRecordingIntentError.invalidSession
         }
-        _ = MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: sessionID)
-        return .result()
+
+        switch MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: sessionID) {
+        case .accepted, .alreadyHandled:
+            return .result()
+        case .failed, .unavailable:
+            throw StopMeetingRecordingIntentError.unavailable
+        }
     }
+}
+
+private enum StopMeetingRecordingIntentError: LocalizedError {
+    case invalidSession
+    case unavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidSession:
+            "This meeting recording is no longer available."
+        case .unavailable:
+            "Muesli could not stop this meeting recording. Open the app and try again."
+        }
+    }
+}
+
+enum MeetingLiveActivityStopResult: Equatable {
+    case accepted
+    case alreadyHandled
+    case failed
+    case unavailable
 }
 
 @MainActor
 enum MeetingLiveActivityActionDispatcher {
-    typealias StopHandler = @MainActor (UUID) -> Bool
+    typealias StopHandler = @MainActor (UUID) -> MeetingLiveActivityStopResult
 
     private static var stopHandler: StopHandler?
 
@@ -36,8 +62,8 @@ enum MeetingLiveActivityActionDispatcher {
         self.stopHandler = stopHandler
     }
 
-    @discardableResult
-    static func stopMeetingRecording(sessionID: UUID) -> Bool {
-        stopHandler?(sessionID) ?? false
+    static func stopMeetingRecording(sessionID: UUID) -> MeetingLiveActivityStopResult {
+        guard let stopHandler else { return .unavailable }
+        return stopHandler(sessionID)
     }
 }

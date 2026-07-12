@@ -152,15 +152,106 @@ enum MeetingLifecycleReducer {
 }
 
 struct MeetingLifecycleRunner {
+    let id: UUID
     let sessionID: UUID
     var startupTask: Task<Void, Never>?
     var finalizationTask: Task<Void, Never>?
+
+    init(id: UUID = UUID(), sessionID: UUID) {
+        self.id = id
+        self.sessionID = sessionID
+    }
 
     mutating func cancelAll() {
         startupTask?.cancel()
         finalizationTask?.cancel()
         startupTask = nil
         finalizationTask = nil
+    }
+}
+
+enum MeetingPresentationState: Equatable {
+    case idle
+    case capturing(UUID)
+    case processing(UUID)
+    case recovery(UUID)
+
+    var sessionID: UUID? {
+        switch self {
+        case .idle: nil
+        case .capturing(let id), .processing(let id), .recovery(let id): id
+        }
+    }
+
+    var isBusy: Bool { sessionID != nil }
+    var isCapturing: Bool {
+        if case .capturing = self { true } else { false }
+    }
+    var isProcessing: Bool {
+        if case .processing = self { true } else { false }
+    }
+    var needsRecovery: Bool {
+        if case .recovery = self { true } else { false }
+    }
+}
+
+struct MeetingPresentationSnapshot: Equatable {
+    let runtime: MeetingLifecycleState
+    let persistedSessionID: UUID?
+    let persistedPhase: RecordingSessionPhase?
+    let recorderIsPresent: Bool
+}
+
+enum MeetingPresentationPolicy {
+    static func state(for snapshot: MeetingPresentationSnapshot) -> MeetingPresentationState {
+        guard let sessionID = snapshot.runtime.activeSessionID else {
+            guard snapshot.persistedPhase == .recording,
+                  let persistedSessionID = snapshot.persistedSessionID
+            else { return .idle }
+            return .recovery(persistedSessionID)
+        }
+
+        guard let persistedPhase = snapshot.persistedPhase else { return .idle }
+        switch persistedPhase {
+        case .completed, .failed, .cancelled:
+            return .idle
+        case .transcriptionQueued:
+            return .recovery(sessionID)
+        case .transcribing:
+            return snapshot.runtime.isTranscribing ? .processing(sessionID) : .recovery(sessionID)
+        case .recording:
+            switch snapshot.runtime.phase {
+            case .starting:
+                return .capturing(sessionID)
+            case .recording where snapshot.recorderIsPresent:
+                return .capturing(sessionID)
+            case .stopping:
+                return .processing(sessionID)
+            case .idle, .recording, .transcribing, .cancelling:
+                return .recovery(sessionID)
+            }
+        }
+    }
+}
+
+enum MeetingAudioInterruptionCause: String, Equatable {
+    case sceneBackgrounded = "scene_backgrounded"
+    case routeDisconnected = "route_disconnected"
+    case microphoneMuted = "microphone_muted"
+    case deviceUnauthenticated = "device_unauthenticated"
+    case system = "system"
+}
+
+enum MeetingAudioInterruptionDisposition: Equatable {
+    case keepCaptureAlive
+    case finalizeForRecovery
+}
+
+enum MeetingAudioInterruptionPolicy {
+    static func disposition(
+        for cause: MeetingAudioInterruptionCause
+    ) -> MeetingAudioInterruptionDisposition {
+        .keepCaptureAlive
     }
 }
 
@@ -182,6 +273,7 @@ struct MeetingRuntimeSnapshot: Equatable {
     let activeSessionID: UUID?
     let persistedSessionIDs: Set<UUID>
     let recorderIsPresent: Bool
+    var persistedSessionPhases: [UUID: RecordingSessionPhase] = [:]
 }
 
 enum MeetingRuntimeIssue: Equatable {
@@ -192,6 +284,11 @@ enum MeetingRuntimeIssue: Equatable {
     case conflictingActiveSession(expected: UUID, actual: UUID)
     case missingRecorder(UUID)
     case recorderPresentOutsideCapture(UUID)
+    case persistedPhaseConflictsWithRuntime(
+        sessionID: UUID,
+        runtime: MeetingLifecycleState.Phase,
+        persisted: RecordingSessionPhase
+    )
 
     var telemetryName: String {
         switch self {
@@ -202,6 +299,7 @@ enum MeetingRuntimeIssue: Equatable {
         case .conflictingActiveSession: "conflicting_active_session"
         case .missingRecorder: "missing_recorder"
         case .recorderPresentOutsideCapture: "recorder_outside_capture"
+        case .persistedPhaseConflictsWithRuntime: "persisted_phase_conflicts_with_runtime"
         }
     }
 }
@@ -239,6 +337,32 @@ enum MeetingRuntimeInvariant {
         if !snapshot.lifecycle.allowsRecorder, snapshot.recorderIsPresent {
             issues.append(.recorderPresentOutsideCapture(expectedID))
         }
+        if let persistedPhase = snapshot.persistedSessionPhases[expectedID],
+           !persistedPhase.isCompatible(with: snapshot.lifecycle.phase) {
+            issues.append(.persistedPhaseConflictsWithRuntime(
+                sessionID: expectedID,
+                runtime: snapshot.lifecycle.phase,
+                persisted: persistedPhase
+            ))
+        }
         return issues
+    }
+}
+
+
+extension RecordingSessionPhase {
+    func isCompatible(with runtime: MeetingLifecycleState.Phase) -> Bool {
+        switch runtime {
+        case .idle:
+            true
+        case .starting, .recording:
+            self == .recording
+        case .stopping:
+            self == .recording || self == .transcriptionQueued
+        case .transcribing:
+            self == .transcribing
+        case .cancelling:
+            self != .completed && self != .failed
+        }
     }
 }

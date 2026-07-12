@@ -62,7 +62,7 @@ final class MuesliSmokeUITests: XCTestCase {
         add(collapsedScreenshot)
     }
 
-    func testLiveMeetingRemainsReachableWhenHistorySnapshotOmitsActiveSession() {
+    func testMissingDurableMeetingSuppressesPhantomLiveRuntime() {
         let app = XCUIApplication()
         app.launchArguments = [
             "--muesli-ui-testing",
@@ -73,12 +73,9 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
         app.buttons["tab.meetings"].tap()
 
-        XCTAssertTrue(app.staticTexts["Live meeting"].waitForExistence(timeout: 5))
-        app.buttons["Return to Meeting"].tap()
-
-        XCTAssertTrue(app.staticTexts["Recovered Live Meeting"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
-        XCTAssertFalse(app.staticTexts["Meeting not found"].exists)
+        XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Live meeting"].exists)
+        XCTAssertFalse(app.buttons["Return to Meeting"].exists)
     }
 
     func testInterruptedPersistedMeetingIsPresentedAsRecoveryNotLiveCapture() {

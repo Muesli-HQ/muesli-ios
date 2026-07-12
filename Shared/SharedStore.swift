@@ -142,6 +142,44 @@ struct SharedStore: Sendable {
         try database().saveSession(session)
     }
 
+    @discardableResult
+    func transitionMeetingSession(
+        id: UUID,
+        expectedPhases: Set<RecordingSessionPhase>,
+        expectedOperationID: UUID? = nil,
+        update: (inout RecordingSession) -> Void
+    ) throws -> RecordingSession? {
+        let session = try database().transitionMeetingSession(
+            id: id,
+            expectedPhases: expectedPhases,
+            expectedOperationID: expectedOperationID,
+            update: update
+        )
+        if session != nil {
+            eventPoster.post(.ownershipChanged)
+        }
+        return session
+    }
+
+    @discardableResult
+    func completeMeetingSession(
+        _ completedSession: RecordingSession,
+        transcript: Transcript,
+        expectedPhase: RecordingSessionPhase = .transcribing,
+        expectedOperationID: UUID
+    ) throws -> Bool {
+        let didComplete = try database().completeMeetingSession(
+            completedSession,
+            transcript: transcript,
+            expectedPhase: expectedPhase,
+            expectedOperationID: expectedOperationID
+        )
+        if didComplete {
+            eventPoster.post(.ownershipChanged)
+        }
+        return didComplete
+    }
+
     func recordingSessions() throws -> [RecordingSession] {
         try database().recordingSessions()
     }
@@ -508,6 +546,59 @@ private struct SharedStoreDatabase {
         }
     }
 
+    func transitionMeetingSession(
+        id: UUID,
+        expectedPhases: Set<RecordingSessionPhase>,
+        expectedOperationID: UUID?,
+        update: (inout RecordingSession) -> Void
+    ) throws -> RecordingSession? {
+        try withDatabase { db in
+            var transitionedSession: RecordingSession?
+            try transaction(db: db) {
+                guard var session = try activeRecordingSession(id: id, db: db),
+                      session.kind == .meeting,
+                      expectedPhases.contains(session.phase),
+                      expectedOperationID == nil || session.meetingOperationID == expectedOperationID
+                else { return }
+
+                update(&session)
+                try upsertSession(session, db: db)
+                transitionedSession = session
+            }
+            return transitionedSession
+        }
+    }
+
+    func completeMeetingSession(
+        _ completedSession: RecordingSession,
+        transcript: Transcript,
+        expectedPhase: RecordingSessionPhase,
+        expectedOperationID: UUID
+    ) throws -> Bool {
+        try withDatabase { db in
+            var didComplete = false
+            try transaction(db: db) {
+                guard let current = try activeRecordingSession(id: completedSession.id, db: db),
+                      current.kind == .meeting,
+                      current.phase == expectedPhase,
+                      current.meetingOperationID == expectedOperationID
+                else { return }
+
+                var resolvedSession = completedSession
+                resolvedSession.manualNotes = current.manualNotes
+                resolvedSession.cloudRecordName = current.cloudRecordName
+                try execute("DELETE FROM transcripts WHERE id = ? OR session_id = ?", db: db) { statement in
+                    try bind(transcript.id.uuidString, to: statement, at: 1)
+                    try bind(transcript.sessionID.uuidString, to: statement, at: 2)
+                }
+                try insertTranscript(transcript, db: db)
+                try upsertSession(resolvedSession, db: db)
+                didComplete = true
+            }
+            return didComplete
+        }
+    }
+
     func recordingSessions() throws -> [RecordingSession] {
         try withDatabase { db in
             try queryRows(
@@ -534,15 +625,19 @@ private struct SharedStoreDatabase {
 
     func activeRecordingSession(id: UUID) throws -> RecordingSession? {
         try withDatabase { db in
-            try queryRows(
-                "SELECT payload, cloud_record_name FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
-                db: db
-            ) { statement in
-                try bind(id.uuidString, to: statement, at: 1)
-            } read: { statement in
-                try decodeRecordingSession(statement)
-            }.first
+            try activeRecordingSession(id: id, db: db)
         }
+    }
+
+    private func activeRecordingSession(id: UUID, db: OpaquePointer) throws -> RecordingSession? {
+        try queryRows(
+            "SELECT payload, cloud_record_name FROM recording_sessions WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+            db: db
+        ) { statement in
+            try bind(id.uuidString, to: statement, at: 1)
+        } read: { statement in
+            try decodeRecordingSession(statement)
+        }.first
     }
 
     func recordingSession(requestID: UUID) throws -> RecordingSession? {
@@ -748,6 +843,7 @@ private struct SharedStoreDatabase {
                 WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
                   AND s.cloud_record_name IS NOT NULL
                   AND s.kind = ?
+                  AND (s.deleted_at IS NOT NULL OR s.phase IN ('completed', 'failed', 'cancelled'))
                 ORDER BY MAX(s.updated_at, COALESCE(t.updated_at, 0), s.manual_notes_updated_at) DESC
                 LIMIT ?
                 """,
@@ -1678,9 +1774,13 @@ private struct SharedStoreDatabase {
         let resolvedManualNotesUpdatedAt = shouldUseIncomingManualNotes
             ? incomingManualNotesUpdatedAt
             : existingManualNotesUpdatedAt
+        let existingSessionIsLocallyActive = existingSession?.payload
+            .flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
+            .map { [.recording, .transcriptionQueued, .transcribing].contains($0.phase) }
+            ?? false
 
         if let existingSession,
-           existingSession.updatedAt > record.updatedAt.timeIntervalSince1970 {
+           existingSessionIsLocallyActive || existingSession.updatedAt > record.updatedAt.timeIntervalSince1970 {
             if shouldUseIncomingManualNotes, let existingID = existingSession.id {
                 let encodedPayload: Data?
                 if let payload = existingSession.payload,

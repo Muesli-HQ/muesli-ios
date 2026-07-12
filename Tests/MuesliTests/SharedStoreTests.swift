@@ -734,8 +734,136 @@ final class SharedStoreTests: XCTestCase {
             "Follow up with Alex."
         )
 
+        XCTAssertNil(try store.textRecordsNeedingSync().first { $0.kind == .meeting })
+        var completedSession = saved
+        completedSession.phase = .completed
+        try store.saveSession(completedSession)
         let record = try XCTUnwrap(try store.textRecordsNeedingSync().first { $0.kind == .meeting })
         XCTAssertEqual(record.manualNotes, "Follow up with Alex.")
+    }
+
+    func testMeetingTransitionCompareAndSetRejectsStaleOperation() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let operationID = UUID()
+        var session = RecordingSession(kind: .meeting, phase: .recording)
+        session.meetingOperationID = operationID
+        try store.saveSession(session)
+
+        XCTAssertNil(try store.transitionMeetingSession(
+            id: session.id,
+            expectedPhases: [.recording],
+            expectedOperationID: UUID(),
+            update: { $0.phase = .transcriptionQueued }
+        ))
+        XCTAssertEqual(try store.recordingSession(id: session.id)?.phase, .recording)
+
+        let transitioned = try store.transitionMeetingSession(
+            id: session.id,
+            expectedPhases: [.recording],
+            expectedOperationID: operationID,
+            update: {
+                $0.phase = .transcriptionQueued
+                $0.meetingOperationID = nil
+            }
+        )
+        XCTAssertEqual(transitioned?.phase, .transcriptionQueued)
+    }
+
+    func testAtomicMeetingCompletionRejectsLateCallbackAfterCancellation() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let operationID = UUID()
+        var session = RecordingSession(kind: .meeting, phase: .transcribing)
+        session.meetingOperationID = operationID
+        try store.saveSession(session)
+        _ = try store.transitionMeetingSession(
+            id: session.id,
+            expectedPhases: [.transcribing],
+            expectedOperationID: operationID,
+            update: {
+                $0.phase = .cancelled
+                $0.meetingOperationID = nil
+            }
+        )
+
+        var staleCompletion = session
+        staleCompletion.phase = .completed
+        staleCompletion.meetingOperationID = nil
+        let transcript = Transcript(sessionID: session.id, text: "stale", engineIdentifier: "test")
+        XCTAssertFalse(try store.completeMeetingSession(
+            staleCompletion,
+            transcript: transcript,
+            expectedOperationID: operationID
+        ))
+        XCTAssertEqual(try store.recordingSession(id: session.id)?.phase, .cancelled)
+        XCTAssertNil(try store.transcript(for: session.id))
+    }
+
+    func testAtomicMeetingCompletionCommitsTranscriptAndTerminalPhaseTogether() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let operationID = UUID()
+        var session = RecordingSession(kind: .meeting, phase: .transcribing)
+        session.meetingOperationID = operationID
+        try store.saveSession(session)
+
+        let transcript = Transcript(sessionID: session.id, text: "complete", engineIdentifier: "test")
+        var completion = session
+        completion.phase = .completed
+        completion.meetingOperationID = nil
+        completion.transcriptID = transcript.id
+        XCTAssertTrue(try store.completeMeetingSession(
+            completion,
+            transcript: transcript,
+            expectedOperationID: operationID
+        ))
+        XCTAssertEqual(try store.recordingSession(id: session.id)?.phase, .completed)
+        XCTAssertEqual(try store.transcript(for: session.id)?.text, "complete")
+    }
+
+    func testNewerRemoteMeetingCannotOverwriteLocallyActiveLifecycle() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        var session = RecordingSession(
+            kind: .meeting,
+            title: "Local live meeting",
+            createdAt: Date(timeIntervalSince1970: 100),
+            phase: .recording,
+            source: "ios"
+        )
+        session.meetingOperationID = UUID()
+        try store.saveSession(session)
+
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: session.id.uuidString,
+            kind: .meeting,
+            title: "Remote completed meeting",
+            text: "remote transcript",
+            speakerTranscript: nil,
+            summaryText: "remote summary",
+            manualNotes: nil,
+            source: "macos",
+            engineIdentifier: "icloud",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date().addingTimeInterval(3_600),
+            startedAt: Date(timeIntervalSince1970: 100),
+            endedAt: Date(timeIntervalSince1970: 200),
+            durationSeconds: 100,
+            wordCount: 4,
+            isDeleted: false,
+            cloudChangeTag: "remote-newer"
+        ))
+
+        let preserved = try XCTUnwrap(try store.recordingSession(id: session.id))
+        XCTAssertEqual(preserved.phase, .recording)
+        XCTAssertEqual(preserved.title, "Local live meeting")
+        XCTAssertEqual(preserved.meetingOperationID, session.meetingOperationID)
+        XCTAssertNil(try store.transcript(for: session.id))
     }
 
     func testUpdateMeetingManualNotesReportsMissingOrNonMeetingSession() throws {

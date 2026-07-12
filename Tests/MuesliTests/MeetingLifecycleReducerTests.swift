@@ -286,4 +286,67 @@ final class MeetingLifecycleReducerTests: XCTestCase {
 
         XCTAssertEqual(issues, [.recorderPresentOutsideCapture(sessionID)])
     }
+
+    func testTerminalDurablePhaseAlwaysSuppressesPhantomLiveMeeting() {
+        let sessionID = UUID()
+        for phase in [
+            Muesli.RecordingSessionPhase.completed,
+            .failed,
+            .cancelled,
+        ] {
+            let state = MeetingPresentationPolicy.state(for: .init(
+                runtime: .init(phase: .recording(sessionID)),
+                persistedSessionID: sessionID,
+                persistedPhase: phase,
+                recorderIsPresent: true
+            ))
+            XCTAssertEqual(state, MeetingPresentationState.idle, "Durable terminal phase must win for \(phase)")
+        }
+    }
+
+    func testPersistedRecordingWithoutRuntimeIsPresentedAsRecovery() {
+        let sessionID = UUID()
+        XCTAssertEqual(
+            MeetingPresentationPolicy.state(for: .init(
+                runtime: .init(),
+                persistedSessionID: sessionID,
+                persistedPhase: .recording,
+                recorderIsPresent: false
+            )),
+            .recovery(sessionID)
+        )
+    }
+
+    func testRuntimeInvariantDetectsDurablePhaseDivergence() {
+        let sessionID = UUID()
+        let runtime = MeetingLifecycleState(phase: .recording(sessionID))
+        XCTAssertEqual(
+            MeetingRuntimeInvariant.issues(in: .init(
+                lifecycle: runtime,
+                activeSessionID: sessionID,
+                persistedSessionIDs: [sessionID],
+                recorderIsPresent: true,
+                persistedSessionPhases: [sessionID: .completed]
+            )),
+            [.persistedPhaseConflictsWithRuntime(
+                sessionID: sessionID,
+                runtime: runtime.phase,
+                persisted: .completed
+            )]
+        )
+    }
+
+    func testRealWorldAudioInterruptionsRemainRecoverableUntilResumeIsAttempted() {
+        for cause in [
+            MeetingAudioInterruptionCause.system,
+            .routeDisconnected,
+            .microphoneMuted,
+            .deviceUnauthenticated,
+        ] {
+            XCTAssertEqual(
+                MeetingAudioInterruptionPolicy.disposition(for: cause),
+                .keepCaptureAlive
+            )
+        }
+    }
 }

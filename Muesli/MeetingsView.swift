@@ -101,7 +101,7 @@ struct MeetingsView: View {
                 refreshVisibleStateIfNeeded()
             }
             .navigationDestination(for: UUID.self) { sessionID in
-                if let session = coordinator.recordingSessions.first(where: { $0.id == sessionID }) {
+                if let session = coordinator.meetingSession(id: sessionID) {
                     MeetingSessionDetailView(
                         session: session,
                         transcript: coordinator.transcript(for: session),

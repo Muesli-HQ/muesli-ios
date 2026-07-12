@@ -33,6 +33,54 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
     }
 
+    func testVoiceNotePreviewExpandsAndShowsMetadataBadges() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-mock-dictations"]
+        app.launch()
+
+        let readMore = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'dictation.readMore.'")
+        ).firstMatch
+        XCTAssertTrue(readMore.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.descendants(matching: .any)["voiceNote.badge.notes"].firstMatch.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["voiceNote.badge.longForm"].firstMatch.exists)
+
+        readMore.tap()
+
+        XCTAssertTrue(app.buttons[readMore.identifier].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.buttons[readMore.identifier].label, "Show less")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Expanded voice note preview with metadata badges"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        app.buttons[readMore.identifier].tap()
+        XCTAssertEqual(app.buttons[readMore.identifier].label, "Read more")
+        let collapsedScreenshot = XCTAttachment(screenshot: app.screenshot())
+        collapsedScreenshot.name = "Collapsed four-line voice note preview"
+        collapsedScreenshot.lifetime = .keepAlways
+        add(collapsedScreenshot)
+    }
+
+    func testLiveMeetingRemainsReachableWhenHistorySnapshotOmitsActiveSession() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-missing-active-meeting-history",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+
+        XCTAssertTrue(app.staticTexts["Live meeting"].waitForExistence(timeout: 5))
+        app.buttons["Return to Meeting"].tap()
+
+        XCTAssertTrue(app.staticTexts["Recovered Live Meeting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
+        XCTAssertFalse(app.staticTexts["Meeting not found"].exists)
+    }
+
     func testLongVoiceNoteActiveStateAndDiscardConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = [

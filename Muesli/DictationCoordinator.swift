@@ -216,6 +216,19 @@ struct MeetingLifecycleRunner {
     }
 }
 
+enum RecordingSessionInventory {
+    static func preservingActiveSession(
+        _ activeSession: RecordingSession?,
+        in persistedSessions: [RecordingSession]
+    ) -> [RecordingSession] {
+        guard let activeSession,
+              !persistedSessions.contains(where: { $0.id == activeSession.id })
+        else { return persistedSessions }
+
+        return [activeSession] + persistedSessions
+    }
+}
+
 @MainActor
 @Observable
 final class DictationCoordinator {
@@ -1416,11 +1429,31 @@ final class DictationCoordinator {
             detail: "UI testing"
         )
 
-        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.completedLongVoiceNoteUITestLaunchArgument) {
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.missingActiveMeetingHistoryUITestLaunchArgument) {
+            configureMissingActiveMeetingHistoryUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.completedLongVoiceNoteUITestLaunchArgument) {
             configureCompletedLongVoiceNoteUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.longVoiceNoteUITestLaunchArgument) {
             configureLongVoiceNoteUITestFixture()
         }
+    }
+
+    private func configureMissingActiveMeetingHistoryUITestFixture() {
+        let session = RecordingSession(
+            kind: .meeting,
+            title: "Recovered Live Meeting",
+            startedAt: Date.now.addingTimeInterval(-20),
+            phase: .recording,
+            source: "iphone"
+        )
+
+        activeSession = session
+        recordingSessions = []
+        isMeetingRecording = true
+        meetingStatusText = "Recording"
+        meetingLifecycleRunner = MeetingLifecycleRunner(sessionID: session.id)
+        transitionMeetingLifecycle(.startRequested(session.id))
+        transitionMeetingLifecycle(.recordingStarted(session.id))
     }
 
     private func configureLongVoiceNoteUITestFixture() {
@@ -1543,7 +1576,25 @@ final class DictationCoordinator {
         #endif
         do {
             dictationHistory = try store.resultsHistory()
-            recordingSessions = try store.recordingSessions()
+            let persistedSessions = try store.recordingSessions()
+            let repairedSessions = RecordingSessionInventory.preservingActiveSession(
+                activeSession,
+                in: persistedSessions
+            )
+            if let activeSession,
+               !persistedSessions.contains(where: { $0.id == activeSession.id }) {
+                AppTelemetry.failure(
+                    "recording_session_inventory_repaired",
+                    domain: .stateMachine,
+                    stage: "history_refresh",
+                    reason: "active_session_missing",
+                    parameters: [
+                        "kind": activeSession.kind.rawValue,
+                        "phase": activeSession.phase.rawValue,
+                    ]
+                )
+            }
+            recordingSessions = repairedSessions
             transcriptCache = transcriptsBySessionID(try store.transcripts())
             lastTranscript = dictationHistory.first?.text ?? lastTranscript
         } catch {
@@ -2054,6 +2105,19 @@ final class DictationCoordinator {
             }
         }
         return nil
+    }
+
+    func meetingSession(id: UUID) -> RecordingSession? {
+        if let cachedSession = recordingSessions.first(where: { $0.id == id && $0.kind == .meeting }) {
+            return cachedSession
+        }
+        if let activeSession, activeSession.id == id, activeSession.kind == .meeting {
+            return activeSession
+        }
+        guard let storedSession = try? store.activeRecordingSession(id: id),
+              storedSession.kind == .meeting
+        else { return nil }
+        return storedSession
     }
 
     func audioFileURL(for result: DictationResult) -> URL? {

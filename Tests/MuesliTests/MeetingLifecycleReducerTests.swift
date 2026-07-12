@@ -74,4 +74,35 @@ final class MeetingLifecycleReducerTests: XCTestCase {
         XCTAssertFalse(state.isStarting(sessionID: otherID))
         XCTAssertFalse(MeetingLifecycleState().isStarting(sessionID: sessionID))
     }
+
+    func testSessionInventoryPreservesActiveMeetingMissingFromPersistedSnapshot() {
+        let activeMeeting = Muesli.RecordingSession(
+            kind: .meeting,
+            title: "Live meeting",
+            phase: .recording
+        )
+        let completedMeeting = Muesli.RecordingSession(
+            kind: .meeting,
+            title: "Earlier meeting",
+            phase: .completed
+        )
+
+        let sessions = RecordingSessionInventory.preservingActiveSession(
+            activeMeeting,
+            in: [completedMeeting]
+        )
+
+        XCTAssertEqual(sessions.map { $0.id }, [activeMeeting.id, completedMeeting.id])
+    }
+
+    func testSessionInventoryDoesNotDuplicatePersistedActiveMeeting() {
+        let activeMeeting = Muesli.RecordingSession(kind: .meeting, phase: .recording)
+
+        let sessions = RecordingSessionInventory.preservingActiveSession(
+            activeMeeting,
+            in: [activeMeeting]
+        )
+
+        XCTAssertEqual(sessions, [activeMeeting])
+    }
 }

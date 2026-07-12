@@ -85,6 +85,15 @@ enum MuesliTheme {
     static let cornerLarge: CGFloat = 16
     static let cornerXL: CGFloat = 22
 
+    enum Navigation {
+        static let horizontalInset: CGFloat = 28
+        static let itemSpacing: CGFloat = 4
+        static let itemHeight: CGFloat = 44
+        static let containerPadding: CGFloat = 2
+        static let containerCornerRadius: CGFloat = 24
+        static let selectionCornerRadius: CGFloat = 23
+    }
+
     static func color(for accent: MuesliAccentTheme) -> Color {
         Color.adaptive(dark: accent.darkHex, light: accent.lightHex)
     }
@@ -214,6 +223,117 @@ extension View {
         tint: Color? = nil
     ) -> some View {
         modifier(MuesliGlassButtonModifier(cornerRadius: cornerRadius, tint: tint))
+    }
+
+    func muesliNavigationGlassSurface(cornerRadius: CGFloat) -> some View {
+        modifier(MuesliNavigationGlassSurfaceModifier(cornerRadius: cornerRadius))
+    }
+
+    func muesliNavigationSelection(
+        isSelected: Bool,
+        tint: Color,
+        namespace: Namespace.ID
+    ) -> some View {
+        modifier(
+            MuesliNavigationSelectionModifier(
+                isSelected: isSelected,
+                tint: tint,
+                namespace: namespace
+            )
+        )
+    }
+}
+
+private struct MuesliNavigationGlassSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            content
+                .background(Color.white.opacity(0.055), in: shape)
+                .glassEffect(
+                    .regular.tint(Color.black.opacity(0.16)),
+                    in: .rect(cornerRadius: cornerRadius)
+                )
+                .overlay(shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8))
+                .shadow(color: Color.black.opacity(0.28), radius: 12, x: 0, y: 6)
+        } else {
+            fallback(content: content, shape: shape)
+        }
+        #else
+        fallback(content: content, shape: shape)
+        #endif
+    }
+
+    private func fallback(content: Content, shape: RoundedRectangle) -> some View {
+        content
+            .background {
+                shape.fill(.ultraThinMaterial)
+                shape.fill(Color.black.opacity(0.34))
+            }
+            .overlay(shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8))
+            .shadow(color: Color.black.opacity(0.28), radius: 12, x: 0, y: 6)
+    }
+}
+
+private struct MuesliNavigationSelectionModifier: ViewModifier {
+    let isSelected: Bool
+    let tint: Color
+    let namespace: Namespace.ID
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isSelected {
+            selected(content)
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private func selected(_ content: Content) -> some View {
+        let shape = RoundedRectangle(
+            cornerRadius: MuesliTheme.Navigation.selectionCornerRadius,
+            style: .continuous
+        )
+
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            content
+                .background(tint.opacity(0.12), in: shape)
+                .glassEffect(
+                    .regular.tint(tint.opacity(0.30)).interactive(),
+                    in: .rect(cornerRadius: MuesliTheme.Navigation.selectionCornerRadius)
+                )
+                .glassEffectID("navigation-selection", in: namespace)
+                .overlay(shape.strokeBorder(Color.white.opacity(0.23), lineWidth: 0.9))
+                .overlay(alignment: .top) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.20))
+                        .frame(height: 1)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 1)
+                }
+                .shadow(color: tint.opacity(0.22), radius: 8, x: 0, y: 2)
+        } else {
+            fallback(content: content, shape: shape)
+        }
+        #else
+        fallback(content: content, shape: shape)
+        #endif
+    }
+
+    private func fallback(content: Content, shape: RoundedRectangle) -> some View {
+        content
+            .background {
+                shape.fill(.ultraThinMaterial)
+                shape.fill(tint.opacity(0.24))
+            }
+            .overlay(shape.strokeBorder(Color.white.opacity(0.20), lineWidth: 0.9))
+            .shadow(color: tint.opacity(0.20), radius: 7, x: 0, y: 2)
     }
 }
 

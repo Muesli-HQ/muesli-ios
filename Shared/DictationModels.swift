@@ -468,6 +468,13 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         return (endedAt ?? .now).timeIntervalSince(startedAt)
     }
 
+    var hasUserAuthoredNotes: Bool {
+        [manualNotes, scratchpadText].contains { value in
+            guard let value else { return false }
+            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
     var isKeyboardOwnedVoiceNote: Bool {
         kind == .keyboardDictation
             || source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "keyboard"

@@ -2055,7 +2055,7 @@ final class DictationCoordinator {
               !hasMeetingRecordingInProgress,
               !voiceNoteLifecycleState.isWorkActive,
               statusText != "Transcribing",
-              let session = try? store.activeRecordingSession(id: sessionID),
+              var session = try? store.activeRecordingSession(id: sessionID),
               session.canRetryVoiceNoteTranscription,
               let requestID = session.requestID,
               let audioFileName = session.audioFileName,
@@ -4540,7 +4540,7 @@ final class DictationCoordinator {
         guard !text.isEmpty else { return }
         guard let operationID = meetingLifecycleRunner?.id,
               isCurrentMeetingLifecycle(sessionID: sessionID, operationID: operationID),
-              var session = try? store.activeRecordingSession(id: sessionID),
+              let session = try? store.activeRecordingSession(id: sessionID),
               session.kind == .meeting,
               session.phase == .transcribing,
               session.meetingOperationID == operationID

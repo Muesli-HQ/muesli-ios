@@ -5,7 +5,10 @@ import WidgetKit
 struct MuesliRecordingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: MuesliLiveActivityAttributes.self) { context in
-            LockScreenLiveActivityView(state: context.state)
+            LockScreenLiveActivityView(
+                state: context.state,
+                sessionID: context.attributes.sessionID
+            )
                 .activityBackgroundTint(.black)
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
@@ -26,9 +29,15 @@ struct MuesliRecordingLiveActivity: Widget {
                 }
 
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.state.startedAt, style: .timer)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    VStack(spacing: 4) {
+                        Text(context.state.startedAt, style: .timer)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        StopMeetingButton(
+                            sessionID: context.attributes.sessionID,
+                            size: 34
+                        )
+                    }
                 }
             } compactLeading: {
                 LiveActivityBrandMark()
@@ -58,6 +67,7 @@ struct MuesliRecordingLiveActivity: Widget {
 
 private struct LockScreenLiveActivityView: View {
     let state: MuesliLiveActivityAttributes.ContentState
+    let sessionID: String
 
     var body: some View {
         HStack(spacing: 14) {
@@ -79,8 +89,27 @@ private struct LockScreenLiveActivityView: View {
             Text(state.startedAt, style: .timer)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.72))
+
+            StopMeetingButton(sessionID: sessionID, size: 46)
         }
         .padding()
+    }
+}
+
+private struct StopMeetingButton: View {
+    let sessionID: String
+    let size: CGFloat
+
+    var body: some View {
+        Button(intent: StopMeetingRecordingIntent(sessionID: sessionID)) {
+            Image(systemName: "stop.fill")
+                .font(.system(size: size * 0.34, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(.red.opacity(0.88), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop meeting recording")
     }
 }
 
@@ -94,6 +123,8 @@ private struct LiveActivityBrandMark: View {
                     style: .continuous
                 ))
         }
+        .privacySensitive(false)
+        .unredacted()
         .accessibilityHidden(true)
     }
 

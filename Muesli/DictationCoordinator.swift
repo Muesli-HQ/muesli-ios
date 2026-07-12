@@ -423,6 +423,9 @@ final class DictationCoordinator {
             }
         }
         startSharedEventObservation()
+        MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
+            self?.stopMeetingRecordingFromLiveActivity(sessionID: sessionID) ?? false
+        }
 
         refreshAudioInputRoute()
         if !isConfiguringForUITesting {
@@ -4417,6 +4420,22 @@ final class DictationCoordinator {
         refreshHistory()
         AppTelemetry.signal("meeting_recording_recovered_for_transcription")
         transcribeSession(queued)
+    }
+
+    @discardableResult
+    func stopMeetingRecordingFromLiveActivity(sessionID: UUID) -> Bool {
+        guard canStopMeetingCapture(sessionID: sessionID) else {
+            AppTelemetry.failure(
+                "meeting_capture_command_rejected",
+                domain: .stateMachine,
+                stage: "live_activity_stop",
+                reason: "session_not_stoppable"
+            )
+            return false
+        }
+        stopCurrentMeetingRecording()
+        AppTelemetry.signal("meeting_recording_stopped_from_live_activity")
+        return true
     }
 
     private func stopMeetingStartup(_ session: RecordingSession) {

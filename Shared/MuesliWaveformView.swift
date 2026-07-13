@@ -74,6 +74,9 @@ enum MuesliKeyboardWaveformPresentation {
 }
 
 struct MuesliWaveformLevelThrottle {
+    static let minimumPublishInterval: TimeInterval = 0.16
+    static let heartbeatInterval: TimeInterval = 0.75
+
     private var lastPublishedAt = Date.distantPast
     private var lastPublishedLevel = 0.0
 
@@ -83,7 +86,9 @@ struct MuesliWaveformLevelThrottle {
         let quantized = (normalized * 40).rounded() / 40
         let changed = quantized != lastPublishedLevel
 
-        guard elapsed >= 0.1, changed || elapsed >= 0.5 else { return nil }
+        guard elapsed >= Self.minimumPublishInterval,
+              changed || elapsed >= Self.heartbeatInterval
+        else { return nil }
 
         lastPublishedAt = now
         lastPublishedLevel = quantized

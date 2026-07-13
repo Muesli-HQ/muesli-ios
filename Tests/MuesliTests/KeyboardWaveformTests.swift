@@ -21,9 +21,10 @@ final class KeyboardWaveformTests: XCTestCase {
 
         XCTAssertEqual(throttle.valueToPublish(0.61, at: start), 0.6)
         XCTAssertNil(throttle.valueToPublish(0.62, at: start.addingTimeInterval(0.05)))
-        XCTAssertEqual(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.1)), 0.65)
+        XCTAssertNil(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.1)))
+        XCTAssertEqual(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.17)), 0.65)
         XCTAssertNil(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.3)))
-        XCTAssertEqual(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.6)), 0.65)
+        XCTAssertEqual(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.93)), 0.65)
     }
 
     func testWaveformLevelPublishingClampsOutOfRangeValues() {
@@ -31,6 +32,6 @@ final class KeyboardWaveformTests: XCTestCase {
         let start = Date(timeIntervalSinceReferenceDate: 2_000)
 
         XCTAssertEqual(throttle.valueToPublish(-1, at: start), 0)
-        XCTAssertEqual(throttle.valueToPublish(2, at: start.addingTimeInterval(0.11)), 1)
+        XCTAssertEqual(throttle.valueToPublish(2, at: start.addingTimeInterval(0.17)), 1)
     }
 }

@@ -162,6 +162,10 @@ final class DictationCoordinator {
     private var keyboardSessionRetryTask: Task<Void, Never>?
     private var keyboardSessionRetryAttempt = 0
     private var keyboardWaveformLevelThrottle = MuesliWaveformLevelThrottle()
+    private let keyboardRuntimeStatusQueue = DispatchQueue(
+        label: "com.phequals7.muesli.keyboard-runtime-status",
+        qos: .utility
+    )
     private var keyboardSessionLiveActivityRequestIDs = Set<UUID>()
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
@@ -5676,12 +5680,36 @@ final class DictationCoordinator {
         supportsBackgroundStart: Bool = false,
         inputLevel: Double? = nil
     ) {
+        let status = keyboardRuntimeStatus(
+            isActive: isActive,
+            activeRequestID: activeRequestID,
+            phase: phase,
+            message: message,
+            supportsBackgroundStart: supportsBackgroundStart,
+            inputLevel: inputLevel
+        )
+
+        // Lifecycle writes stay ordered behind any queued waveform samples so a
+        // stale recording level cannot overwrite a later terminal phase.
+        keyboardRuntimeStatusQueue.sync {
+            try? store.saveKeyboardRuntimeStatus(status)
+        }
+    }
+
+    private func keyboardRuntimeStatus(
+        isActive: Bool,
+        activeRequestID: UUID?,
+        phase: DictationPhase,
+        message: String?,
+        supportsBackgroundStart: Bool,
+        inputLevel: Double?
+    ) -> KeyboardRuntimeStatus {
         let runtimeInputLevel = inputLevel ?? (phase == .recording ? self.inputLevel : 0)
         let canAcceptStartCommand = isActive
             && supportsBackgroundStart
             && activeRequestID == nil
             && phase == .idle
-        try? store.saveKeyboardRuntimeStatus(.init(
+        return KeyboardRuntimeStatus(
             isActive: isActive,
             activeRequestID: activeRequestID,
             phase: phase,
@@ -5689,13 +5717,13 @@ final class DictationCoordinator {
             supportsBackgroundStart: supportsBackgroundStart,
             canAcceptStartCommand: canAcceptStartCommand,
             inputLevel: runtimeInputLevel
-        ))
+        )
     }
 
     private func publishKeyboardRuntimeLevel(_ level: Double, requestID: UUID) {
         guard activeRequest?.id == requestID, isRecording else { return }
         guard let publishedLevel = keyboardWaveformLevelThrottle.valueToPublish(level) else { return }
-        saveKeyboardRuntimeStatus(
+        let status = keyboardRuntimeStatus(
             isActive: true,
             activeRequestID: requestID,
             phase: .recording,
@@ -5703,6 +5731,10 @@ final class DictationCoordinator {
             supportsBackgroundStart: false,
             inputLevel: publishedLevel
         )
+        let store = store
+        keyboardRuntimeStatusQueue.async {
+            try? store.saveKeyboardRuntimeStatus(status)
+        }
     }
 
     private func saveKeyboardHandoff(

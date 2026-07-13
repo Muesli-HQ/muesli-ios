@@ -80,13 +80,18 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Downloaded and ready"].exists)
 
         let removeModel = app.buttons["model.remove.parakeet-tdt-ctc-110m"]
-        for _ in 0..<4 where !removeModel.isHittable {
+        let tabBar = app.buttons["tab.settings"]
+        for _ in 0..<4 {
+            if removeModel.exists,
+               removeModel.isHittable,
+               removeModel.frame.maxY < tabBar.frame.minY {
+                break
+            }
             app.swipeUp()
         }
         XCTAssertTrue(removeModel.isHittable)
         XCTAssertTrue(removeModel.isEnabled)
-        app.swipeUp()
-        XCTAssertTrue(removeModel.isHittable)
+        XCTAssertLessThan(removeModel.frame.maxY, tabBar.frame.minY)
         removeModel.tap()
 
         XCTAssertTrue(app.buttons["Remove Download"].waitForExistence(timeout: 3))
@@ -193,9 +198,10 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Return to Meeting"].waitForExistence(timeout: 5))
         app.buttons["Return to Meeting"].tap()
 
-        XCTAssertTrue(app.staticTexts["Raw transcript should no longer be selected after processing."].waitForExistence(timeout: 5))
+        let rawTranscript = app.staticTexts["Raw transcript should no longer be selected after processing."]
+        XCTAssertTrue(rawTranscript.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["The generated meeting summary is selected by default."].waitForExistence(timeout: 25))
-        XCTAssertFalse(app.staticTexts["Raw transcript should no longer be selected after processing."].exists)
+        XCTAssertTrue(rawTranscript.waitForNonExistence(timeout: 5))
     }
 
     func testLiveMeetingDisplaysCompletedTranscriptChunksWithoutLeavingRecording() {

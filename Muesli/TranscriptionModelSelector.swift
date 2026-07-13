@@ -254,7 +254,7 @@ private enum ModelCatalogState {
         case .preparing:
             "The downloaded model is being compiled for this device"
         case .failed:
-            "Use Retry Download below after checking your connection"
+            "Check your connection, then use the retry option below"
         }
     }
 

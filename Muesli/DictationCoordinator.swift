@@ -238,7 +238,9 @@ final class DictationCoordinator {
                 selectedTranscriptionModel.rawValue,
                 forKey: MuesliPreferences.transcriptionModelKey
             )
-            modelPreparationTask?.cancel()
+            let preparationTask = modelPreparationTask
+            modelPreparationTask = nil
+            preparationTask?.cancel()
             modelPrewarmTask?.cancel()
             modelPrewarmTask = nil
             modelPreparation = ModelPreparationState(
@@ -5979,7 +5981,7 @@ private enum TranscriptionModelRemovalError: LocalizedError {
     case modelInUse
 
     var errorDescription: String? {
-        "Finish the active recording or transcription before removing a model."
+        "Finish active recording, transcription, or model preparation before removing a model."
     }
 }
 

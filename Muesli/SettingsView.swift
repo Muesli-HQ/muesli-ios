@@ -1547,27 +1547,35 @@ final class AppleSyncAccountManager {
     }
 
     private func iCloudStatus() async -> (label: String, isAvailable: Bool) {
-        await withCheckedContinuation { continuation in
-            CKContainer.default().accountStatus { status, error in
-                if error != nil {
-                    continuation.resume(returning: ("Unavailable", false))
-                    return
+        // UI tests intentionally use an unsigned app bundle. CloudKit aborts
+        // that process before invoking its completion handler because the
+        // signed iCloud entitlements are absent.
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.uiTestingLaunchArgument) {
+            return ("Unavailable", false)
+        }
+
+        return await withCheckedContinuation { continuation in
+            CKContainer(identifier: ICloudTextSyncEngine.containerIdentifier)
+                .accountStatus { status, error in
+                    if error != nil {
+                        continuation.resume(returning: ("Unavailable", false))
+                        return
+                    }
+                    switch status {
+                    case .available:
+                        continuation.resume(returning: ("Available", true))
+                    case .noAccount:
+                        continuation.resume(returning: ("No iCloud account", false))
+                    case .restricted:
+                        continuation.resume(returning: ("Restricted", false))
+                    case .couldNotDetermine:
+                        continuation.resume(returning: ("Unknown", false))
+                    case .temporarilyUnavailable:
+                        continuation.resume(returning: ("Temporarily unavailable", false))
+                    @unknown default:
+                        continuation.resume(returning: ("Unknown", false))
+                    }
                 }
-                switch status {
-                case .available:
-                    continuation.resume(returning: ("Available", true))
-                case .noAccount:
-                    continuation.resume(returning: ("No iCloud account", false))
-                case .restricted:
-                    continuation.resume(returning: ("Restricted", false))
-                case .couldNotDetermine:
-                    continuation.resume(returning: ("Unknown", false))
-                case .temporarilyUnavailable:
-                    continuation.resume(returning: ("Temporarily unavailable", false))
-                @unknown default:
-                    continuation.resume(returning: ("Unknown", false))
-                }
-            }
         }
     }
 }

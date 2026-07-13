@@ -50,6 +50,37 @@ final class SettingsModelCatalogTests: XCTestCase {
         )
     }
 
+    func testWhisperKitDownloadRequiresCompletionMarkerAndAllCoreModels() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-whisper-integrity-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        XCTAssertFalse(WhisperKitTranscriptionRuntime.isModelDownloaded(at: root))
+
+        for component in ["MelSpectrogram", "AudioEncoder", "TextDecoder"] {
+            let compiledModel = root.appendingPathComponent("\(component).mlmodelc", isDirectory: true)
+            try FileManager.default.createDirectory(at: compiledModel, withIntermediateDirectories: true)
+            try Data("model".utf8).write(to: compiledModel.appendingPathComponent("model.mil"))
+        }
+
+        XCTAssertFalse(
+            WhisperKitTranscriptionRuntime.isModelDownloaded(at: root),
+            "A structurally complete directory is not trusted until the download commits its marker."
+        )
+
+        try WhisperKitTranscriptionRuntime.markDownloadComplete(at: root)
+        XCTAssertTrue(WhisperKitTranscriptionRuntime.isModelDownloaded(at: root))
+
+        try FileManager.default.removeItem(
+            at: root.appendingPathComponent("AudioEncoder.mlmodelc/model.mil")
+        )
+        XCTAssertFalse(
+            WhisperKitTranscriptionRuntime.isModelDownloaded(at: root),
+            "The marker cannot make a partial model installation appear ready."
+        )
+    }
+
     func testModelCatalogHasStableUniqueIdentifiers() {
         let models = LocalTranscriptionModel.allCases
         XCTAssertEqual(Set(models.map(\.id)).count, models.count)
@@ -151,5 +182,19 @@ final class SettingsModelCatalogTests: XCTestCase {
         XCTAssertFalse(currentAttempt.matches(staleFile))
         XCTAssertTrue(plan.matches(currentFile))
         XCTAssertTrue(currentAttempt.matches(currentFile))
+    }
+
+    func testRestoredAttemptCannotCompleteAfterAnyFileFails() {
+        let attempt = ModelDownloadAttempt(
+            modelRawValue: LocalTranscriptionModel.parakeetV3.rawValue,
+            id: UUID()
+        )
+        var outcomes = ModelDownloadAttemptOutcomeTracker()
+
+        outcomes.recordCompletion(attempt)
+        XCTAssertTrue(outcomes.recordFailure(attempt))
+        outcomes.recordCompletion(attempt)
+
+        XCTAssertTrue(outcomes.drainCompletedAttempts().isEmpty)
     }
 }

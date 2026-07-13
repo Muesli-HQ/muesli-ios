@@ -27,8 +27,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
     private var selectedModel = MuesliPreferences.transcriptionModel
     private var diarizationRuntime: FluidAudioDiarizationRuntime?
 
-    func selectModel(_ model: LocalTranscriptionModel) {
+    func selectModel(_ model: LocalTranscriptionModel) async {
         guard selectedModel != model else { return }
+        let runtimeToUnload = whisperRuntime
         selectedModel = model
         manager = nil
         streamingManager = nil
@@ -37,6 +38,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         isLoadingManager = false
         isLoadingStreamingManager = false
         isLoadingWhisperRuntime = false
+        await runtimeToUnload?.unload()
     }
 
     func isLoaded(for model: LocalTranscriptionModel) -> Bool {
@@ -274,12 +276,17 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         }
 
         let runtime = WhisperKitTranscriptionRuntime()
-        try await runtime.load(variant: variant, progress: progress)
-        try Task.checkCancellation()
-        guard selectedModel == model else { throw CancellationError() }
-        whisperRuntime = runtime
-        loadedWhisperModel = model
-        return runtime
+        do {
+            try await runtime.load(variant: variant, progress: progress)
+            try Task.checkCancellation()
+            guard selectedModel == model else { throw CancellationError() }
+            whisperRuntime = runtime
+            loadedWhisperModel = model
+            return runtime
+        } catch {
+            await runtime.unload()
+            throw error
+        }
     }
 
     private func transcribeWithWhisperKit(

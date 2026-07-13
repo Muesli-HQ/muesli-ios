@@ -21,10 +21,8 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     private var taskBytes: [Int: Int64] = [:]
     private var activeTaskIDs = Set<Int>()
     private var failedTaskIDs = Set<Int>()
-    private var failedAttemptIDs = Set<UUID>()
-    private var failedModelRawValues = Set<String>()
+    private var attemptOutcomes = ModelDownloadAttemptOutcomeTracker()
     private var backgroundCompletionHandler: SendableCompletionHandler?
-    private var completedModelsDuringBackgroundEvents = Set<String>()
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
@@ -158,8 +156,7 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             taskBytes = [:]
             activeTaskIDs = []
             failedTaskIDs = []
-            failedAttemptIDs.remove(attemptID)
-            failedModelRawValues.remove(model.rawValue)
+            attemptOutcomes.clearFailure(for: attempt)
             return true
         }
         guard shouldStart else { return false }
@@ -331,10 +328,9 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             if let requestedAttempt {
                 return requestedAttempt.matches(file)
             }
-            if let attemptID = file.attemptID {
-                return !failedAttemptIDs.contains(attemptID)
-            }
-            return !failedModelRawValues.contains(file.model.rawValue)
+            return !attemptOutcomes.hasFailed(
+                ModelDownloadAttempt(modelRawValue: file.model.rawValue, id: file.attemptID)
+            )
         }
         guard shouldProcess else { return }
 
@@ -354,12 +350,9 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
                    !requestedAttempt.matches(file) {
                     return
                 }
-                if let attemptID = file.attemptID {
-                    guard !self.failedAttemptIDs.contains(attemptID) else { return }
-                } else {
-                    guard !self.failedModelRawValues.contains(file.model.rawValue) else { return }
-                }
-                self.completedModelsDuringBackgroundEvents.insert(file.model.rawValue)
+                self.attemptOutcomes.recordCompletion(
+                    ModelDownloadAttempt(modelRawValue: file.model.rawValue, id: file.attemptID)
+                )
                 return
             }
 
@@ -422,13 +415,7 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
                 return .ignored
             }
 
-            if let attemptID = attempt.id {
-                guard !failedAttemptIDs.contains(attemptID) else { return .ignored }
-                failedAttemptIDs.insert(attemptID)
-            } else {
-                guard !failedModelRawValues.contains(attempt.modelRawValue) else { return .ignored }
-                failedModelRawValues.insert(attempt.modelRawValue)
-            }
+            guard attemptOutcomes.recordFailure(attempt) else { return .ignored }
 
             if let task {
                 failedTaskIDs.insert(task.taskIdentifier)
@@ -515,9 +502,11 @@ extension ModelBackgroundDownloadService: URLSessionDownloadDelegate {
         stateQueue.async {
             guard self.activePlan == nil else { return }
             let handler = self.backgroundCompletionHandler
-            let completedModels = self.completedModelsDuringBackgroundEvents.compactMap(LocalTranscriptionModel.init(rawValue:))
-            self.completedModelsDuringBackgroundEvents = []
-            completedModels.forEach { self.failedModelRawValues.remove($0.rawValue) }
+            let completedModels = Set(
+                self.attemptOutcomes
+                    .drainCompletedAttempts()
+                    .compactMap { LocalTranscriptionModel(rawValue: $0.modelRawValue) }
+            )
             self.backgroundCompletionHandler = nil
             DispatchQueue.main.async {
                 completedModels.forEach { model in
@@ -541,7 +530,7 @@ private final class SendableCompletionHandler: @unchecked Sendable {
     }
 }
 
-struct ModelDownloadAttempt: Equatable, Sendable {
+struct ModelDownloadAttempt: Hashable, Sendable {
     let modelRawValue: String
     let id: UUID?
 
@@ -556,6 +545,50 @@ struct ModelDownloadAttempt: Equatable, Sendable {
 
     func matches(_ file: ModelDownloadFile) -> Bool {
         modelRawValue == file.model.rawValue && id == file.attemptID
+    }
+}
+
+struct ModelDownloadAttemptOutcomeTracker {
+    private var completedAttempts = Set<ModelDownloadAttempt>()
+    private var failedAttemptIDs = Set<UUID>()
+    private var failedLegacyModelRawValues = Set<String>()
+
+    func hasFailed(_ attempt: ModelDownloadAttempt) -> Bool {
+        if let id = attempt.id {
+            return failedAttemptIDs.contains(id)
+        }
+        return failedLegacyModelRawValues.contains(attempt.modelRawValue)
+    }
+
+    mutating func recordCompletion(_ attempt: ModelDownloadAttempt) {
+        guard !hasFailed(attempt) else { return }
+        completedAttempts.insert(attempt)
+    }
+
+    @discardableResult
+    mutating func recordFailure(_ attempt: ModelDownloadAttempt) -> Bool {
+        completedAttempts.remove(attempt)
+        if let id = attempt.id {
+            return failedAttemptIDs.insert(id).inserted
+        }
+        return failedLegacyModelRawValues.insert(attempt.modelRawValue).inserted
+    }
+
+    mutating func clearFailure(for attempt: ModelDownloadAttempt) {
+        if let id = attempt.id {
+            failedAttemptIDs.remove(id)
+        } else {
+            failedLegacyModelRawValues.remove(attempt.modelRawValue)
+        }
+    }
+
+    mutating func drainCompletedAttempts() -> Set<ModelDownloadAttempt> {
+        defer {
+            completedAttempts = []
+            failedAttemptIDs = []
+            failedLegacyModelRawValues = []
+        }
+        return completedAttempts.filter { !hasFailed($0) }
     }
 }
 

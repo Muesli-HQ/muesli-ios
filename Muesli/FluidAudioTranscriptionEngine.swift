@@ -19,8 +19,11 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
 
     private var manager: AsrManager?
     private var streamingManager: StreamingEouAsrManager?
+    private var whisperRuntime: WhisperKitTranscriptionRuntime?
+    private var loadedWhisperModel: LocalTranscriptionModel?
     private var isLoadingManager = false
     private var isLoadingStreamingManager = false
+    private var isLoadingWhisperRuntime = false
     private var selectedModel = MuesliPreferences.transcriptionModel
     private var diarizationRuntime: FluidAudioDiarizationRuntime?
 
@@ -29,20 +32,42 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         selectedModel = model
         manager = nil
         streamingManager = nil
+        whisperRuntime = nil
+        loadedWhisperModel = nil
         isLoadingManager = false
         isLoadingStreamingManager = false
+        isLoadingWhisperRuntime = false
     }
 
     func isLoaded(for model: LocalTranscriptionModel) -> Bool {
         guard selectedModel == model else { return false }
+        if model.family == .whisper {
+            return loadedWhisperModel == model && whisperRuntime != nil
+        }
         if model.supportsRealtimeStreaming {
             return streamingManager != nil
         }
         return manager != nil
     }
 
+    func unloadModel(_ model: LocalTranscriptionModel) async {
+        guard selectedModel == model else { return }
+        if let whisperRuntime {
+            await whisperRuntime.unload()
+        }
+        manager = nil
+        streamingManager = nil
+        whisperRuntime = nil
+        loadedWhisperModel = nil
+        isLoadingManager = false
+        isLoadingStreamingManager = false
+        isLoadingWhisperRuntime = false
+    }
+
     func prepare(progress: (@Sendable (Double, String?) -> Void)? = nil) async throws {
-        if selectedModel.supportsRealtimeStreaming {
+        if selectedModel.family == .whisper {
+            _ = try await loadedWhisperRuntime(progress: progress)
+        } else if selectedModel.supportsRealtimeStreaming {
             _ = try await loadedStreamingManager(progress: progress)
         } else {
             _ = try await loadedManager(progress: progress)
@@ -61,6 +86,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         audioURL: URL,
         progress: (@Sendable (TranscriptionProgressUpdate) -> Void)? = nil
     ) async throws -> DetailedTranscriptionResult {
+        if selectedModel.family == .whisper {
+            return try await transcribeWithWhisperKit(audioURL: audioURL, progress: progress)
+        }
         if selectedModel.supportsRealtimeStreaming {
             return try await transcribeWithStreamingManager(audioURL: audioURL, progress: progress)
         }
@@ -219,6 +247,59 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         self.streamingManager = manager
         progress?(1.0, "\(model.shortName) ready")
         return manager
+    }
+
+    private func loadedWhisperRuntime(
+        progress: (@Sendable (Double, String?) -> Void)?
+    ) async throws -> WhisperKitTranscriptionRuntime {
+        if let whisperRuntime, loadedWhisperModel == selectedModel {
+            return whisperRuntime
+        }
+
+        while isLoadingWhisperRuntime {
+            try await Task.sleep(for: .milliseconds(150))
+            if let whisperRuntime, loadedWhisperModel == selectedModel {
+                return whisperRuntime
+            }
+        }
+
+        let model = selectedModel
+        guard let variant = model.whisperVariant else {
+            throw TranscriptionEngineError.unsupportedOfflineModel(model.shortName)
+        }
+
+        isLoadingWhisperRuntime = true
+        defer {
+            isLoadingWhisperRuntime = false
+        }
+
+        let runtime = WhisperKitTranscriptionRuntime()
+        try await runtime.load(variant: variant, progress: progress)
+        try Task.checkCancellation()
+        guard selectedModel == model else { throw CancellationError() }
+        whisperRuntime = runtime
+        loadedWhisperModel = model
+        return runtime
+    }
+
+    private func transcribeWithWhisperKit(
+        audioURL: URL,
+        progress: (@Sendable (TranscriptionProgressUpdate) -> Void)?
+    ) async throws -> DetailedTranscriptionResult {
+        let runtime = try await loadedWhisperRuntime { fraction, message in
+            progress?(.init(fractionCompleted: fraction, message: message))
+        }
+        progress?(.init(fractionCompleted: 0, message: "Transcribing with WhisperKit"))
+        let text = try await runtime.transcribe(audioURL: audioURL)
+        let duration: TimeInterval
+        if let audioFile = try? AVAudioFile(forReading: audioURL),
+           audioFile.fileFormat.sampleRate > 0 {
+            duration = Double(audioFile.length) / audioFile.fileFormat.sampleRate
+        } else {
+            duration = 0
+        }
+        progress?(.init(fractionCompleted: 1, message: "Transcription complete"))
+        return DetailedTranscriptionResult(text: text, duration: duration, tokens: [])
     }
 
     private func transcribeWithStreamingManager(

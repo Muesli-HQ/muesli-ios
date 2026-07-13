@@ -64,7 +64,9 @@ struct ModelsView: View {
 
                 TranscriptionModelSelector(
                     selection: $coordinator.selectedTranscriptionModel,
-                    showsHeader: false
+                    showsHeader: false,
+                    preparation: coordinator.modelPreparation,
+                    onSelect: coordinator.selectTranscriptionModel
                 )
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
@@ -83,20 +85,21 @@ struct ModelsView: View {
                         .tint(MuesliTheme.accent)
                 }
 
-                Button {
-                    coordinator.prepareModel()
-                } label: {
-                    Label(modelButtonTitle, systemImage: modelButtonIcon)
-                        .font(MuesliTheme.headline())
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .foregroundStyle(modelButtonDisabled ? MuesliTheme.textTertiary : .white)
-                        .background(modelButtonDisabled ? MuesliTheme.surfacePrimary : MuesliTheme.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                if coordinator.modelPreparation.phase == .failed {
+                    Button {
+                        coordinator.prepareModel()
+                    } label: {
+                        Label("Retry Download", systemImage: "arrow.clockwise")
+                            .font(MuesliTheme.headline())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .foregroundStyle(.white)
+                            .background(MuesliTheme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                .disabled(modelButtonDisabled)
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -105,7 +108,13 @@ struct ModelsView: View {
     private var runtimePanel: some View {
         MuesliSurface {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                ModelInfoRow(icon: "cpu", title: "Runtime", value: "CoreML / ANE")
+                ModelInfoRow(
+                    icon: "cpu",
+                    title: "Runtime",
+                    value: coordinator.selectedTranscriptionModel.family == .whisper
+                        ? "WhisperKit / CoreML"
+                        : "FluidAudio / CoreML"
+                )
                 Divider().overlay(MuesliTheme.surfaceBorder)
                 ModelInfoRow(icon: "waveform", title: "Engine", value: coordinator.selectedTranscriptionModel.shortName)
                 Divider().overlay(MuesliTheme.surfaceBorder)
@@ -158,35 +167,6 @@ struct ModelsView: View {
         }
     }
 
-    private var modelButtonTitle: String {
-        switch coordinator.modelPreparation.phase {
-        case .ready:
-            "Model Ready"
-        case .downloading, .preparing:
-            "Preparing"
-        case .failed:
-            "Try Again"
-        case .idle:
-            "Prepare Model"
-        }
-    }
-
-    private var modelButtonIcon: String {
-        switch coordinator.modelPreparation.phase {
-        case .ready:
-            "checkmark"
-        case .downloading, .preparing:
-            "arrow.down"
-        case .failed:
-            "arrow.clockwise"
-        case .idle:
-            "square.and.arrow.down"
-        }
-    }
-
-    private var modelButtonDisabled: Bool {
-        coordinator.modelPreparation.isReady || coordinator.modelPreparation.isPreparing
-    }
 }
 
 private struct ModelInfoRow: View {

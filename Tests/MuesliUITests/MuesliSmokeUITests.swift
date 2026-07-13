@@ -33,6 +33,67 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
     }
 
+    func testSettingsPrioritizeCoreWorkflowsAndAboutListsOpenSourceLibraries() {
+        let app = launchApp()
+
+        XCTAssertTrue(app.buttons["tab.settings"].waitForExistence(timeout: 8))
+        app.buttons["tab.settings"].tap()
+
+        XCTAssertTrue(app.staticTexts["Voice Notes"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Meetings"].exists)
+        XCTAssertFalse(app.staticTexts["Status"].exists)
+
+        let about = app.staticTexts["About"]
+        for _ in 0..<5 where !about.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(about.exists)
+        about.tap()
+
+        XCTAssertTrue(app.staticTexts["About"].waitForExistence(timeout: 5))
+        let openSourceHeader = app.staticTexts["OPEN SOURCE LIBRARIES"]
+        for _ in 0..<4 where !openSourceHeader.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(openSourceHeader.exists)
+        XCTAssertTrue(app.staticTexts["FluidAudio"].exists)
+        XCTAssertTrue(app.staticTexts["WhisperKit"].exists)
+        XCTAssertTrue(app.staticTexts["TelemetryDeck Swift SDK"].exists)
+        XCTAssertTrue(app.staticTexts["SQLite"].exists)
+    }
+
+    func testModelsSettingsPrepareAutomaticallyWithoutPersistentPrepareButton() {
+        let app = launchApp()
+
+        XCTAssertTrue(app.buttons["tab.settings"].waitForExistence(timeout: 8))
+        app.buttons["tab.settings"].tap()
+
+        let models = app.staticTexts["Models"]
+        for _ in 0..<3 where !models.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(models.exists)
+        models.tap()
+
+        XCTAssertTrue(app.staticTexts["Choose model"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Prepare Model"].exists)
+        XCTAssertTrue(app.staticTexts["Downloaded and ready"].exists)
+
+        let removeModel = app.buttons["model.remove.parakeet-tdt-ctc-110m"]
+        for _ in 0..<4 where !removeModel.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(removeModel.isHittable)
+        XCTAssertTrue(removeModel.isEnabled)
+        app.swipeUp()
+        XCTAssertTrue(removeModel.isHittable)
+        removeModel.tap()
+
+        XCTAssertTrue(app.buttons["Remove Download"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Cancel"].exists)
+        app.buttons["Cancel"].tap()
+    }
+
     func testVoiceNotePreviewExpandsAndShowsMetadataBadges() {
         let app = XCUIApplication()
         app.launchArguments = ["--muesli-ui-testing", "--muesli-mock-dictations"]

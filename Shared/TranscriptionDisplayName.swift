@@ -7,6 +7,16 @@ enum TranscriptionDisplayName {
             "Parakeet v3"
         case "parakeet-tdt-ctc-110m":
             "Parakeet 110M"
+        case "parakeet-realtime-eou-120m":
+            "Parakeet Realtime"
+        case "whisper-tiny-en":
+            "Whisper Tiny"
+        case "whisper-small-en":
+            "Whisper Small"
+        case "whisper-medium-en":
+            "Whisper Medium"
+        case "whisper-large-turbo":
+            "Whisper Turbo"
         case "placeholder":
             "Placeholder"
         default:

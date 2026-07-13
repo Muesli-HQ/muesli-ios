@@ -26,6 +26,9 @@ packages:
   TelemetryDeck:
     url: https://github.com/TelemetryDeck/SwiftSDK
     from: "2.12.0"
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit.git
+    revision: 80d96762fa727f816ffceab76a6529cd12c2726f
 
 targets:
   Muesli:
@@ -48,6 +51,7 @@ targets:
       - target: MuesliLiveActivityExtension
       - package: FluidAudio
       - package: TelemetryDeck
+      - package: WhisperKit
       - sdk: libsqlite3.tbd
 
   MuesliLiveActivityExtension:

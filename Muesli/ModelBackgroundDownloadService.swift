@@ -38,6 +38,57 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
         super.init()
     }
 
+    static func storageDirectory(for model: LocalTranscriptionModel) -> URL? {
+        if let whisperVariant = model.whisperVariant {
+            return WhisperKitTranscriptionRuntime.modelDirectory(for: whisperVariant)
+        }
+
+        if model == .parakeetRealtimeEou120m {
+            return FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            )[0]
+                .appendingPathComponent("FluidAudio", isDirectory: true)
+                .appendingPathComponent("Models", isDirectory: true)
+                .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
+                .appendingPathComponent("320ms", isDirectory: true)
+        }
+
+        return ModelDownloadSpec(model: model)?.repoRoot
+    }
+
+    static func isModelDownloaded(_ model: LocalTranscriptionModel) -> Bool {
+        if let whisperVariant = model.whisperVariant {
+            return WhisperKitTranscriptionRuntime.isModelDownloaded(whisperVariant)
+        }
+
+        if model == .parakeetRealtimeEou120m {
+            guard let modelDirectory = storageDirectory(for: model) else { return false }
+            return ModelNames.ParakeetEOU.requiredModels.allSatisfy { modelName in
+                FileManager.default.fileExists(
+                    atPath: modelDirectory.appendingPathComponent(modelName).path
+                )
+            }
+        }
+
+        guard let spec = ModelDownloadSpec(model: model) else { return false }
+        return spec.requiredModels.allSatisfy { modelName in
+            FileManager.default.fileExists(
+                atPath: spec.repoRoot.appendingPathComponent(modelName).path
+            )
+        }
+    }
+
+    static func removeDownloadedModel(_ model: LocalTranscriptionModel) throws {
+        guard let directory = storageDirectory(for: model) else { return }
+        try removeDownloadedModel(at: directory)
+    }
+
+    static func removeDownloadedModel(at directory: URL) throws {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        try FileManager.default.removeItem(at: directory)
+    }
+
     func setBackgroundCompletionHandler(_ handler: @escaping () -> Void) {
         let handler = SendableCompletionHandler(handler)
         _ = session
@@ -47,6 +98,21 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     }
 
     func startDownload(for model: LocalTranscriptionModel) async throws -> Bool {
+        let activeModelRawValue = stateQueue.sync { activePlan?.modelRawValue }
+        if activeModelRawValue == model.rawValue {
+            return true
+        }
+        if activeModelRawValue != nil {
+            let tasks = await session.allTasks
+            tasks.forEach { $0.cancel() }
+            stateQueue.sync {
+                activePlan = nil
+                taskBytes = [:]
+                activeTaskIDs = []
+                failedTaskIDs = []
+            }
+        }
+
         guard let spec = ModelDownloadSpec(model: model) else {
             return false
         }
@@ -243,6 +309,11 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     private func fail(_ task: URLSessionTask?, error: Error) {
         let taskModel = task?.taskDescription.flatMap { ModelDownloadFile(taskDescription: $0)?.model }
         let (model, handler): (LocalTranscriptionModel?, SendableCompletionHandler?) = stateQueue.sync {
+            if let taskModel,
+               let activePlan,
+               activePlan.modelRawValue != taskModel.rawValue {
+                return (nil, nil)
+            }
             let resolvedModel = taskModel ?? activePlan.flatMap { LocalTranscriptionModel(rawValue: $0.modelRawValue) }
             if let resolvedModel, failedModelRawValues.contains(resolvedModel.rawValue) {
                 return (nil, nil)
@@ -419,7 +490,8 @@ private struct ModelDownloadSpec {
                 "Decoder.mlmodelc",
                 "JointDecisionv3.mlmodelc"
             ]
-        case .parakeetRealtimeEou120m:
+        case .parakeetRealtimeEou120m,
+             .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo:
             return nil
         }
     }

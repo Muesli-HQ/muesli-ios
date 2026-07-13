@@ -192,7 +192,7 @@ final class DictationCoordinator {
         #if DEBUG
         guard !Self.shouldSkipModelPrewarmForTesting() else { return false }
         #endif
-        return hasCompletedOnboarding
+        return hasCompletedOnboarding && !isSelectedModelDownloadSuppressed
     }
     private var isKeyboardHotMicEngineReady: Bool {
         isKeyboardSessionArmed && keyboardSessionKeeper.canAcceptStartCommand
@@ -203,6 +203,7 @@ final class DictationCoordinator {
             && !hasMeetingRecordingInProgress
             && activeRequest == nil
             && statusText != "Transcribing"
+            && !isRemovingTranscriptionModel
     }
     var keyboardSessionStatusText: String { keyboardSessionState.statusText }
     var iCloudSyncStatusText: String?
@@ -230,6 +231,9 @@ final class DictationCoordinator {
     var selectedTranscriptionModel = MuesliPreferences.transcriptionModel {
         didSet {
             guard oldValue != selectedTranscriptionModel else { return }
+            UserDefaults.standard.removeObject(
+                forKey: MuesliPreferences.manuallyRemovedTranscriptionModelKey
+            )
             UserDefaults.standard.set(
                 selectedTranscriptionModel.rawValue,
                 forKey: MuesliPreferences.transcriptionModelKey
@@ -241,16 +245,31 @@ final class DictationCoordinator {
                 status: "\(selectedTranscriptionModel.shortName) is not downloaded",
                 detail: selectedTranscriptionModel.detail
             )
-            Task { [engine, selectedTranscriptionModel] in
-                await engine.selectModel(selectedTranscriptionModel)
-            }
             AppTelemetry.signal(
                 "transcription_model_selected",
                 parameters: ["engine": selectedTranscriptionModel.engineIdentifier]
             )
+            automaticallyPrepareSelectedModelIfNeeded()
         }
     }
     var modelPreparation = ModelPreparationState()
+    var isRemovingTranscriptionModel = false
+    var canRemoveDownloadedModels: Bool {
+        !isRemovingTranscriptionModel
+            && !modelPreparation.isPreparing
+            && !isModelPrewarmInProgress
+            && !isRecording
+            && !hasMeetingRecordingInProgress
+            && !isMeetingTranscribing
+            && !voiceNoteLifecycleState.isWorkActive
+            && !keyboardSessionState.isWorkflowActive
+            && activeRequest == nil
+            && statusText != "Transcribing"
+    }
+    private var isSelectedModelDownloadSuppressed: Bool {
+        MuesliPreferences.manuallyRemovedTranscriptionModel == selectedTranscriptionModel
+            && !selectedTranscriptionModel.isDownloaded
+    }
     var isOnboardingTestRecording = false
     var isOnboardingTestTranscribing = false
     var onboardingTestInputLevel = 0.0
@@ -2144,6 +2163,7 @@ final class DictationCoordinator {
               !hasMeetingRecordingInProgress,
               !voiceNoteLifecycleState.isWorkActive,
               statusText != "Transcribing",
+              !isRemovingTranscriptionModel,
               var session = try? store.activeRecordingSession(id: sessionID),
               session.canRetryVoiceNoteTranscription,
               let requestID = session.requestID,
@@ -2852,6 +2872,79 @@ final class DictationCoordinator {
     }
 
     func prepareModelForOnboarding() {
+        prepareSelectedModel(reason: "onboarding")
+    }
+
+    func prepareModel() {
+        prepareSelectedModel(reason: "retry")
+    }
+
+    func selectTranscriptionModel(_ model: LocalTranscriptionModel) {
+        UserDefaults.standard.removeObject(
+            forKey: MuesliPreferences.manuallyRemovedTranscriptionModelKey
+        )
+        if selectedTranscriptionModel == model {
+            guard !model.isDownloaded else { return }
+            modelPreparation = ModelPreparationState(
+                status: "\(model.shortName) is not downloaded",
+                detail: model.detail
+            )
+            automaticallyPrepareSelectedModelIfNeeded()
+            return
+        }
+        selectedTranscriptionModel = model
+    }
+
+    func removeDownloadedModel(_ model: LocalTranscriptionModel) async throws {
+        guard canRemoveDownloadedModels else {
+            throw TranscriptionModelRemovalError.modelInUse
+        }
+
+        isRemovingTranscriptionModel = true
+        defer { isRemovingTranscriptionModel = false }
+
+        if selectedTranscriptionModel == model {
+            modelPreparationTask?.cancel()
+            modelPreparationTask = nil
+            modelPrewarmTask?.cancel()
+            modelPrewarmTask = nil
+            await engine.unloadModel(model)
+        }
+
+        try await Task.detached(priority: .userInitiated) {
+            try ModelBackgroundDownloadService.removeDownloadedModel(model)
+        }.value
+
+        if selectedTranscriptionModel == model {
+            UserDefaults.standard.set(
+                model.rawValue,
+                forKey: MuesliPreferences.manuallyRemovedTranscriptionModelKey
+            )
+            modelPreparation = ModelPreparationState(
+                status: "\(model.shortName) removed",
+                detail: "Select this model again when you want to download it."
+            )
+        }
+
+        AppTelemetry.signal(
+            "transcription_model_removed",
+            parameters: [
+                "engine": model.engineIdentifier,
+                "was_active": selectedTranscriptionModel == model ? "true" : "false",
+            ]
+        )
+    }
+
+    private func automaticallyPrepareSelectedModelIfNeeded() {
+        #if DEBUG
+        guard !Self.shouldSkipModelPrewarmForTesting() else { return }
+        #endif
+        guard hasCompletedOnboarding else { return }
+        guard !isSelectedModelDownloadSuppressed else { return }
+        prepareSelectedModel(reason: "selection")
+    }
+
+    private func prepareSelectedModel(reason: String) {
         guard !modelPreparation.isPreparing, !modelPreparation.isReady else { return }
 
         let model = selectedTranscriptionModel
@@ -2862,7 +2955,13 @@ final class DictationCoordinator {
             status: "Checking model files...",
             detail: model.shortName
         )
-        AppTelemetry.signal("model_prepare_started", parameters: ["engine": model.engineIdentifier])
+        AppTelemetry.signal(
+            "model_prepare_started",
+            parameters: [
+                "engine": model.engineIdentifier,
+                "reason": reason,
+            ]
+        )
 
         let coordinator = self
         modelPreparationTask = Task { [engine, model] in
@@ -2871,17 +2970,20 @@ final class DictationCoordinator {
                 let didStartBackgroundDownload = try await ModelBackgroundDownloadService.shared.startDownload(for: model)
                 if didStartBackgroundDownload {
                     await MainActor.run {
-                        coordinator.modelPreparationTask = nil
+                        if coordinator.selectedTranscriptionModel == model {
+                            coordinator.modelPreparationTask = nil
+                        }
                     }
                     return
                 }
                 try await engine.prepare { progress, status in
                     Task { @MainActor in
-                        coordinator.applyModelPreparationProgress(progress, status: status)
+                        coordinator.applyModelPreparationProgress(progress, status: status, model: model)
                     }
                 }
 
                 await MainActor.run {
+                    guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPreparationTask = nil
                     coordinator.modelPreparation = ModelPreparationState(
                         phase: .ready,
@@ -2894,10 +2996,13 @@ final class DictationCoordinator {
                 }
             } catch is CancellationError {
                 await MainActor.run {
-                    coordinator.modelPreparationTask = nil
+                    if coordinator.selectedTranscriptionModel == model {
+                        coordinator.modelPreparationTask = nil
+                    }
                 }
             } catch {
                 await MainActor.run {
+                    guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPreparationTask = nil
                     coordinator.modelPreparation = ModelPreparationState(
                         phase: .failed,
@@ -2917,15 +3022,12 @@ final class DictationCoordinator {
         }
     }
 
-    func prepareModel() {
-        prepareModelForOnboarding()
-    }
-
     func prewarmModelIfNeeded(reason: String) {
         #if DEBUG
         guard !Self.shouldSkipModelPrewarmForTesting() else { return }
         #endif
         guard hasCompletedOnboarding else { return }
+        guard !isSelectedModelDownloadSuppressed else { return }
         guard modelPrewarmTask == nil else { return }
         guard modelPreparationTask == nil, !modelPreparation.isPreparing else { return }
         guard !isRecording, !hasMeetingRecordingInProgress else { return }
@@ -2943,6 +3045,7 @@ final class DictationCoordinator {
                 await engine.selectModel(model)
                 guard await !engine.isLoaded(for: model) else {
                     await MainActor.run {
+                        guard coordinator.selectedTranscriptionModel == model else { return }
                         coordinator.modelPrewarmTask = nil
                         coordinator.modelPreparation = ModelPreparationState(
                             phase: .ready,
@@ -2960,11 +3063,12 @@ final class DictationCoordinator {
                 )
                 try await engine.prepare { progress, status in
                     Task { @MainActor in
-                        coordinator.applyModelPreparationProgress(progress, status: status)
+                        coordinator.applyModelPreparationProgress(progress, status: status, model: model)
                     }
                 }
 
                 await MainActor.run {
+                    guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPrewarmTask = nil
                     coordinator.modelPreparation = ModelPreparationState(
                         phase: .ready,
@@ -2979,10 +3083,13 @@ final class DictationCoordinator {
                 }
             } catch is CancellationError {
                 await MainActor.run {
-                    coordinator.modelPrewarmTask = nil
+                    if coordinator.selectedTranscriptionModel == model {
+                        coordinator.modelPrewarmTask = nil
+                    }
                 }
             } catch {
                 await MainActor.run {
+                    guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPrewarmTask = nil
                     coordinator.modelPreparation = ModelPreparationState(
                         phase: .failed,
@@ -3117,7 +3224,12 @@ final class DictationCoordinator {
         prewarmModelIfNeeded(reason: "onboarding_completed")
     }
 
-    private func applyModelPreparationProgress(_ progress: Double, status: String?) {
+    private func applyModelPreparationProgress(
+        _ progress: Double,
+        status: String?,
+        model: LocalTranscriptionModel
+    ) {
+        guard selectedTranscriptionModel == model else { return }
         let normalizedProgress = min(max(progress, 0), 1)
         let detail = status ?? "\(Int((normalizedProgress * 100).rounded()))% complete"
         let phase: ModelPreparationPhase = detail.localizedCaseInsensitiveContains("compil")
@@ -3130,7 +3242,7 @@ final class DictationCoordinator {
             progress: normalizedProgress,
             status: phase == .preparing
                 ? "Optimizing for this iPhone..."
-                : "Downloading \(selectedTranscriptionModel.shortName)",
+                : "Downloading \(model.shortName)",
             detail: detail
         )
     }
@@ -3152,11 +3264,12 @@ final class DictationCoordinator {
                 await engine.selectModel(model)
                 try await engine.prepare { progress, status in
                     Task { @MainActor in
-                        coordinator.applyModelPreparationProgress(progress, status: status)
+                        coordinator.applyModelPreparationProgress(progress, status: status, model: model)
                     }
                 }
 
                 await MainActor.run {
+                    guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPreparationTask = nil
                     coordinator.modelPreparation = ModelPreparationState(
                         phase: .ready,
@@ -3169,10 +3282,13 @@ final class DictationCoordinator {
                 }
             } catch is CancellationError {
                 await MainActor.run {
-                    coordinator.modelPreparationTask = nil
+                    if coordinator.selectedTranscriptionModel == model {
+                        coordinator.modelPreparationTask = nil
+                    }
                 }
             } catch {
                 await MainActor.run {
+                    guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPreparationTask = nil
                     coordinator.modelPreparation = ModelPreparationState(
                         phase: .failed,
@@ -3305,7 +3421,8 @@ final class DictationCoordinator {
         guard !isRecording,
               !hasMeetingRecordingInProgress,
               !voiceNoteLifecycleState.isWorkActive,
-              statusText != "Transcribing"
+              statusText != "Transcribing",
+              !isRemovingTranscriptionModel
         else {
             if source == "keyboard" {
                 if refreshActiveKeyboardRequestIfNeeded(request) {
@@ -4160,7 +4277,8 @@ final class DictationCoordinator {
               !isMeetingTranscribing,
               !voiceNoteLifecycleState.isWorkActive,
               activeRequest == nil,
-              statusText != "Transcribing"
+              statusText != "Transcribing",
+              !isRemovingTranscriptionModel
         else { return nil }
         MuesliHaptics.dictationStart()
         activeMeetingTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -4828,7 +4946,11 @@ final class DictationCoordinator {
     }
 
     private func startMeetingTranscription(_ queuedSession: RecordingSession, useStreamingChunks: Bool) {
-        guard !isRecording, !hasMeetingRecordingInProgress, !isMeetingTranscribing else { return }
+        guard !isRecording,
+              !hasMeetingRecordingInProgress,
+              !isMeetingTranscribing,
+              !isRemovingTranscriptionModel
+        else { return }
         guard let audioFileName = queuedSession.audioFileName else { return }
         let operationID = UUID()
         let session: RecordingSession
@@ -5850,6 +5972,14 @@ final class DictationCoordinator {
         realtimeDictationChunksDirectory = nil
         realtimeDictationCommittedText = ""
         liveDictationTranscript = ""
+    }
+}
+
+private enum TranscriptionModelRemovalError: LocalizedError {
+    case modelInUse
+
+    var errorDescription: String? {
+        "Finish the active recording or transcription before removing a model."
     }
 }
 

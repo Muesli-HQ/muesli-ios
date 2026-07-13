@@ -62,7 +62,7 @@ final class MuesliSmokeUITests: XCTestCase {
         add(collapsedScreenshot)
     }
 
-    func testLiveMeetingRemainsReachableWhenHistorySnapshotOmitsActiveSession() {
+    func testMissingDurableMeetingSuppressesPhantomLiveRuntime() {
         let app = XCUIApplication()
         app.launchArguments = [
             "--muesli-ui-testing",
@@ -73,12 +73,86 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
         app.buttons["tab.meetings"].tap()
 
+        XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Live meeting"].exists)
+        XCTAssertFalse(app.buttons["Return to Meeting"].exists)
+    }
+
+    func testInterruptedPersistedMeetingIsPresentedAsRecoveryNotLiveCapture() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-interrupted-meeting-recovery",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+
+        XCTAssertTrue(app.staticTexts["Meeting needs recovery"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Live meeting"].exists)
+        app.buttons["Return to Meeting"].tap()
+        XCTAssertTrue(app.staticTexts["Interrupted Meeting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Recording interrupted"].exists)
+        XCTAssertFalse(app.staticTexts["Listening"].exists)
+        XCTAssertFalse(app.staticTexts["Audio is being captured locally"].exists)
+        XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
+    }
+
+    func testProcessingMeetingDoesNotExposeCaptureControls() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-processing-meeting",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+
+        XCTAssertTrue(app.staticTexts["Meeting processing"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Live meeting"].exists)
+        app.buttons["Return to Meeting"].tap()
+        XCTAssertTrue(app.staticTexts["Processing Meeting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Processing audio"].exists)
+        XCTAssertFalse(app.buttons["meetingDetail.stopButton"].exists)
+        XCTAssertFalse(app.buttons["meetingDetail.discardButton"].exists)
+    }
+
+    func testProcessedMeetingDefaultsFromRawTranscriptToGeneratedSummary() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-processing-meeting-summary",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+        XCTAssertTrue(app.buttons["Return to Meeting"].waitForExistence(timeout: 5))
+        app.buttons["Return to Meeting"].tap()
+
+        XCTAssertTrue(app.staticTexts["Raw transcript should no longer be selected after processing."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["The generated meeting summary is selected by default."].waitForExistence(timeout: 25))
+        XCTAssertFalse(app.staticTexts["Raw transcript should no longer be selected after processing."].exists)
+    }
+
+    func testLiveMeetingDisplaysCompletedTranscriptChunksWithoutLeavingRecording() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-live-meeting-transcript",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
         XCTAssertTrue(app.staticTexts["Live meeting"].waitForExistence(timeout: 5))
         app.buttons["Return to Meeting"].tap()
 
-        XCTAssertTrue(app.staticTexts["Recovered Live Meeting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Live Transcript"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["This transcript appeared while the meeting was still recording."].exists)
         XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
-        XCTAssertFalse(app.staticTexts["Meeting not found"].exists)
     }
 
     func testLongVoiceNoteActiveStateAndDiscardConfirmation() {

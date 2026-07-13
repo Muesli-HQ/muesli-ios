@@ -5,40 +5,52 @@ import WidgetKit
 struct MuesliRecordingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: MuesliLiveActivityAttributes.self) { context in
-            LockScreenLiveActivityView(state: context.state)
+            LockScreenLiveActivityView(
+                state: context.state,
+                sessionID: context.attributes.sessionID,
+                showsStopControl: context.attributes.isMeeting
+            )
                 .activityBackgroundTint(.black)
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    LiveActivityWaveform(accent: context.state.accent)
-                        .frame(width: 48, height: 30)
+                    LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoLarge")
+                        .frame(width: 38, height: 38)
                 }
 
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("muesli")
-                            .font(.headline)
+                            .font(LiveActivityTypography.wordmark)
                         Text(context.state.phase)
-                            .font(.caption)
+                            .font(LiveActivityTypography.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.state.startedAt, style: .timer)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    VStack(spacing: 4) {
+                        Text(context.state.startedAt, style: .timer)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        if context.attributes.isMeeting {
+                            StopMeetingButton(
+                                sessionID: context.attributes.sessionID,
+                                size: 34
+                            )
+                        }
+                    }
                 }
             } compactLeading: {
-                LiveActivityWaveform(accent: context.state.accent)
-                    .frame(width: 24, height: 16)
+                LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoSmall")
+                    .frame(width: 22, height: 22)
             } compactTrailing: {
                 Image(systemName: iconName(for: context.state.phase))
                     .foregroundStyle(color(for: context.state.accent))
             } minimal: {
-                Image(systemName: "waveform")
-                    .foregroundStyle(color(for: context.state.accent))
+                LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoSmall")
+                    .frame(width: 22, height: 22)
             }
             .keylineTint(color(for: context.state.accent))
         }
@@ -58,21 +70,20 @@ struct MuesliRecordingLiveActivity: Widget {
 
 private struct LockScreenLiveActivityView: View {
     let state: MuesliLiveActivityAttributes.ContentState
+    let sessionID: String
+    let showsStopControl: Bool
 
     var body: some View {
         HStack(spacing: 14) {
-            LiveActivityWaveform(accent: state.accent)
-                .frame(width: 54, height: 34)
-                .padding(10)
-                .background(color(for: state.accent).opacity(0.18))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoLarge")
+                .frame(width: 54, height: 54)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("muesli")
-                    .font(.headline)
+                    .font(LiveActivityTypography.wordmark)
                     .foregroundStyle(.white)
                 Text(state.detail)
-                    .font(.subheadline)
+                    .font(LiveActivityTypography.body)
                     .foregroundStyle(.white.opacity(0.72))
                     .lineLimit(1)
             }
@@ -82,30 +93,69 @@ private struct LockScreenLiveActivityView: View {
             Text(state.startedAt, style: .timer)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.72))
+
+            if showsStopControl {
+                StopMeetingButton(sessionID: sessionID, size: 46)
+            }
         }
         .padding()
     }
 }
 
-private struct LiveActivityWaveform: View {
-    let accent: String
+private struct StopMeetingButton: View {
+    let sessionID: String
+    let size: CGFloat
 
-    private let bars: [CGFloat] = [0.35, 0.65, 0.9, 0.45, 1.0, 0.72, 0.38]
+    var body: some View {
+        Button(intent: StopMeetingRecordingIntent(sessionID: sessionID)) {
+            Image(systemName: "stop.fill")
+                .font(.system(size: size * 0.34, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(.red.opacity(0.88), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop meeting recording")
+    }
+}
+
+private struct LiveActivityBrandMark: View {
+    let assetName: String
 
     var body: some View {
         GeometryReader { geometry in
-            let spacing: CGFloat = 2
-            let width = max(2, (geometry.size.width - spacing * CGFloat(bars.count - 1)) / CGFloat(bars.count))
-            HStack(spacing: spacing) {
-                ForEach(Array(bars.enumerated()), id: \.offset) { _, bar in
-                    RoundedRectangle(cornerRadius: width / 2, style: .continuous)
-                        .fill(color(for: accent))
-                        .frame(width: width, height: max(4, geometry.size.height * bar))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            brandImage
+                .scaledToFit()
+                .clipShape(RoundedRectangle(
+                    cornerRadius: geometry.size.width * 0.24,
+                    style: .continuous
+                ))
+        }
+        .privacySensitive(false)
+        .unredacted()
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var brandImage: some View {
+        if #available(iOS 18.0, *) {
+            Image(assetName)
+                .renderingMode(.original)
+                .resizable()
+                .widgetAccentedRenderingMode(.fullColor)
+        } else {
+            Image(assetName)
+                .renderingMode(.original)
+                .resizable()
         }
     }
+}
+
+private enum LiveActivityTypography {
+    // The extension is a separate target and cannot import the app-only MuesliTheme definitions.
+    static let wordmark = Font.system(.callout, design: .default, weight: .semibold)
+    static let body = Font.system(.subheadline, design: .default, weight: .regular)
+    static let caption = Font.system(.caption, design: .default, weight: .regular)
 }
 
 private func color(for accent: String) -> Color {

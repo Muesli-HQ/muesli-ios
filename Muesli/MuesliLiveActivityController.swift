@@ -3,8 +3,10 @@ import Foundation
 
 actor MuesliLiveActivityController {
     private var activity: Activity<MuesliLiveActivityAttributes>?
+    private var endedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
 
     func start(session: RecordingSession, requestID: UUID?, phase: String, detail: String) async {
+        guard !endedSessionIDs.contains(session.id) else { return }
         guard MuesliPreferences.liveActivitiesEnabled(for: session.kind) else {
             await endActivities(for: session.kind, phase: "Off", detail: "Live Activities disabled")
             return
@@ -12,6 +14,7 @@ actor MuesliLiveActivityController {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         await endInactiveActivities()
+        guard !endedSessionIDs.contains(session.id) else { return }
         activity = resolvedActivity(for: session)
         if activity != nil {
             await update(phase: phase, detail: detail, session: session)
@@ -55,6 +58,7 @@ actor MuesliLiveActivityController {
     }
 
     func end(phase: String, detail: String, session: RecordingSession, dismissal: ActivityUIDismissalPolicy = .default) async {
+        endedSessionIDs.insert(session.id)
         guard let resolvedActivity = resolvedActivity(for: session) else { return }
         await resolvedActivity.end(
             ActivityContent(
@@ -196,5 +200,33 @@ actor MuesliLiveActivityController {
         default:
             "blue"
         }
+    }
+}
+
+struct BoundedRecentSessionIDs {
+    private let capacity: Int
+    private var membership = Set<UUID>()
+    private var insertionOrder: [UUID] = []
+    private var evictionIndex = 0
+
+    init(capacity: Int) {
+        precondition(capacity > 0)
+        self.capacity = capacity
+    }
+
+    func contains(_ sessionID: UUID) -> Bool {
+        membership.contains(sessionID)
+    }
+
+    mutating func insert(_ sessionID: UUID) {
+        guard membership.insert(sessionID).inserted else { return }
+        guard insertionOrder.count == capacity else {
+            insertionOrder.append(sessionID)
+            return
+        }
+
+        membership.remove(insertionOrder[evictionIndex])
+        insertionOrder[evictionIndex] = sessionID
+        evictionIndex = (evictionIndex + 1) % capacity
     }
 }

@@ -99,6 +99,20 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         return writer?.rotateCheckpoint()
     }
 
+    var isCapturingAudio: Bool {
+        isRunning && engine.isRunning
+    }
+
+    @discardableResult
+    func resumeIfNeeded(routeStage: String = "meeting interruption recovery") throws -> Bool {
+        guard isRunning else { return false }
+        guard !engine.isRunning else { return true }
+        _ = try AudioInputRouteManager.configureForRecording(stage: routeStage)
+        engine.prepare()
+        try engine.start()
+        return engine.isRunning
+    }
+
     func stop() -> StopResult {
         guard isRunning else {
             return StopResult(

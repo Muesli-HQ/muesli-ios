@@ -64,7 +64,7 @@ enum RecordingSessionKind: String, Codable, Sendable, Equatable, CaseIterable {
     }
 }
 
-enum RecordingSessionPhase: String, Codable, Sendable, Equatable {
+enum RecordingSessionPhase: String, Codable, Sendable, Equatable, Hashable {
     case recording
     case transcriptionQueued
     case transcribing
@@ -406,6 +406,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason?
     var scratchpadText: String?
     var longFormRecoveryValidatedAt: Date?
+    var meetingOperationID: UUID?
 
     init(
         id: UUID = UUID(),
@@ -433,7 +434,8 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         lastTranscriptionAttemptAt: Date? = nil,
         lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason? = nil,
         scratchpadText: String? = nil,
-        longFormRecoveryValidatedAt: Date? = nil
+        longFormRecoveryValidatedAt: Date? = nil,
+        meetingOperationID: UUID? = nil
     ) {
         self.id = id
         self.requestID = requestID
@@ -461,6 +463,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.lastTranscriptionFailureReason = lastTranscriptionFailureReason
         self.scratchpadText = scratchpadText
         self.longFormRecoveryValidatedAt = longFormRecoveryValidatedAt
+        self.meetingOperationID = meetingOperationID
     }
 
     var duration: TimeInterval? {
@@ -535,6 +538,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         case lastTranscriptionFailureReason
         case scratchpadText
         case longFormRecoveryValidatedAt
+        case meetingOperationID
     }
 
     init(from decoder: Decoder) throws {
@@ -577,6 +581,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
             Date.self,
             forKey: .longFormRecoveryValidatedAt
         )
+        meetingOperationID = try container.decodeIfPresent(UUID.self, forKey: .meetingOperationID)
     }
 }
 

@@ -106,7 +106,9 @@ struct MeetingsView: View {
                         session: session,
                         transcript: coordinator.transcript(for: session),
                         audioURL: coordinator.audioFileURL(for: session),
-                        isActiveRecording: coordinator.activeMeetingSessionID == session.id && coordinator.hasMeetingRecordingInProgress,
+                        isActiveRecording: coordinator.isActivelyRecordingMeeting(sessionID: session.id),
+                        canStopRecording: coordinator.canStopMeetingCapture(sessionID: session.id),
+                        isRecoveryNeeded: coordinator.meetingNeedsRecovery(sessionID: session.id),
                         isProcessingCurrentMeeting: session.phase == .transcribing,
                         inputLevel: coordinator.inputLevel,
                         statusText: coordinator.activeMeetingSessionID == session.id ? coordinator.effectiveMeetingStatusText : session.phase.title,
@@ -195,7 +197,13 @@ struct MeetingsView: View {
                 HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
                     MeetingIconTile(systemImage: coordinator.hasMeetingRecordingInProgress ? "waveform" : "mic.fill", tint: statusColor, size: 34)
 
-                    Text(coordinator.hasMeetingRecordingInProgress ? "Live meeting" : "Start a new meeting")
+                    Text(
+                        coordinator.isMeetingRecoveryNeeded
+                            ? "Meeting needs recovery"
+                            : (coordinator.isMeetingTranscribing
+                                ? "Meeting processing"
+                                : (coordinator.isMeetingCaptureVisible ? "Live meeting" : "Start a new meeting"))
+                    )
                         .font(MuesliTheme.headline())
                         .foregroundStyle(coordinator.hasMeetingRecordingInProgress ? statusColor : MuesliTheme.accent)
 
@@ -503,7 +511,7 @@ struct MeetingsView: View {
     }
 
     private var statusColor: Color {
-        if coordinator.hasMeetingRecordingInProgress {
+        if coordinator.isMeetingCaptureVisible {
             MuesliTheme.recording
         } else if coordinator.isMeetingTranscribing {
             MuesliTheme.transcribing
@@ -921,6 +929,8 @@ private struct MeetingSessionDetailView: View {
     let transcript: Transcript?
     let audioURL: URL?
     let isActiveRecording: Bool
+    let canStopRecording: Bool
+    let isRecoveryNeeded: Bool
     let isProcessingCurrentMeeting: Bool
     let inputLevel: Double
     let statusText: String
@@ -1042,6 +1052,16 @@ private struct MeetingSessionDetailView: View {
             guard manualNotesSaveState != .saving else { return }
             manualNotesDraft = newValue
         }
+        .onChange(of: session.phase) { _, phase in
+            if phase == .completed, hasMeetingSummary {
+                selectedContent = .notes
+            }
+        }
+        .onChange(of: hasMeetingSummary) { hadSummary, hasSummary in
+            if !hadSummary, hasSummary, session.phase == .completed {
+                selectedContent = .notes
+            }
+        }
         .onDisappear {
             guard !isLeavingAfterDestructiveAction else { return }
             flushPendingManualNotes()
@@ -1108,7 +1128,7 @@ private struct MeetingSessionDetailView: View {
 
     @ViewBuilder
     private var captureStatusSection: some View {
-        if isActiveRecording || isProcessingCurrentMeeting {
+        if canStopRecording || isProcessingCurrentMeeting {
             MeetingPanel(tint: captureTint, isProminent: isActiveRecording) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
@@ -1130,7 +1150,7 @@ private struct MeetingSessionDetailView: View {
                             }
 
                         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                            Text(isActiveRecording ? "Listening" : "Processing audio")
+                            Text(captureStatusTitle)
                                 .font(MuesliTheme.headline())
                                 .foregroundStyle(MuesliTheme.textPrimary)
                             Text(captureStatusCopy)
@@ -1140,7 +1160,7 @@ private struct MeetingSessionDetailView: View {
 
                         Spacer()
 
-                        if isActiveRecording {
+                        if canStopRecording {
                             Button(role: .destructive) {
                                 isConfirmingDiscardRecording = true
                             } label: {
@@ -1161,30 +1181,32 @@ private struct MeetingSessionDetailView: View {
                         }
                     }
 
-                    MuesliInlineWaveformView(
-                        mode: isActiveRecording ? .level : .waiting,
-                        color: captureTint,
-                        level: isActiveRecording ? inputLevel : nil,
-                        isActive: isActiveRecording || isProcessingCurrentMeeting,
-                        barCount: 34
-                    )
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 58)
-                    .padding(.horizontal, MuesliTheme.spacing12)
-                    .padding(.vertical, MuesliTheme.spacing12)
-                    .background(MuesliTheme.backgroundRaised.opacity(0.52))
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
-                            .strokeBorder(captureTint.opacity(0.18), lineWidth: 1)
-                    )
+                    if !isRecoveryNeeded {
+                        MuesliInlineWaveformView(
+                            mode: isActiveRecording ? .level : .waiting,
+                            color: captureTint,
+                            level: isActiveRecording ? inputLevel : nil,
+                            isActive: isActiveRecording || isProcessingCurrentMeeting,
+                            barCount: 34
+                        )
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 58)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .padding(.vertical, MuesliTheme.spacing12)
+                        .background(MuesliTheme.backgroundRaised.opacity(0.52))
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous)
+                                .strokeBorder(captureTint.opacity(0.18), lineWidth: 1)
+                        )
+                    }
 
-                    if isActiveRecording {
+                    if canStopRecording {
                         Button {
                             flushPendingManualNotes()
                             onStopRecording()
                         } label: {
-                            Label("Stop Meeting", systemImage: "stop.fill")
+                            Label(isRecoveryNeeded ? "Stop & Recover" : "Stop Meeting", systemImage: "stop.fill")
                                 .font(MuesliTheme.headline())
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
@@ -1365,7 +1387,7 @@ private struct MeetingSessionDetailView: View {
 
     @ViewBuilder
     private var detailActions: some View {
-        if isActiveRecording || isProcessingCurrentMeeting {
+        if canStopRecording || isProcessingCurrentMeeting {
             EmptyView()
         } else if session.phase == .transcriptionQueued {
             Button(action: onTranscribe) {
@@ -1432,7 +1454,7 @@ private struct MeetingSessionDetailView: View {
 
     @ViewBuilder
     private var deleteActionSection: some View {
-        if !isActiveRecording && !isProcessingCurrentMeeting {
+        if !canStopRecording && !isProcessingCurrentMeeting {
             Button {
                 isConfirmingDelete = true
             } label: {
@@ -1505,6 +1527,19 @@ private struct MeetingSessionDetailView: View {
         isActiveRecording ? MuesliTheme.recording : MuesliTheme.transcribing
     }
 
+    private var captureStatusTitle: String {
+        if isActiveRecording {
+            return "Listening"
+        }
+        if isRecoveryNeeded {
+            return "Recording interrupted"
+        }
+        if canStopRecording {
+            return "Preparing microphone"
+        }
+        return "Processing audio"
+    }
+
     private var detailStatusLine: String {
         "\(session.phase.headerTitle) · \(session.createdAt.formatted(date: .abbreviated, time: .shortened))"
     }
@@ -1513,6 +1548,9 @@ private struct MeetingSessionDetailView: View {
         if isActiveRecording {
             return "Audio is being captured locally"
         }
+        if isRecoveryNeeded || canStopRecording {
+            return statusText
+        }
         if isProcessingCurrentMeeting {
             return "Creating transcript and notes"
         }
@@ -1520,15 +1558,19 @@ private struct MeetingSessionDetailView: View {
     }
 
     private var shouldShowPostMeetingArtifacts: Bool {
-        !isActiveRecording && !isProcessingCurrentMeeting && session.phase != .recording && session.phase != .transcribing
+        !canStopRecording && !isProcessingCurrentMeeting && session.phase != .recording && session.phase != .transcribing
     }
 
     private var isCompletedMeeting: Bool {
         session.phase == .completed
     }
 
+    private var hasMeetingSummary: Bool {
+        !(transcript?.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
     private var canEditManualNotes: Bool {
-        isActiveRecording
+        canStopRecording
             || isProcessingCurrentMeeting
             || session.phase == .transcriptionQueued
             || isEditingCompletedManualNotes
@@ -1538,14 +1580,14 @@ private struct MeetingSessionDetailView: View {
         if transcript?.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             return "Generated Notes"
         }
-        if isActiveRecording || isProcessingCurrentMeeting || transcript != nil {
+        if canStopRecording || isProcessingCurrentMeeting || transcript != nil {
             return "Live Transcript"
         }
         return "Meeting Notes"
     }
 
     private var contentPlaceholder: String {
-        if isActiveRecording {
+        if canStopRecording {
             return "Transcript and generated notes will appear after the meeting is processed."
         }
         if isProcessingCurrentMeeting {

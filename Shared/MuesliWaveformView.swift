@@ -63,6 +63,34 @@ enum MuesliFloatingWaveformMode: Equatable {
     case waiting
 }
 
+enum MuesliKeyboardWaveformPresentation {
+    static func mode(for phase: DictationPhase) -> MuesliFloatingWaveformMode {
+        phase == .recording ? .level : .waiting
+    }
+
+    static func level(for phase: DictationPhase, inputLevel: Double) -> Double? {
+        phase == .recording ? min(max(inputLevel, 0), 1) : nil
+    }
+}
+
+struct MuesliWaveformLevelThrottle {
+    private var lastPublishedAt = Date.distantPast
+    private var lastPublishedLevel = 0.0
+
+    mutating func valueToPublish(_ rawLevel: Double, at now: Date = .now) -> Double? {
+        let elapsed = now.timeIntervalSince(lastPublishedAt)
+        let normalized = min(max(rawLevel, 0), 1)
+        let quantized = (normalized * 40).rounded() / 40
+        let changed = quantized != lastPublishedLevel
+
+        guard elapsed >= 0.1, changed || elapsed >= 0.5 else { return nil }
+
+        lastPublishedAt = now
+        lastPublishedLevel = quantized
+        return quantized
+    }
+}
+
 struct MuesliInlineWaveformView: View {
     var mode: MuesliFloatingWaveformMode
     var color: Color

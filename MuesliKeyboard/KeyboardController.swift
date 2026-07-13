@@ -137,11 +137,11 @@ final class KeyboardController {
     }
 
     var waveformMode: MuesliFloatingWaveformMode {
-        .waiting
+        MuesliKeyboardWaveformPresentation.mode(for: dictationPhase)
     }
 
     var waveformLevel: Double? {
-        nil
+        MuesliKeyboardWaveformPresentation.level(for: dictationPhase, inputLevel: inputLevel)
     }
 
     var canCancelActiveDictation: Bool {
@@ -605,7 +605,13 @@ final class KeyboardController {
     }
 
     private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
-        inputLevel = 0
+        let now = Date()
+        let hasFreshRecordingLevel = runtimeStatus.map {
+            $0.phase == .recording
+                && $0.activeRequestID == activeRequestID
+                && now.timeIntervalSince($0.updatedAt) < 2
+        } ?? false
+        inputLevel = hasFreshRecordingLevel ? (runtimeStatus?.inputLevel ?? 0) : 0
         canUseRuntimeStart = runtimeStatus?.canAcceptStartCommand == true
 
         guard activeRequestID == nil, canUseRuntimeStart else { return }

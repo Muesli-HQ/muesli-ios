@@ -161,7 +161,7 @@ final class DictationCoordinator {
     private var keyboardCommandProcessingInProgress = false
     private var keyboardSessionRetryTask: Task<Void, Never>?
     private var keyboardSessionRetryAttempt = 0
-    private var lastKeyboardRuntimeHeartbeatAt = Date.distantPast
+    private var keyboardWaveformLevelThrottle = MuesliWaveformLevelThrottle()
     private var keyboardSessionLiveActivityRequestIDs = Set<UUID>()
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
@@ -3549,7 +3549,7 @@ final class DictationCoordinator {
                     guard let self else { return }
                     self.inputLevel = level
                     if source == "keyboard" {
-                        self.publishKeyboardRecordingHeartbeat(requestID: request.id)
+                        self.publishKeyboardRuntimeLevel(level, requestID: request.id)
                     }
                 }
                 statusText = "Recording"
@@ -5673,8 +5673,10 @@ final class DictationCoordinator {
         activeRequestID: UUID?,
         phase: DictationPhase,
         message: String?,
-        supportsBackgroundStart: Bool = false
+        supportsBackgroundStart: Bool = false,
+        inputLevel: Double? = nil
     ) {
+        let runtimeInputLevel = inputLevel ?? (phase == .recording ? self.inputLevel : 0)
         let canAcceptStartCommand = isActive
             && supportsBackgroundStart
             && activeRequestID == nil
@@ -5686,21 +5688,20 @@ final class DictationCoordinator {
             message: message,
             supportsBackgroundStart: supportsBackgroundStart,
             canAcceptStartCommand: canAcceptStartCommand,
-            inputLevel: 0
+            inputLevel: runtimeInputLevel
         ))
     }
 
-    private func publishKeyboardRecordingHeartbeat(requestID: UUID) {
+    private func publishKeyboardRuntimeLevel(_ level: Double, requestID: UUID) {
         guard activeRequest?.id == requestID, isRecording else { return }
-        let now = Date()
-        guard now.timeIntervalSince(lastKeyboardRuntimeHeartbeatAt) >= 10 else { return }
-        lastKeyboardRuntimeHeartbeatAt = now
+        guard let publishedLevel = keyboardWaveformLevelThrottle.valueToPublish(level) else { return }
         saveKeyboardRuntimeStatus(
             isActive: true,
             activeRequestID: requestID,
             phase: .recording,
             message: "Listening",
-            supportsBackgroundStart: false
+            supportsBackgroundStart: false,
+            inputLevel: publishedLevel
         )
     }
 

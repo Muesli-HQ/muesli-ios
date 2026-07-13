@@ -86,4 +86,70 @@ final class SettingsModelCatalogTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: sibling.path))
     }
+
+    func testBackgroundDownloadTaskDescriptionPreservesAttemptIdentity() throws {
+        let attemptID = UUID()
+        let file = ModelDownloadFile(
+            remotePath: "Encoder.mlmodelc/model.mil",
+            localPath: "Encoder.mlmodelc/model.mil",
+            remoteURL: try XCTUnwrap(URL(string: "https://example.com/model.mil")),
+            size: 42
+        )
+
+        let description = file.taskDescription(model: .parakeetV3, attemptID: attemptID)
+        let restored = try XCTUnwrap(ModelDownloadFile(taskDescription: description))
+
+        XCTAssertEqual(restored.model, .parakeetV3)
+        XCTAssertEqual(restored.remotePath, file.remotePath)
+        XCTAssertEqual(restored.localPath, file.localPath)
+        XCTAssertEqual(restored.remoteURL, file.remoteURL)
+        XCTAssertEqual(restored.size, file.size)
+        XCTAssertEqual(restored.attemptID, attemptID)
+    }
+
+    func testLegacyBackgroundDownloadTaskDescriptionStillRestores() throws {
+        let description = [
+            LocalTranscriptionModel.parakeetV3.rawValue,
+            "Encoder.mlmodelc/model.mil",
+            "Encoder.mlmodelc/model.mil",
+            "https://example.com/model.mil",
+            "42",
+        ].joined(separator: "\n")
+
+        let restored = try XCTUnwrap(ModelDownloadFile(taskDescription: description))
+
+        XCTAssertEqual(restored.model, .parakeetV3)
+        XCTAssertNil(restored.attemptID)
+    }
+
+    func testStaleAttemptCannotMatchNewPlanForSameModel() throws {
+        let staleAttemptID = UUID()
+        let currentAttemptID = UUID()
+        let currentAttempt = ModelDownloadAttempt(
+            modelRawValue: LocalTranscriptionModel.parakeetV3.rawValue,
+            id: currentAttemptID
+        )
+        let plan = DownloadPlan(attempt: currentAttempt, totalBytes: 42, pendingCount: 1)
+        let staleFile = ModelDownloadFile(
+            remotePath: "Encoder.mlmodelc/model.mil",
+            localPath: "Encoder.mlmodelc/model.mil",
+            remoteURL: try XCTUnwrap(URL(string: "https://example.com/model.mil")),
+            size: 42,
+            model: .parakeetV3,
+            attemptID: staleAttemptID
+        )
+        let currentFile = ModelDownloadFile(
+            remotePath: staleFile.remotePath,
+            localPath: staleFile.localPath,
+            remoteURL: staleFile.remoteURL,
+            size: staleFile.size,
+            model: .parakeetV3,
+            attemptID: currentAttemptID
+        )
+
+        XCTAssertFalse(plan.matches(staleFile))
+        XCTAssertFalse(currentAttempt.matches(staleFile))
+        XCTAssertTrue(plan.matches(currentFile))
+        XCTAssertTrue(currentAttempt.matches(currentFile))
+    }
 }

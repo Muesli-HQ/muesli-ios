@@ -16,10 +16,12 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     @MainActor weak var delegate: ModelBackgroundDownloadServiceDelegate?
 
     private let stateQueue = DispatchQueue(label: "com.phequals7.muesli.model-background-download")
+    private var requestedAttempt: ModelDownloadAttempt?
     private var activePlan: DownloadPlan?
     private var taskBytes: [Int: Int64] = [:]
     private var activeTaskIDs = Set<Int>()
     private var failedTaskIDs = Set<Int>()
+    private var failedAttemptIDs = Set<UUID>()
     private var failedModelRawValues = Set<String>()
     private var backgroundCompletionHandler: SendableCompletionHandler?
     private var completedModelsDuringBackgroundEvents = Set<String>()
@@ -98,38 +100,69 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     }
 
     func startDownload(for model: LocalTranscriptionModel) async throws -> Bool {
-        let activeModelRawValue = stateQueue.sync { activePlan?.modelRawValue }
-        if activeModelRawValue == model.rawValue {
-            return true
-        }
-        if activeModelRawValue != nil {
-            let tasks = await session.allTasks
-            tasks.forEach { $0.cancel() }
-            stateQueue.sync {
-                activePlan = nil
-                taskBytes = [:]
-                activeTaskIDs = []
-                failedTaskIDs = []
+        let attemptID = UUID()
+        let attempt = ModelDownloadAttempt(modelRawValue: model.rawValue, id: attemptID)
+        let startDecision: (shouldStart: Bool, previousAttempt: ModelDownloadAttempt?) = stateQueue.sync {
+            if requestedAttempt?.modelRawValue == model.rawValue
+                || activePlan?.modelRawValue == model.rawValue {
+                return (false, nil)
             }
+
+            let previousAttempt = requestedAttempt ?? activePlan?.attempt
+            requestedAttempt = attempt
+            activePlan = nil
+            taskBytes = [:]
+            activeTaskIDs = []
+            failedTaskIDs = []
+            return (true, previousAttempt)
+        }
+        guard startDecision.shouldStart else { return true }
+
+        if let previousAttempt = startDecision.previousAttempt {
+            await cancelTasks(for: previousAttempt)
         }
 
         guard let spec = ModelDownloadSpec(model: model) else {
+            clearRequestedAttempt(ifMatching: attempt)
             return false
         }
 
-        let files = try await Self.listFiles(for: spec)
+        let files: [ModelDownloadFile]
+        do {
+            files = try await Self.listFiles(for: spec)
+        } catch {
+            clearRequestedAttempt(ifMatching: attempt)
+            throw error
+        }
         let missingFiles = files.filter { file in
             !FileManager.default.fileExists(atPath: spec.destinationURL(for: file.localPath).path)
         }
 
         guard !missingFiles.isEmpty else {
+            clearRequestedAttempt(ifMatching: attempt)
             return false
         }
 
         let totalBytes = missingFiles.reduce(Int64(0)) { partial, file in
             partial + max(0, file.size)
         }
-        let plan = DownloadPlan(modelRawValue: model.rawValue, totalBytes: max(totalBytes, 1), pendingCount: missingFiles.count)
+        let plan = DownloadPlan(
+            attempt: attempt,
+            totalBytes: max(totalBytes, 1),
+            pendingCount: missingFiles.count
+        )
+
+        let shouldStart: Bool = stateQueue.sync {
+            guard requestedAttempt == attempt else { return false }
+            activePlan = plan
+            taskBytes = [:]
+            activeTaskIDs = []
+            failedTaskIDs = []
+            failedAttemptIDs.remove(attemptID)
+            failedModelRawValues.remove(model.rawValue)
+            return true
+        }
+        guard shouldStart else { return false }
 
         await MainActor.run {
             delegate?.modelBackgroundDownloadDidUpdate(
@@ -139,43 +172,75 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             )
         }
 
-        stateQueue.sync {
-            activePlan = plan
-            taskBytes = [:]
-            activeTaskIDs = []
-            failedTaskIDs = []
-            failedModelRawValues.remove(model.rawValue)
-        }
-
-        for file in missingFiles {
-            try Task.checkCancellation()
-            let destination = spec.destinationURL(for: file.localPath)
-            try FileManager.default.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-
-            if file.size == 0 {
-                FileManager.default.createFile(atPath: destination.path, contents: Data())
-                stateQueue.async {
-                    self.activePlan?.pendingCount -= 1
-                    self.completeIfNeeded()
+        do {
+            for file in missingFiles {
+                try Task.checkCancellation()
+                guard stateQueue.sync(execute: { activePlan?.attempt == attempt }) else {
+                    return false
                 }
-                continue
-            }
+                let destination = spec.destinationURL(for: file.localPath)
+                try FileManager.default.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
 
-            var request = URLRequest(url: file.remoteURL)
-            request.timeoutInterval = 60 * 30
-            let task = session.downloadTask(with: request)
-            task.taskDescription = file.taskDescription(model: model)
-            stateQueue.sync {
-                taskBytes[task.taskIdentifier] = 0
-                activeTaskIDs.insert(task.taskIdentifier)
+                if file.size == 0 {
+                    FileManager.default.createFile(atPath: destination.path, contents: Data())
+                    stateQueue.async {
+                        guard self.activePlan?.attempt == attempt else { return }
+                        self.activePlan?.pendingCount -= 1
+                        self.completeIfNeeded()
+                    }
+                    continue
+                }
+
+                var request = URLRequest(url: file.remoteURL)
+                request.timeoutInterval = 60 * 30
+                let task = session.downloadTask(with: request)
+                task.taskDescription = file.taskDescription(model: model, attemptID: attemptID)
+                let shouldResume: Bool = stateQueue.sync {
+                    guard activePlan?.attempt == attempt else { return false }
+                    taskBytes[task.taskIdentifier] = 0
+                    activeTaskIDs.insert(task.taskIdentifier)
+                    return true
+                }
+                guard shouldResume else {
+                    task.cancel()
+                    return false
+                }
+                task.resume()
             }
-            task.resume()
+        } catch {
+            clearRequestedAttempt(ifMatching: attempt)
+            await cancelTasks(for: attempt)
+            throw error
         }
 
         return true
+    }
+
+    private func clearRequestedAttempt(ifMatching attempt: ModelDownloadAttempt) {
+        stateQueue.sync {
+            guard requestedAttempt == attempt else { return }
+            requestedAttempt = nil
+            if activePlan?.attempt == attempt {
+                activePlan = nil
+                taskBytes = [:]
+                activeTaskIDs = []
+                failedTaskIDs = []
+            }
+        }
+    }
+
+    private func cancelTasks(for attempt: ModelDownloadAttempt) async {
+        let tasks = await session.allTasks
+        tasks.filter { task in
+            guard let description = task.taskDescription,
+                  let file = ModelDownloadFile(taskDescription: description)
+            else { return false }
+            return attempt.matches(file)
+        }
+        .forEach { $0.cancel() }
     }
 
     private static func listFiles(for spec: ModelDownloadSpec) async throws -> [ModelDownloadFile] {
@@ -223,17 +288,20 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
         return files
     }
 
-    private func updateProgress(taskIdentifier: Int, bytesWritten: Int64) {
+    private func updateProgress(task: URLSessionTask, bytesWritten: Int64) {
         var snapshot: (LocalTranscriptionModel, Double)?
         stateQueue.sync {
             guard let plan = activePlan,
-                  activeTaskIDs.contains(taskIdentifier),
+                  let description = task.taskDescription,
+                  let file = ModelDownloadFile(taskDescription: description),
+                  plan.matches(file),
+                  activeTaskIDs.contains(task.taskIdentifier),
                   let model = LocalTranscriptionModel(rawValue: plan.modelRawValue)
             else {
                 snapshot = nil
                 return
             }
-            taskBytes[taskIdentifier] = bytesWritten
+            taskBytes[task.taskIdentifier] = bytesWritten
             let completed = taskBytes.values.reduce(Int64(0), +)
             snapshot = (model, min(max(Double(completed) / Double(plan.totalBytes), 0), 0.98))
         }
@@ -256,6 +324,20 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             throw URLError(.badURL)
         }
 
+        let shouldProcess = stateQueue.sync {
+            if let plan = activePlan {
+                return plan.matches(file) && activeTaskIDs.contains(task.taskIdentifier)
+            }
+            if let requestedAttempt {
+                return requestedAttempt.matches(file)
+            }
+            if let attemptID = file.attemptID {
+                return !failedAttemptIDs.contains(attemptID)
+            }
+            return !failedModelRawValues.contains(file.model.rawValue)
+        }
+        guard shouldProcess else { return }
+
         let destination = spec.destinationURL(for: file.localPath)
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
@@ -268,14 +350,22 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
 
         stateQueue.async {
             if self.activePlan == nil {
-                guard !self.failedModelRawValues.contains(file.model.rawValue) else { return }
+                if let requestedAttempt = self.requestedAttempt,
+                   !requestedAttempt.matches(file) {
+                    return
+                }
+                if let attemptID = file.attemptID {
+                    guard !self.failedAttemptIDs.contains(attemptID) else { return }
+                } else {
+                    guard !self.failedModelRawValues.contains(file.model.rawValue) else { return }
+                }
                 self.completedModelsDuringBackgroundEvents.insert(file.model.rawValue)
                 return
             }
 
             guard self.activeTaskIDs.remove(task.taskIdentifier) != nil,
                   self.failedTaskIDs.remove(task.taskIdentifier) == nil,
-                  self.activePlan?.modelRawValue == file.model.rawValue
+                  self.activePlan?.matches(file) == true
             else { return }
 
             self.activePlan?.pendingCount -= 1
@@ -287,6 +377,9 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     private func completeIfNeeded() {
         guard let plan = activePlan, plan.pendingCount <= 0 else { return }
         activePlan = nil
+        if requestedAttempt == plan.attempt {
+            requestedAttempt = nil
+        }
         taskBytes = [:]
         activeTaskIDs = []
         failedTaskIDs = []
@@ -307,41 +400,70 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     }
 
     private func fail(_ task: URLSessionTask?, error: Error) {
-        let taskModel = task?.taskDescription.flatMap { ModelDownloadFile(taskDescription: $0)?.model }
-        let (model, handler): (LocalTranscriptionModel?, SendableCompletionHandler?) = stateQueue.sync {
-            if let taskModel,
-               let activePlan,
-               activePlan.modelRawValue != taskModel.rawValue {
-                return (nil, nil)
+        let taskFile = task?.taskDescription.flatMap(ModelDownloadFile.init(taskDescription:))
+        let result: DownloadFailureResult = stateQueue.sync {
+            let attempt: ModelDownloadAttempt
+            if let taskFile {
+                attempt = ModelDownloadAttempt(
+                    modelRawValue: taskFile.model.rawValue,
+                    id: taskFile.attemptID
+                )
+                if let activePlan, !activePlan.matches(taskFile) {
+                    return .ignored
+                }
+                if activePlan == nil,
+                   let requestedAttempt,
+                   !requestedAttempt.matches(attempt) {
+                    return .ignored
+                }
+            } else if let activePlan {
+                attempt = activePlan.attempt
+            } else {
+                return .ignored
             }
-            let resolvedModel = taskModel ?? activePlan.flatMap { LocalTranscriptionModel(rawValue: $0.modelRawValue) }
-            if let resolvedModel, failedModelRawValues.contains(resolvedModel.rawValue) {
-                return (nil, nil)
+
+            if let attemptID = attempt.id {
+                guard !failedAttemptIDs.contains(attemptID) else { return .ignored }
+                failedAttemptIDs.insert(attemptID)
+            } else {
+                guard !failedModelRawValues.contains(attempt.modelRawValue) else { return .ignored }
+                failedModelRawValues.insert(attempt.modelRawValue)
             }
+
             if let task {
                 failedTaskIDs.insert(task.taskIdentifier)
             }
-            if let resolvedModel {
-                failedModelRawValues.insert(resolvedModel.rawValue)
+            if activePlan?.attempt.matches(attempt) == true {
+                activePlan = nil
+                taskBytes = [:]
+                activeTaskIDs = []
             }
-            activePlan = nil
-            taskBytes = [:]
-            activeTaskIDs = []
+            if requestedAttempt?.matches(attempt) == true {
+                requestedAttempt = nil
+            }
             let handler = backgroundCompletionHandler
             backgroundCompletionHandler = nil
-            return (resolvedModel, handler)
+            return DownloadFailureResult(
+                model: LocalTranscriptionModel(rawValue: attempt.modelRawValue),
+                attempt: attempt,
+                handler: handler
+            )
         }
 
+        guard let attempt = result.attempt else { return }
         session.getAllTasks { tasks in
             let tasksToCancel = tasks.filter { task in
-                task.taskDescription.flatMap(ModelDownloadFile.init(taskDescription:))?.model == model
+                guard let description = task.taskDescription,
+                      let file = ModelDownloadFile(taskDescription: description)
+                else { return false }
+                return attempt.matches(file)
             }
             tasksToCancel.forEach { $0.cancel() }
         }
 
-        guard let model else {
+        guard let model = result.model else {
             Task { @MainActor in
-                handler?()
+                result.handler?()
             }
             return
         }
@@ -351,7 +473,7 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
                 model: model,
                 message: "Download paused. Check your connection and try again."
             )
-            handler?()
+            result.handler?()
         }
     }
 }
@@ -364,7 +486,7 @@ extension ModelBackgroundDownloadService: URLSessionDownloadDelegate {
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
-        updateProgress(taskIdentifier: downloadTask.taskIdentifier, bytesWritten: totalBytesWritten)
+        updateProgress(task: downloadTask, bytesWritten: totalBytesWritten)
     }
 
     nonisolated func urlSession(
@@ -419,30 +541,63 @@ private final class SendableCompletionHandler: @unchecked Sendable {
     }
 }
 
-private struct DownloadPlan {
+struct ModelDownloadAttempt: Equatable, Sendable {
     let modelRawValue: String
-    let totalBytes: Int64
-    var pendingCount: Int
+    let id: UUID?
+
+    init(modelRawValue: String, id: UUID?) {
+        self.modelRawValue = modelRawValue
+        self.id = id
+    }
+
+    func matches(_ other: ModelDownloadAttempt) -> Bool {
+        modelRawValue == other.modelRawValue && id == other.id
+    }
+
+    func matches(_ file: ModelDownloadFile) -> Bool {
+        modelRawValue == file.model.rawValue && id == file.attemptID
+    }
 }
 
-private struct ModelDownloadFile {
+struct DownloadPlan {
+    let attempt: ModelDownloadAttempt
+    let totalBytes: Int64
+    var pendingCount: Int
+
+    var modelRawValue: String { attempt.modelRawValue }
+
+    func matches(_ file: ModelDownloadFile) -> Bool {
+        attempt.matches(file)
+    }
+}
+
+struct ModelDownloadFile {
     let remotePath: String
     let localPath: String
     let remoteURL: URL
     let size: Int64
     let model: LocalTranscriptionModel
+    let attemptID: UUID?
 
-    init(remotePath: String, localPath: String, remoteURL: URL, size: Int64, model: LocalTranscriptionModel? = nil) {
+    init(
+        remotePath: String,
+        localPath: String,
+        remoteURL: URL,
+        size: Int64,
+        model: LocalTranscriptionModel? = nil,
+        attemptID: UUID? = nil
+    ) {
         self.remotePath = remotePath
         self.localPath = localPath
         self.remoteURL = remoteURL
         self.size = size
         self.model = model ?? .defaultModel
+        self.attemptID = attemptID
     }
 
     init?(taskDescription: String) {
         let parts = taskDescription.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 5,
+        guard parts.count == 5 || parts.count == 6,
               let model = LocalTranscriptionModel(rawValue: parts[0]),
               let remoteURL = URL(string: parts[3]),
               let size = Int64(parts[4])
@@ -454,11 +609,32 @@ private struct ModelDownloadFile {
         localPath = parts[2]
         self.remoteURL = remoteURL
         self.size = size
+        if parts.count == 6 {
+            guard let attemptID = UUID(uuidString: parts[5]) else { return nil }
+            self.attemptID = attemptID
+        } else {
+            attemptID = nil
+        }
     }
 
-    func taskDescription(model: LocalTranscriptionModel) -> String {
-        [model.rawValue, remotePath, localPath, remoteURL.absoluteString, String(size)].joined(separator: "\n")
+    func taskDescription(model: LocalTranscriptionModel, attemptID: UUID) -> String {
+        [
+            model.rawValue,
+            remotePath,
+            localPath,
+            remoteURL.absoluteString,
+            String(size),
+            attemptID.uuidString,
+        ].joined(separator: "\n")
     }
+}
+
+private struct DownloadFailureResult {
+    let model: LocalTranscriptionModel?
+    let attempt: ModelDownloadAttempt?
+    let handler: SendableCompletionHandler?
+
+    static let ignored = DownloadFailureResult(model: nil, attempt: nil, handler: nil)
 }
 
 private struct ModelDownloadSpec {

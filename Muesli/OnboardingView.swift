@@ -608,7 +608,10 @@ struct OnboardingView: View {
 
     private var modelPicker: some View {
         MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
-            TranscriptionModelSelector(selection: $coordinator.selectedTranscriptionModel)
+            TranscriptionModelSelector(
+                selection: $coordinator.selectedTranscriptionModel,
+                preparation: coordinator.modelPreparation
+            )
             .padding(MuesliTheme.spacing16)
         }
     }

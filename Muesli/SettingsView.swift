@@ -31,78 +31,97 @@ struct SettingsView: View {
     @State private var selectedSettingsSection: SettingsSection?
     @State private var isSyncQRCodeScannerPresented = false
     @State private var isApplyingQRCodeSyncEnable = false
+    @State private var modelPendingRemoval: LocalTranscriptionModel?
+    @State private var isModelRemovalConfirmationPresented = false
+    @State private var modelBeingRemoved: LocalTranscriptionModel?
+    @State private var modelRemovalErrorMessage: String?
 
     var body: some View {
         NavigationStack {
             settingsContent
-            .background(MuesliTheme.backgroundBase)
-            .toolbar(.hidden, for: .navigationBar)
-            .onAppear {
-                refreshVisibleSettingsIfNeeded()
-                openRequestedSyncPrivacySection()
-                openRequestedInputSection()
-            }
-            .onChange(of: isActive) { _, active in
-                guard active else { return }
-                refreshVisibleSettingsIfNeeded()
-                openRequestedSyncPrivacySection()
-                openRequestedInputSection()
-            }
-            .onChange(of: openSyncPrivacyRequest) { _, _ in
-                openRequestedSyncPrivacySection()
-            }
-            .onChange(of: openInputRequest) { _, _ in
-                openRequestedInputSection()
-            }
-            .sheet(isPresented: $isSyncQRCodeScannerPresented) {
-                SyncQRCodeScannerView(
-                    isSyncAlreadyEnabled: iCloudSyncEnabled,
-                    onOpenSyncURL: { url in
-                        coordinator.handleOpenURL(url)
-                    },
-                    onEnableSyncURL: { _ in
-                        enablePrivateICloudSyncFromQR()
+                .background(MuesliTheme.backgroundBase)
+                .toolbar(.hidden, for: .navigationBar)
+                .onAppear {
+                    refreshVisibleSettingsIfNeeded()
+                    openRequestedSyncPrivacySection()
+                    openRequestedInputSection()
+                }
+                .onChange(of: isActive) { _, active in
+                    guard active else { return }
+                    refreshVisibleSettingsIfNeeded()
+                    openRequestedSyncPrivacySection()
+                    openRequestedInputSection()
+                }
+                .onChange(of: openSyncPrivacyRequest) { _, _ in
+                    openRequestedSyncPrivacySection()
+                }
+                .onChange(of: openInputRequest) { _, _ in
+                    openRequestedInputSection()
+                }
+                .sheet(isPresented: $isSyncQRCodeScannerPresented) {
+                    SyncQRCodeScannerView(
+                        isSyncAlreadyEnabled: iCloudSyncEnabled,
+                        onOpenSyncURL: { url in
+                            coordinator.handleOpenURL(url)
+                        },
+                        onEnableSyncURL: { _ in
+                            enablePrivateICloudSyncFromQR()
+                        }
+                    )
+                }
+                .onChange(of: liveActivitiesForDictations) { _, _ in
+                    coordinator.applyLiveActivityPreferences()
+                }
+                .onChange(of: liveActivitiesForMeetings) { _, _ in
+                    coordinator.applyLiveActivityPreferences()
+                }
+                .onChange(of: keyboardSessionMode) { _, enabled in
+                    guard isActive else { return }
+                    coordinator.setKeyboardSessionModeEnabled(enabled)
+                }
+                .onChange(of: microphonePreference) { _, newValue in
+                    guard isActive else { return }
+                    coordinator.refreshAudioInputRoute()
+                    AppTelemetry.signal("recording_microphone_preference_changed", parameters: ["preference": newValue])
+                }
+                .onChange(of: openRouterAPIKey) { _, newValue in
+                    saveOpenRouterAPIKey(newValue)
+                }
+                .onChange(of: iCloudSyncEnabled) { _, enabled in
+                    if enabled && isApplyingQRCodeSyncEnable {
+                        isApplyingQRCodeSyncEnable = false
+                        return
                     }
-                )
-            }
-            .onChange(of: liveActivitiesForDictations) { _, _ in
-                coordinator.applyLiveActivityPreferences()
-            }
-            .onChange(of: liveActivitiesForMeetings) { _, _ in
-                coordinator.applyLiveActivityPreferences()
-            }
-            .onChange(of: keyboardSessionMode) { _, enabled in
-                guard isActive else { return }
-                coordinator.setKeyboardSessionModeEnabled(enabled)
-            }
-            .onChange(of: microphonePreference) { _, newValue in
-                guard isActive else { return }
-                coordinator.refreshAudioInputRoute()
-                AppTelemetry.signal("recording_microphone_preference_changed", parameters: ["preference": newValue])
-            }
-            .onChange(of: openRouterAPIKey) { _, newValue in
-                saveOpenRouterAPIKey(newValue)
-            }
-            .onChange(of: iCloudSyncEnabled) { _, enabled in
-                if enabled && isApplyingQRCodeSyncEnable {
-                    isApplyingQRCodeSyncEnable = false
-                    return
+                    AppTelemetry.signal(
+                        "icloud_sync_toggled",
+                        parameters: ["enabled": enabled ? "true" : "false"]
+                    )
+                    appleSyncStatusText = enabled
+                        ? "Private iCloud sync is on. Open Muesli on your Mac to see the same text history."
+                        : "iCloud sync is off. Your data stays local on this iPhone."
+                    if enabled {
+                        AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "settings"])
+                        coordinator.syncICloudTextIfEnabled(reason: "settings_toggle")
+                    } else {
+                        coordinator.iCloudSyncStatusText = "iCloud sync is off."
+                    }
+                    refreshAppleSyncSettings()
                 }
-                AppTelemetry.signal(
-                    "icloud_sync_toggled",
-                    parameters: ["enabled": enabled ? "true" : "false"]
-                )
-                appleSyncStatusText = enabled
-                    ? "Private iCloud sync is on. Open Muesli on your Mac to see the same text history."
-                    : "iCloud sync is off. Your data stays local on this iPhone."
-                if enabled {
-                    AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "settings"])
-                    coordinator.syncICloudTextIfEnabled(reason: "settings_toggle")
-                } else {
-                    coordinator.iCloudSyncStatusText = "iCloud sync is off."
-                }
-                refreshAppleSyncSettings()
+        }
+        .alert(
+            modelPendingRemoval.map { "Remove \($0.shortName)?" } ?? "Remove model?",
+            isPresented: $isModelRemovalConfirmationPresented,
+            presenting: modelPendingRemoval
+        ) { model in
+            Button("Remove Download", role: .destructive) {
+                removeDownloadedModel(model)
+                modelPendingRemoval = nil
             }
+            Button("Cancel", role: .cancel) {
+                modelPendingRemoval = nil
+            }
+        } message: { model in
+            Text(modelRemovalConfirmationMessage(for: model))
         }
     }
 
@@ -147,7 +166,7 @@ struct SettingsView: View {
             Text("Settings")
                 .font(MuesliTheme.title1())
                 .foregroundStyle(MuesliTheme.textPrimary)
-            Text("Configure Muesli without mixing setup into the main workspace.")
+            Text("Voice notes, meetings, local models, and privacy.")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
         }
@@ -181,8 +200,8 @@ struct SettingsView: View {
     @ViewBuilder
     private func settingsSectionContent(_ section: SettingsSection) -> some View {
         switch section {
-        case .general:
-            generalSettings
+        case .about:
+            AboutSettingsContent()
         case .appearance:
             appearanceSettings
         case .input:
@@ -197,17 +216,6 @@ struct SettingsView: View {
             syncPrivacySettings
         case .aiSummaries:
             aiSummarySettings
-        }
-    }
-
-    private var generalSettings: some View {
-        MuesliSurface {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                SettingsRow(icon: "lock.shield", title: "Processing", value: "On device")
-                Divider().overlay(MuesliTheme.surfaceBorder)
-                SettingsRow(icon: "iphone", title: "App Data", value: "Local SQLite")
-            }
-            .padding(MuesliTheme.spacing16)
         }
     }
 
@@ -325,9 +333,19 @@ struct SettingsView: View {
                         valueColor: MuesliTheme.textSecondary
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
-                    TranscriptionModelSelector(selection: $coordinator.selectedTranscriptionModel)
+                    TranscriptionModelSelector(
+                        selection: $coordinator.selectedTranscriptionModel,
+                        preparation: coordinator.modelPreparation,
+                        onSelect: coordinator.selectTranscriptionModel
+                    )
                     Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsRow(icon: "cpu", title: "Runtime", value: "CoreML / ANE")
+                    SettingsRow(
+                        icon: "cpu",
+                        title: "Runtime",
+                        value: coordinator.selectedTranscriptionModel.family == .whisper
+                            ? "WhisperKit / CoreML"
+                            : "FluidAudio / CoreML"
+                    )
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsRow(icon: "textformat", title: "Language", value: coordinator.selectedTranscriptionModel.capabilityLabel)
                     Divider().overlay(MuesliTheme.surfaceBorder)
@@ -347,23 +365,158 @@ struct SettingsView: View {
                         ProgressView(value: progress)
                             .tint(MuesliTheme.accent)
                     }
-                    Button {
-                        coordinator.prepareModel()
-                    } label: {
-                        Label(modelButtonTitle, systemImage: modelButtonIcon)
-                            .font(MuesliTheme.headline())
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                            .foregroundStyle(modelButtonDisabled ? MuesliTheme.textTertiary : .white)
-                            .background(modelButtonDisabled ? MuesliTheme.surfacePrimary : MuesliTheme.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                            .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    if coordinator.modelPreparation.phase == .failed {
+                        Button {
+                            coordinator.prepareModel()
+                        } label: {
+                            Label("Retry Download", systemImage: "arrow.clockwise")
+                                .font(MuesliTheme.headline())
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                                .foregroundStyle(.white)
+                                .background(MuesliTheme.accent)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(modelButtonDisabled)
                 }
                 .padding(MuesliTheme.spacing16)
             }
+
+            downloadedModelsSettings
+        }
+    }
+
+    private var downloadedModelsSettings: some View {
+        MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Label("Downloaded Models", systemImage: "internaldrive")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text("Remove models you no longer use to reclaim local storage.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let modelRemovalErrorMessage {
+                    Label(modelRemovalErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.destructive)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if downloadedTranscriptionModels.isEmpty {
+                    Text("No transcription models are stored locally.")
+                        .font(MuesliTheme.callout())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .padding(.vertical, MuesliTheme.spacing4)
+                } else {
+                    ForEach(Array(downloadedTranscriptionModels.enumerated()), id: \.element.id) { index, model in
+                        if index > 0 {
+                            Divider().overlay(MuesliTheme.surfaceBorder)
+                        }
+                        downloadedModelRow(model)
+                    }
+                }
+
+                if !coordinator.canRemoveDownloadedModels,
+                   modelBeingRemoved == nil,
+                   !downloadedTranscriptionModels.isEmpty {
+                    Text("Finish the current recording, transcription, or model download before removing a model.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(MuesliTheme.spacing16)
+        }
+    }
+
+    private func downloadedModelRow(_ model: LocalTranscriptionModel) -> some View {
+        HStack(spacing: MuesliTheme.spacing12) {
+            Image(systemName: model.family == .whisper ? "waveform" : "waveform.path.ecg")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(MuesliTheme.accent)
+                .frame(width: 34, height: 34)
+                .background(MuesliTheme.accentSubtle)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                HStack(spacing: MuesliTheme.spacing4) {
+                    Text(model.displayName)
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .lineLimit(1)
+                    if model == coordinator.selectedTranscriptionModel {
+                        Text("Active")
+                            .font(MuesliTheme.captionMedium())
+                            .foregroundStyle(MuesliTheme.accent)
+                            .padding(.horizontal, MuesliTheme.spacing8)
+                            .padding(.vertical, 2)
+                            .background(MuesliTheme.accentSubtle)
+                            .clipShape(Capsule())
+                    }
+                }
+                Text(model.estimatedSizeLabel)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+
+            Spacer(minLength: MuesliTheme.spacing8)
+
+            if modelBeingRemoved == model {
+                ProgressView()
+                    .tint(MuesliTheme.destructive)
+                    .frame(width: 36, height: 36)
+                    .accessibilityLabel("Removing \(model.displayName)")
+            } else {
+                Button {
+                    modelRemovalErrorMessage = nil
+                    modelPendingRemoval = model
+                    isModelRemovalConfirmationPresented = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.destructive)
+                        .frame(width: 36, height: 36)
+                        .background(MuesliTheme.destructive.opacity(0.10))
+                        .clipShape(Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!coordinator.canRemoveDownloadedModels)
+                .accessibilityLabel("Remove \(model.displayName)")
+                .accessibilityIdentifier("model.remove.\(model.rawValue)")
+            }
+        }
+    }
+
+    private var downloadedTranscriptionModels: [LocalTranscriptionModel] {
+        LocalTranscriptionModel.allCases.filter { model in
+            model.isDownloaded
+                || (model == coordinator.selectedTranscriptionModel && coordinator.modelPreparation.isReady)
+        }
+    }
+
+    private func modelRemovalConfirmationMessage(for model: LocalTranscriptionModel) -> String {
+        let storage = "This permanently removes \(model.displayName) from this iPhone and frees its local storage."
+        guard model == coordinator.selectedTranscriptionModel else { return storage }
+        return "\(storage) It remains selected but unavailable until you select it again to download it."
+    }
+
+    private func removeDownloadedModel(_ model: LocalTranscriptionModel) {
+        modelBeingRemoved = model
+        modelRemovalErrorMessage = nil
+        Task {
+            do {
+                try await coordinator.removeDownloadedModel(model)
+            } catch {
+                modelRemovalErrorMessage = error.localizedDescription
+            }
+            modelBeingRemoved = nil
         }
     }
 
@@ -536,36 +689,6 @@ struct SettingsView: View {
         MeetingSummaryBackend(rawValue: meetingSummaryBackend) ?? .openRouter
     }
 
-    private var modelButtonTitle: String {
-        switch coordinator.modelPreparation.phase {
-        case .ready:
-            "Model Ready"
-        case .downloading, .preparing:
-            "Preparing"
-        case .failed:
-            "Try Again"
-        case .idle:
-            "Prepare Model"
-        }
-    }
-
-    private var modelButtonIcon: String {
-        switch coordinator.modelPreparation.phase {
-        case .ready:
-            "checkmark"
-        case .downloading, .preparing:
-            "arrow.down"
-        case .failed:
-            "arrow.clockwise"
-        case .idle:
-            "square.and.arrow.down"
-        }
-    }
-
-    private var modelButtonDisabled: Bool {
-        coordinator.modelPreparation.isReady || coordinator.modelPreparation.isPreparing
-    }
-
     private func refreshSummarySettings() {
         openRouterAPIKey = MeetingSummaryClient.storedOpenRouterAPIKey()
         chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
@@ -659,78 +782,78 @@ struct SettingsView: View {
 
 }
 
-private enum SettingsSection: String, CaseIterable, Identifiable {
-    case general
-    case appearance
+enum SettingsSection: String, CaseIterable, Identifiable {
     case input
-    case dictionary
     case meetings
+    case dictionary
     case models
-    case syncPrivacy
     case aiSummaries
+    case syncPrivacy
+    case appearance
+    case about
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .general:
-            "Status"
-        case .appearance:
-            "Appearance"
         case .input:
             "Voice Notes"
-        case .dictionary:
-            "Dictionary"
         case .meetings:
             "Meetings"
+        case .dictionary:
+            "Dictionary"
         case .models:
             "Models"
-        case .syncPrivacy:
-            "Sync & Privacy"
         case .aiSummaries:
             "AI Summaries"
+        case .syncPrivacy:
+            "Sync & Privacy"
+        case .appearance:
+            "Appearance"
+        case .about:
+            "About"
         }
     }
 
     var detail: String {
         switch self {
-        case .general:
-            "Current local processing and storage state."
-        case .appearance:
-            "Color theme, light and dark mode, and app accent."
         case .input:
             "Recording retention, live activities, keyboard setup, and voice note sessions."
-        case .dictionary:
-            "Filler word removal, custom phrases, names, and acronyms."
         case .meetings:
             "Recording, audio retention, live activities, and note templates."
+        case .dictionary:
+            "Filler word removal, custom phrases, names, and acronyms."
         case .models:
-            "Local transcription runtime and model preparation."
-        case .syncPrivacy:
-            "Private iCloud sync between this iPhone and your Mac."
+            "Choose and automatically download local Parakeet or Whisper models."
         case .aiSummaries:
             "Meeting summary providers, auth, and model selection."
+        case .syncPrivacy:
+            "Private iCloud sync between this iPhone and your Mac."
+        case .appearance:
+            "Color theme, light and dark mode, and app accent."
+        case .about:
+            "Version, source code, privacy, and open-source acknowledgements."
         }
     }
 
     var icon: String {
         switch self {
-        case .general:
-            "switch.2"
-        case .appearance:
-            "paintpalette"
         case .input:
             "keyboard"
-        case .dictionary:
-            "character.book.closed"
         case .meetings:
             "person.2.wave.2"
+        case .dictionary:
+            "character.book.closed"
         case .models:
             "cpu"
-        case .syncPrivacy:
-            "icloud"
         case .aiSummaries:
             "sparkles"
+        case .syncPrivacy:
+            "icloud"
+        case .appearance:
+            "paintpalette"
+        case .about:
+            "info.circle"
         }
     }
 
@@ -1424,27 +1547,35 @@ final class AppleSyncAccountManager {
     }
 
     private func iCloudStatus() async -> (label: String, isAvailable: Bool) {
-        await withCheckedContinuation { continuation in
-            CKContainer.default().accountStatus { status, error in
-                if error != nil {
-                    continuation.resume(returning: ("Unavailable", false))
-                    return
+        // UI tests intentionally use an unsigned app bundle. CloudKit aborts
+        // that process before invoking its completion handler because the
+        // signed iCloud entitlements are absent.
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.uiTestingLaunchArgument) {
+            return ("Unavailable", false)
+        }
+
+        return await withCheckedContinuation { continuation in
+            CKContainer(identifier: ICloudTextSyncEngine.containerIdentifier)
+                .accountStatus { status, error in
+                    if error != nil {
+                        continuation.resume(returning: ("Unavailable", false))
+                        return
+                    }
+                    switch status {
+                    case .available:
+                        continuation.resume(returning: ("Available", true))
+                    case .noAccount:
+                        continuation.resume(returning: ("No iCloud account", false))
+                    case .restricted:
+                        continuation.resume(returning: ("Restricted", false))
+                    case .couldNotDetermine:
+                        continuation.resume(returning: ("Unknown", false))
+                    case .temporarilyUnavailable:
+                        continuation.resume(returning: ("Temporarily unavailable", false))
+                    @unknown default:
+                        continuation.resume(returning: ("Unknown", false))
+                    }
                 }
-                switch status {
-                case .available:
-                    continuation.resume(returning: ("Available", true))
-                case .noAccount:
-                    continuation.resume(returning: ("No iCloud account", false))
-                case .restricted:
-                    continuation.resume(returning: ("Restricted", false))
-                case .couldNotDetermine:
-                    continuation.resume(returning: ("Unknown", false))
-                case .temporarilyUnavailable:
-                    continuation.resume(returning: ("Temporarily unavailable", false))
-                @unknown default:
-                    continuation.resume(returning: ("Unknown", false))
-                }
-            }
         }
     }
 }

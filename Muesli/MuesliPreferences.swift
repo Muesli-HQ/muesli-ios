@@ -9,6 +9,7 @@ enum MuesliPreferences {
     static let fillerWordRemovalKey = "muesli.transcription.fillerWordRemoval"
     static let customDictionaryKey = "muesli.transcription.customDictionary"
     static let transcriptionModelKey = "muesli.transcription.localModel"
+    static let manuallyRemovedTranscriptionModelKey = "muesli.transcription.manuallyRemovedModel"
     static let keepDictationAudioRecordingsKey = "muesli.dictations.keepAudioRecordings"
     static let longVoiceNoteModeEnabledKey = "muesli.dictations.longVoiceNoteMode.enabled"
     static let longVoiceNoteThresholdSecondsKey = "muesli.dictations.longVoiceNoteMode.thresholdSeconds"
@@ -58,6 +59,12 @@ enum MuesliPreferences {
         LocalTranscriptionModel(
             rawValue: UserDefaults.standard.string(forKey: transcriptionModelKey) ?? ""
         ) ?? .defaultModel
+    }
+
+    static var manuallyRemovedTranscriptionModel: LocalTranscriptionModel? {
+        LocalTranscriptionModel(
+            rawValue: UserDefaults.standard.string(forKey: manuallyRemovedTranscriptionModelKey) ?? ""
+        )
     }
 
     static var keepDictationAudioRecordingsEnabled: Bool {

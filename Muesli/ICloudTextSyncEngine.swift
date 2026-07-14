@@ -186,8 +186,10 @@ enum MuesliBridgeDeviceIdentity {
 }
 
 final class ICloudTextSyncEngine {
+    static let containerIdentifier = "iCloud.com.mueslihq.muesli"
+
     private enum Schema {
-        static let containerIdentifier = "iCloud.com.mueslihq.muesli"
+        static let containerIdentifier = ICloudTextSyncEngine.containerIdentifier
         static let syncZoneName = "MuesliSyncZone"
         static let textRecordType = "MuesliTextRecord"
         static let bridgeDeviceRecordType = "MuesliBridgeDevice"

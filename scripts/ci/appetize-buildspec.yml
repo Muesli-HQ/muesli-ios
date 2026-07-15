@@ -18,7 +18,8 @@ phases:
   build:
     commands:
       - set -euo pipefail
-      - xcodebuild \
+      - |
+        xcodebuild \
           -project "$PROJECT" \
           -scheme "$SCHEME" \
           -configuration "$CONFIGURATION" \

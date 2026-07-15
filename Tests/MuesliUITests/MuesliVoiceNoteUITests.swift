@@ -53,4 +53,83 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
         XCTAssertFalse(app.staticTexts["Audio saved"].exists)
         XCTAssertFalse(app.staticTexts["Transcribing"].exists)
     }
+
+    /// Deterministic (CI-safe) copy + share coverage driven by the seeded
+    /// completed-dictation fixture. The fixture seeds one completed quick
+    /// dictation (transcript "Completed dictation transcript for copy and
+    /// share.") with retained audio, so the history row is openable into the
+    /// audio-detail screen (ShareLink).
+    func testCompletedDictationCopyAndShareFixture() {
+        let app = launchApp([UITestArgs.completedDictation])
+
+        // The seeded transcript renders on the main voice-notes screen.
+        let transcript = app.staticTexts["Completed dictation transcript for copy and share."]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 8))
+
+        // COPY on the MAIN screen: tap the directly-tappable history-row copy
+        // control and immediately assert the "Copied" status appears in the
+        // history header. `dictation.clipboardStatus` auto-clears after ~1.2s,
+        // so it must be asserted right after tapping (never from the detail
+        // screen, which does not render it).
+        let copyButton = app.buttons["dictation.copyButton"]
+        XCTAssertTrue(copyButton.waitForExistence(timeout: 5))
+        copyButton.tap()
+
+        let clipboardStatus = app.descendants(matching: .any)["dictation.clipboardStatus"]
+        XCTAssertTrue(clipboardStatus.waitForExistence(timeout: 2))
+
+        // SHARE in DETAIL: open the seeded history row by its dynamic
+        // `dictation.historyRow.<uuid>` identifier. The uuid is generated at
+        // runtime, so match any element whose identifier begins with the stable
+        // prefix rather than reconstructing the full string.
+        let historyRow = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH 'dictation.historyRow.'")
+        ).firstMatch
+        XCTAssertTrue(historyRow.waitForExistence(timeout: 5))
+        historyRow.tap()
+
+        // The audio-detail screen exposes the ShareLink. Assert it exists and is
+        // hittable, but do NOT tap it (that would open the system share sheet).
+        let shareButton = app.buttons["dictation.shareButton"]
+        XCTAssertTrue(shareButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(shareButton.isHittable)
+    }
+
+    /// Best-effort real-record coverage. Asserts only deterministic UI state
+    /// transitions (never transcript text) and tolerates both the microphone
+    /// permission grant and deny branches on the runner.
+    func testRealRecordTogglesRecordingStateAndDiscard() {
+        let app = launchApp()
+        addMicPermissionMonitor(on: app)
+
+        let primaryButton = app.buttons["dictation.primaryButton"]
+        XCTAssertTrue(primaryButton.waitForExistence(timeout: 8))
+        primaryButton.tap()
+
+        // Trigger the interruption monitor (and fall back to springboard) so a
+        // pending microphone permission alert is answered.
+        app.tap()
+        grantMicPermissionViaSpringboard()
+
+        // The cancel/discard control ("Discard Recording") is only present while
+        // recording, so its appearance signals the grant branch.
+        let cancelButton = app.buttons["dictation.cancelButton"]
+        if cancelButton.waitForExistence(timeout: 8) {
+            // GRANT branch: recording state is active. Tapping the discard
+            // control immediately cancels the recording (there is no secondary
+            // confirmation dialog for quick dictation), so the recording UI must
+            // disappear.
+            cancelButton.tap()
+            XCTAssertTrue(
+                cancelButton.waitForNonExistence(timeout: 8),
+                "Recording UI should disappear after discarding"
+            )
+            XCTAssertTrue(primaryButton.waitForExistence(timeout: 5))
+        } else {
+            // DENY branch: no recording started. The app must remain in a
+            // graceful idle state with the primary button still available.
+            XCTAssertTrue(primaryButton.waitForExistence(timeout: 5))
+            XCTAssertFalse(cancelButton.exists)
+        }
+    }
 }

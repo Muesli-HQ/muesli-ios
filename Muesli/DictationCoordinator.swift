@@ -1814,7 +1814,14 @@ final class DictationCoordinator {
             CustomWord(word: "GPT", replacement: "ChatGPT"),
         ]
         for customWord in seededWords {
-            try? store.addCustomWord(customWord)
+            do {
+                try store.addCustomWord(customWord)
+            } catch {
+                // Surface seed failures in the xcodebuild test log instead of
+                // silently swallowing them (the SharedStore UI-testing fallback
+                // should make this succeed even without the App Group entitlement).
+                print("[UITest] Failed to seed dictionary custom word '\(customWord.word)': \(error)")
+            }
         }
     }
 

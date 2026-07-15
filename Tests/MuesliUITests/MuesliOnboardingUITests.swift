@@ -143,10 +143,21 @@ final class MuesliOnboardingUITests: MuesliUITestCase {
         // If the mic is already denied ("Open Settings"), it is effectively blocked
         // already — do NOT tap, since tapping would call `openAppSettings()` and
         // navigate out of the app. Otherwise ("Grant"/undetermined) tap and deny
-        // the springboard alert.
+        // the springboard alert, then assert the denial genuinely happened so the
+        // blocked-state assertions below actually exercise the denied branch (not a
+        // pre-existing disabled state).
         if micButton.label != "Open Settings" {
             micButton.tap()
-            denyMicPermissionViaSpringboard()
+            XCTAssertTrue(
+                denyMicPermissionViaSpringboard(),
+                "Expected to tap the deny button on the microphone permission alert"
+            )
+            // After denial the mic row must surface the denied state ("Open
+            // Settings", see OnboardingView.microphonePermissionButtonTitle).
+            XCTAssertTrue(
+                waitForLabel(micButton, equals: "Open Settings", timeout: 6),
+                "microphone button should reflect the denied state after tapping Don’t Allow"
+            )
         }
 
         let primary = app.buttons["onboarding.primaryButton"]
@@ -216,13 +227,24 @@ final class MuesliOnboardingUITests: MuesliUITestCase {
         return micButton.label == "Granted" || primary.isEnabled
     }
 
-    /// Taps the springboard "Don't Allow"/"Deny" button for the microphone alert.
+    /// Waits until `element.label` equals `value`, up to `timeout` seconds.
+    /// Returns whether the label matched within the timeout.
+    private func waitForLabel(_ element: XCUIElement, equals value: String, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "label == %@", value)
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    /// Taps the springboard deny button for the microphone alert.
     /// Safe no-op if no springboard alert is present (tolerates the alert
     /// appearing or not).
     @discardableResult
     private func denyMicPermissionViaSpringboard(timeout: TimeInterval = 4) -> Bool {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        for label in ["Don't Allow", "Deny"] {
+        // iOS renders the deny button as "Don’t Allow" with a CURLY apostrophe
+        // (U+2019) on-device; try that first, then the straight-quote variant, then
+        // "Deny" as a fallback.
+        for label in ["Don\u{2019}t Allow", "Don't Allow", "Deny"] {
             let button = springboard.buttons[label]
             if button.waitForExistence(timeout: timeout) {
                 button.tap()

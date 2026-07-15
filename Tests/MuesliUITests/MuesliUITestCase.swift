@@ -49,7 +49,12 @@ class MuesliUITestCase: XCTestCase {
     @discardableResult
     func launchOnboardingApp() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [UITestArgs.onboarding]
+        // Both args are required: the coordinator's UI-testing gate only fires on
+        // `UITestArgs.uiTesting`, and its onboarding branch (which resets onboarding
+        // to INCOMPLETE and seeds model-ready) only runs when `UITestArgs.onboarding`
+        // is also present. Passing only the onboarding arg would skip the reset, so
+        // onboarding state would leak between tests.
+        app.launchArguments = [UITestArgs.uiTesting, UITestArgs.onboarding]
         app.launch()
         return app
     }

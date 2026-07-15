@@ -5,9 +5,9 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
     func testVoiceNotePreviewExpandsAndShowsMetadataBadges() {
         let app = launchApp([UITestArgs.mockDictations])
 
-        let readMore = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH 'dictation.readMore.'")
-        ).firstMatch
+        let readMore = firstElement(
+            matchingIdentifierPrefix: "dictation.readMore.", ofType: .button, in: app
+        )
         XCTAssertTrue(readMore.waitForExistence(timeout: 8))
         XCTAssertTrue(app.descendants(matching: .any)["voiceNote.badge.notes"].firstMatch.exists)
         XCTAssertTrue(app.descendants(matching: .any)["voiceNote.badge.longForm"].firstMatch.exists)
@@ -16,17 +16,11 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
 
         XCTAssertTrue(app.buttons[readMore.identifier].waitForExistence(timeout: 3))
         XCTAssertEqual(app.buttons[readMore.identifier].label, "Show less")
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Expanded voice note preview with metadata badges"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
+        attachScreenshot(app, named: "Expanded voice note preview with metadata badges")
 
         app.buttons[readMore.identifier].tap()
         XCTAssertEqual(app.buttons[readMore.identifier].label, "Read more")
-        let collapsedScreenshot = XCTAttachment(screenshot: app.screenshot())
-        collapsedScreenshot.name = "Collapsed four-line voice note preview"
-        collapsedScreenshot.lifetime = .keepAlways
-        add(collapsedScreenshot)
+        attachScreenshot(app, named: "Collapsed four-line voice note preview")
     }
 
     func testLongVoiceNoteActiveStateAndDiscardConfirmation() {
@@ -35,10 +29,7 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
         XCTAssertTrue(app.staticTexts["Long Voice Note"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["longVoiceNote.stopButton"].exists)
         XCTAssertTrue(app.staticTexts["Audio saved locally"].exists)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Long Voice Note active state"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
+        attachScreenshot(app, named: "Long Voice Note active state")
 
         app.buttons["Discard voice note"].tap()
         XCTAssertTrue(app.buttons["Discard Voice Note"].waitForExistence(timeout: 3))
@@ -82,9 +73,9 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
         // `dictation.historyRow.<uuid>` identifier. The uuid is generated at
         // runtime, so match any element whose identifier begins with the stable
         // prefix rather than reconstructing the full string.
-        let historyRow = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier BEGINSWITH 'dictation.historyRow.'")
-        ).firstMatch
+        let historyRow = firstElement(
+            matchingIdentifierPrefix: "dictation.historyRow.", in: app
+        )
         XCTAssertTrue(historyRow.waitForExistence(timeout: 5))
         historyRow.tap()
 

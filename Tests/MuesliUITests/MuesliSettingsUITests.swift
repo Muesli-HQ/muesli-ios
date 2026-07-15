@@ -5,8 +5,7 @@ final class MuesliSettingsUITests: MuesliUITestCase {
     func testModelsSettingsPrepareAutomaticallyWithoutPersistentPrepareButton() {
         let app = launchApp()
 
-        XCTAssertTrue(app.buttons["tab.settings"].waitForExistence(timeout: 8))
-        app.buttons["tab.settings"].tap()
+        openTab("tab.settings", in: app)
 
         let models = app.staticTexts["Models"]
         scrollToElement(models, in: app, maxSwipes: 3)
@@ -45,8 +44,7 @@ final class MuesliSettingsUITests: MuesliUITestCase {
     func testSettingsSectionNavigationAndBack() {
         let app = launchApp()
 
-        XCTAssertTrue(app.buttons["tab.settings"].waitForExistence(timeout: 8))
-        app.buttons["tab.settings"].tap()
+        openTab("tab.settings", in: app)
 
         // About section (last row in the list — may require scrolling).
         let aboutRow = app.buttons["settings.sectionRow.about"]
@@ -84,8 +82,7 @@ final class MuesliSettingsUITests: MuesliUITestCase {
     func testDictionaryAddEditDelete() {
         let app = launchApp([UITestArgs.dictionaryEntries])
 
-        XCTAssertTrue(app.buttons["tab.settings"].waitForExistence(timeout: 8))
-        app.buttons["tab.settings"].tap()
+        openTab("tab.settings", in: app)
 
         let dictionaryRow = app.buttons["settings.sectionRow.dictionary"]
         XCTAssertTrue(scrollToElement(dictionaryRow, in: app, maxSwipes: 6))
@@ -119,8 +116,9 @@ final class MuesliSettingsUITests: MuesliUITestCase {
         // DELETE: tap a delete button on a seeded row. The button's id is
         // "dictionary.deleteButton.<uuid>", so query it via a BEGINSWITH
         // predicate on the dynamic identifier.
-        let deletePredicate = NSPredicate(format: "identifier BEGINSWITH %@", "dictionary.deleteButton.")
-        let deleteButton = app.buttons.matching(deletePredicate).firstMatch
+        let deleteButton = firstElement(
+            matchingIdentifierPrefix: "dictionary.deleteButton.", ofType: .button, in: app
+        )
         XCTAssertTrue(scrollToElement(deleteButton, in: app, maxSwipes: 4))
         deleteButton.tap()
 
@@ -142,8 +140,7 @@ final class MuesliSettingsUITests: MuesliUITestCase {
     func testKeyboardHandoffSurfacesInAppOnly() {
         let app = launchApp()
 
-        XCTAssertTrue(app.buttons["tab.settings"].waitForExistence(timeout: 8))
-        app.buttons["tab.settings"].tap()
+        openTab("tab.settings", in: app)
 
         // "Voice Notes" section hosts the keyboard setup rows.
         let inputRow = app.buttons["settings.sectionRow.input"]

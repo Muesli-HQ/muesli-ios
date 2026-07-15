@@ -14,8 +14,7 @@ final class MuesliShellUITests: MuesliUITestCase {
     func testTabSwitcherNavigatesToMeetings() {
         let app = launchApp()
 
-        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
-        app.buttons["tab.meetings"].tap()
+        openTab("tab.meetings", in: app)
 
         XCTAssertTrue(app.staticTexts["Meetings"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
@@ -24,8 +23,7 @@ final class MuesliShellUITests: MuesliUITestCase {
     func testSettingsPrioritizeCoreWorkflowsAndAboutListsOpenSourceLibraries() {
         let app = launchApp()
 
-        XCTAssertTrue(app.buttons["tab.settings"].waitForExistence(timeout: 8))
-        app.buttons["tab.settings"].tap()
+        openTab("tab.settings", in: app)
 
         XCTAssertTrue(app.staticTexts["Voice Notes"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Meetings"].exists)

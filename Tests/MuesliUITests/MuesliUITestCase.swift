@@ -59,6 +59,37 @@ class MuesliUITestCase: XCTestCase {
         return app
     }
 
+    /// Waits for the button with `identifier` to exist, then taps it. Dedupes the
+    /// repeated tab-bar navigation pattern
+    /// (`XCTAssertTrue(app.buttons[id].waitForExistence(...)); app.buttons[id].tap()`).
+    @discardableResult
+    func openTab(_ identifier: String, in app: XCUIApplication, timeout: TimeInterval = 8) -> XCUIElement {
+        let button = app.buttons[identifier]
+        XCTAssertTrue(button.waitForExistence(timeout: timeout))
+        button.tap()
+        return button
+    }
+
+    /// Returns the first element of `type` whose accessibility identifier begins
+    /// with `prefix`. Used for dynamically-suffixed identifiers (e.g. those with a
+    /// runtime UUID) that cannot be matched by a full literal string.
+    func firstElement(
+        matchingIdentifierPrefix prefix: String,
+        ofType type: XCUIElement.ElementType = .any,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        let predicate = NSPredicate(format: "identifier BEGINSWITH %@", prefix)
+        return app.descendants(matching: type).matching(predicate).firstMatch
+    }
+
+    /// Captures the current screen as a permanently-retained attachment.
+    func attachScreenshot(_ app: XCUIApplication, named name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     /// Swipes up until `element` exists and is hittable, replacing the
     /// hand-rolled `for _ in 0..<N { app.swipeUp() }` loops. Returns whether the
     /// element became hittable within `maxSwipes` attempts.

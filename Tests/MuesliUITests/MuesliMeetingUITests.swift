@@ -5,8 +5,7 @@ final class MuesliMeetingUITests: MuesliUITestCase {
     func testMissingDurableMeetingSuppressesPhantomLiveRuntime() {
         let app = launchApp([UITestArgs.missingActiveMeetingHistory])
 
-        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
-        app.buttons["tab.meetings"].tap()
+        openTab("tab.meetings", in: app)
 
         XCTAssertTrue(app.staticTexts["Start a new meeting"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Live meeting"].exists)
@@ -16,8 +15,7 @@ final class MuesliMeetingUITests: MuesliUITestCase {
     func testInterruptedPersistedMeetingIsPresentedAsRecoveryNotLiveCapture() {
         let app = launchApp([UITestArgs.interruptedMeetingRecovery])
 
-        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
-        app.buttons["tab.meetings"].tap()
+        openTab("tab.meetings", in: app)
 
         XCTAssertTrue(app.staticTexts["Meeting needs recovery"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Live meeting"].exists)
@@ -32,8 +30,7 @@ final class MuesliMeetingUITests: MuesliUITestCase {
     func testProcessingMeetingDoesNotExposeCaptureControls() {
         let app = launchApp([UITestArgs.processingMeeting])
 
-        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
-        app.buttons["tab.meetings"].tap()
+        openTab("tab.meetings", in: app)
 
         XCTAssertTrue(app.staticTexts["Meeting processing"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Live meeting"].exists)
@@ -47,8 +44,7 @@ final class MuesliMeetingUITests: MuesliUITestCase {
     func testProcessedMeetingDefaultsFromRawTranscriptToGeneratedSummary() {
         let app = launchApp([UITestArgs.processingMeetingSummary])
 
-        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
-        app.buttons["tab.meetings"].tap()
+        openTab("tab.meetings", in: app)
         XCTAssertTrue(app.buttons["Return to Meeting"].waitForExistence(timeout: 5))
         app.buttons["Return to Meeting"].tap()
 
@@ -61,8 +57,7 @@ final class MuesliMeetingUITests: MuesliUITestCase {
     func testLiveMeetingDisplaysCompletedTranscriptChunksWithoutLeavingRecording() {
         let app = launchApp([UITestArgs.liveMeetingTranscript])
 
-        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
-        app.buttons["tab.meetings"].tap()
+        openTab("tab.meetings", in: app)
         XCTAssertTrue(app.staticTexts["Live meeting"].waitForExistence(timeout: 5))
         app.buttons["Return to Meeting"].tap()
 
@@ -78,8 +73,7 @@ final class MuesliMeetingUITests: MuesliUITestCase {
     func testRealRecordMeetingStartShowsLiveUIAndStops() {
         let app = launchApp()
 
-        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
-        app.buttons["tab.meetings"].tap()
+        openTab("tab.meetings", in: app)
 
         // Register the mic-permission interruption monitor before the alert can
         // appear so it can be auto-granted once we trigger a UI event.

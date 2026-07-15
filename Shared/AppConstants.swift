@@ -17,6 +17,14 @@ enum MuesliAppConstants {
     static let processingMeetingUITestLaunchArgument = "--muesli-ui-testing-processing-meeting"
     static let liveMeetingTranscriptUITestLaunchArgument = "--muesli-ui-testing-live-meeting-transcript"
     static let processingMeetingSummaryUITestLaunchArgument = "--muesli-ui-testing-processing-meeting-summary"
+    // NOTE: These UI-testing launch-argument string literals are mirrored in the
+    // XCUITest target's `enum UITestArgs` (the test target does NOT link the app
+    // module, so it cannot reference `MuesliAppConstants`). If you change a value
+    // here, update the matching case in `UITestArgs` (and vice versa) so they stay
+    // in sync.
+    static let onboardingUITestLaunchArgument = "--muesli-ui-testing-onboarding"
+    static let completedDictationUITestLaunchArgument = "--muesli-ui-testing-completed-dictation"
+    static let dictionaryEntriesUITestLaunchArgument = "--muesli-ui-testing-dictionary-entries"
     static let requestQueryItem = "request"
     static let actionQueryItem = "action"
     static let sourceQueryItem = "source"

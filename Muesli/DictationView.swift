@@ -570,6 +570,7 @@ struct DictationView: View {
                     Label(status, systemImage: "checkmark")
                         .font(MuesliTheme.captionMedium())
                         .foregroundStyle(MuesliTheme.success)
+                        .accessibilityIdentifier("dictation.clipboardStatus")
                 }
             }
 
@@ -1501,6 +1502,7 @@ private struct DictationHistoryRow: View {
                 }
             }
         }
+        .accessibilityIdentifier("dictation.historyRow.\(result.id.uuidString)")
     }
 
     private var rowContent: some View {
@@ -1544,6 +1546,20 @@ private struct DictationHistoryRow: View {
                 }
 
                 DictationOriginChip(origin: origin)
+
+                // Directly-tappable copy control so the main-screen copy action is
+                // addressable by XCUITest (the swipe/context-menu "Copy" action is
+                // not directly hittable). Mirrors `onCopy` used by the swipe action.
+                Button(action: onCopy) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Copy transcript")
+                .accessibilityIdentifier("dictation.copyButton")
             }
 
             ExpandableTranscriptPreview(text: result.text, resultID: result.id)
@@ -1762,6 +1778,7 @@ private struct DictationAudioDetailView: View {
                                     .font(MuesliTheme.captionMedium())
                             }
                             .foregroundStyle(MuesliTheme.accent)
+                            .accessibilityIdentifier("dictation.shareButton")
 
                             Button(action: saveAudioToFiles) {
                                 Label("Save to Files", systemImage: "folder")

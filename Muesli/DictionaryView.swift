@@ -76,6 +76,7 @@ struct DictionarySettingsContent: View {
                         Text("\(customWords.count) saved")
                             .font(MuesliTheme.caption())
                             .foregroundStyle(MuesliTheme.textTertiary)
+                            .accessibilityIdentifier("dictionary.customWordsCount")
                     }
 
                     Spacer()
@@ -83,10 +84,12 @@ struct DictionarySettingsContent: View {
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                     TextField("Word or phrase", text: $newWord)
+                        .accessibilityIdentifier("dictionary.wordField")
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .textFieldStyle(.roundedBorder)
                     TextField("Replace with (optional)", text: $newReplacement)
+                        .accessibilityIdentifier("dictionary.replacementField")
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .textFieldStyle(.roundedBorder)
@@ -108,6 +111,7 @@ struct DictionarySettingsContent: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("dictionary.addButton")
                 }
 
                 if let dictionaryError {
@@ -124,6 +128,7 @@ struct DictionarySettingsContent: View {
                             CustomWordRow(customWord: customWord) {
                                 removeCustomWord(id: customWord.id)
                             }
+                            .accessibilityIdentifier("dictionary.entryRow.\(customWord.id.uuidString)")
                         }
                     }
                 }
@@ -250,6 +255,7 @@ private struct CustomWordRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Delete dictionary entry")
+            .accessibilityIdentifier("dictionary.deleteButton.\(customWord.id.uuidString)")
         }
         .padding(MuesliTheme.spacing12)
         .background(MuesliTheme.surfacePrimary)

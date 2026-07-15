@@ -1189,6 +1189,7 @@ private struct MeetingSessionDetailView: View {
                             isActive: isActiveRecording || isProcessingCurrentMeeting,
                             barCount: 34
                         )
+                        .accessibilityIdentifier("meeting.waveform")
                         .frame(maxWidth: .infinity)
                         .frame(height: 58)
                         .padding(.horizontal, MuesliTheme.spacing12)

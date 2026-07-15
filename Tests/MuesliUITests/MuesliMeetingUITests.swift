@@ -70,4 +70,65 @@ final class MuesliMeetingUITests: MuesliUITestCase {
         XCTAssertTrue(app.staticTexts["This transcript appeared while the meeting was still recording."].exists)
         XCTAssertTrue(app.buttons["meetingDetail.stopButton"].exists)
     }
+
+    /// Best-effort REAL record flow (no fixtures): tap Start Meeting, grant the
+    /// microphone permission alert if it appears, and assert the live capture UI
+    /// surfaces and then ends when stopped. Tolerates the permission-deny branch
+    /// on the CI runner: if the mic is denied no phantom live capture may appear.
+    func testRealRecordMeetingStartShowsLiveUIAndStops() {
+        let app = launchApp()
+
+        XCTAssertTrue(app.buttons["tab.meetings"].waitForExistence(timeout: 8))
+        app.buttons["tab.meetings"].tap()
+
+        // Register the mic-permission interruption monitor before the alert can
+        // appear so it can be auto-granted once we trigger a UI event.
+        addMicPermissionMonitor(on: app)
+
+        let startButton = app.buttons["meetings.primaryButton"]
+        XCTAssertTrue(startButton.waitForExistence(timeout: 5))
+        startButton.tap()
+
+        // The interruption monitor only fires on the next UI event; also fall
+        // back to the springboard grant in case the monitor does not fire.
+        app.tap()
+        grantMicPermissionViaSpringboard()
+
+        let stopButton = app.buttons["meetingDetail.stopButton"]
+        let returnButton = app.buttons["Return to Meeting"]
+
+        // Live capture starts only if the mic is granted: the app navigates into
+        // the meeting detail (stop control) and/or surfaces "Return to Meeting".
+        let liveCaptureStarted = stopButton.waitForExistence(timeout: 12)
+            || returnButton.waitForExistence(timeout: 2)
+
+        if liveCaptureStarted {
+            // If only the landing "Return to Meeting" surfaced, navigate into
+            // the detail so we can exercise the real stop control.
+            if !stopButton.exists, returnButton.exists {
+                returnButton.tap()
+            }
+            XCTAssertTrue(stopButton.waitForExistence(timeout: 8))
+
+            // Live capture UI: the active waveform and/or the "Listening" status
+            // render while the meeting is being recorded.
+            let waveform = app.descendants(matching: .any)
+                .matching(identifier: "meeting.waveform").firstMatch
+            XCTAssertTrue(waveform.exists || app.staticTexts["Listening"].exists)
+
+            // Stop the meeting. The stop button calls the coordinator directly;
+            // there is no confirmation dialog on this control.
+            stopButton.tap()
+
+            // Stopping ends live capture: the stop control disappears as the
+            // session leaves the recording phase (into processing/completed).
+            XCTAssertTrue(stopButton.waitForNonExistence(timeout: 12))
+        } else {
+            // Permission-deny branch: no phantom live capture may appear and the
+            // app must stay responsive on the meetings landing without crashing.
+            XCTAssertFalse(stopButton.exists)
+            XCTAssertTrue(app.buttons["meetings.primaryButton"].exists
+                || app.staticTexts["Start a new meeting"].exists)
+        }
+    }
 }

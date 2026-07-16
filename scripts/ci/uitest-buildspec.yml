@@ -111,6 +111,10 @@ phases:
       # MuesliUITests-deny.xcresult.zip.
       - zip -r "${CODEBUILD_SRC_DIR}/${RESULT_BUNDLE}.zip" "$RESULT_BUNDLE"
       - zip -r "${CODEBUILD_SRC_DIR}/${DENY_RESULT_BUNDLE}.zip" "$DENY_RESULT_BUNDLE"
+      # Also publish the raw teed xcodebuild logs as plain-text artifacts so
+      # failures can be triaged directly on Linux without macOS `xcresulttool`.
+      - cp /tmp/xcodebuild-test.log "${CODEBUILD_SRC_DIR}/xcodebuild-test.log" 2>/dev/null || true
+      - cp /tmp/xcodebuild-deny.log "${CODEBUILD_SRC_DIR}/xcodebuild-deny.log" 2>/dev/null || true
       # (e) FAIL the build (exit non-zero) only AFTER zipping, if EITHER invocation's
       # rc was non-zero.
       - |
@@ -124,4 +128,6 @@ phases:
 artifacts:
   files:
     - '*.xcresult.zip'
+    - 'xcodebuild-test.log'
+    - 'xcodebuild-deny.log'
   discard-paths: yes

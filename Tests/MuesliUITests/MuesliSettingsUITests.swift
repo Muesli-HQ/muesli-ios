@@ -127,8 +127,8 @@ final class MuesliSettingsUITests: MuesliUITestCase {
         let deleteButton = firstElement(
             matchingIdentifierPrefix: "dictionary.deleteButton.", ofType: .any, in: app
         )
-        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         XCTAssertTrue(scrollToElement(deleteButton, in: app, maxSwipes: 4))
+        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.tap()
 
         // Count decrements back to 2.

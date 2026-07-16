@@ -116,9 +116,18 @@ final class MuesliSettingsUITests: MuesliUITestCase {
         // DELETE: tap a delete button on a seeded row. The button's id is
         // "dictionary.deleteButton.<uuid>", so query it via a BEGINSWITH
         // predicate on the dynamic identifier.
+        //
+        // Query by `.any`, NOT `.button`: the delete control is a
+        // `Button(role: .destructive)` with `.buttonStyle(.plain)` whose label
+        // is only an `Image(systemName: "trash")` (no text). SwiftUI surfaces
+        // such an image-only plain button to the accessibility tree as a
+        // non-`.button` element type, so filtering on `.button` finds nothing
+        // even though the identifier resolves. No ancestor combines/ignores the
+        // child, so `.any` locates the delete control reliably.
         let deleteButton = firstElement(
-            matchingIdentifierPrefix: "dictionary.deleteButton.", ofType: .button, in: app
+            matchingIdentifierPrefix: "dictionary.deleteButton.", ofType: .any, in: app
         )
+        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         XCTAssertTrue(scrollToElement(deleteButton, in: app, maxSwipes: 4))
         deleteButton.tap()
 

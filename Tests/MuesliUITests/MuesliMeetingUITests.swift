@@ -108,17 +108,38 @@ final class MuesliMeetingUITests: MuesliUITestCase {
             }
             XCTAssertTrue(stopButton.waitForExistence(timeout: 8))
 
-            // Live capture UI: once the microphone engages, the meeting detail
-            // shows the "Listening" status. Capture briefly passes through a
-            // "Preparing microphone" state first (the stop control is already
-            // present then), so wait for the active status to appear rather than
-            // asserting instantaneously. The decorative waveform (a Canvas) is
-            // not a reliable accessibility element, so treat its presence only as
-            // a best-effort secondary signal.
+            // Live-capture UI is confirmed by the presence of the stop control
+            // (asserted above) plus the capture-phase status copy in the meeting
+            // detail. The "Listening" status is gated on `isActiveRecording`,
+            // which only becomes true once the microphone engine actually
+            // engages — and a headless CI simulator cannot capture real audio, so
+            // the app legitimately sits in the "Preparing microphone" capture
+            // state without ever reaching "Listening". Per the real-record test
+            // contract we assert only on UI state transitions (never on
+            // audio-dependent state), so accept either capture-phase status. The
+            // decorative waveform (a Canvas) is not a reliable accessibility
+            // element, so it stays only as a best-effort secondary signal.
             let listening = app.staticTexts["Listening"]
+            let preparing = app.staticTexts["Preparing microphone"]
             let waveform = app.descendants(matching: .any)
                 .matching(identifier: "meeting.waveform").firstMatch
-            XCTAssertTrue(listening.waitForExistence(timeout: 8) || waveform.exists)
+            let captureStatusShown =
+                listening.waitForExistence(timeout: 8)
+                || preparing.exists
+                || waveform.exists
+            if !captureStatusShown {
+                // This assertion is not on a scrollToElement path, so attach the
+                // a11y tree here too for CI triage if the capture-phase status is
+                // ever absent.
+                let attachment = XCTAttachment(string: app.debugDescription)
+                attachment.name = "a11y-tree-meeting-capture-status-missing"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            XCTAssertTrue(
+                captureStatusShown,
+                "Live-capture UI should show a capture-phase status (Listening or Preparing microphone)"
+            )
 
             // Stop the meeting. The stop button calls the coordinator directly;
             // there is no confirmation dialog on this control.

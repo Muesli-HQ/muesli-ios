@@ -1453,6 +1453,8 @@ private struct DictationHistoryRow: View {
     let onDelete: () -> Void
     @State private var isConfirmingDelete = false
 
+    private var rowIdentifier: String { "dictation.historyRow.\(result.id.uuidString)" }
+
     var body: some View {
         Group {
             if let onOpen {
@@ -1470,11 +1472,11 @@ private struct DictationHistoryRow: View {
                     // making them unaddressable. `.contain` keeps children as
                     // separate accessibility elements, so the id on the
                     // container leaves the child identifiers intact.
-                    .accessibilityIdentifier("dictation.historyRow.\(result.id.uuidString)")
+                    .accessibilityIdentifier(rowIdentifier)
             } else {
                 rowSurface
                     .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("dictation.historyRow.\(result.id.uuidString)")
+                    .accessibilityIdentifier(rowIdentifier)
             }
         }
         .confirmationDialog(

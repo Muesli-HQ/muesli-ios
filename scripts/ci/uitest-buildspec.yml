@@ -44,21 +44,31 @@ phases:
         if [ -z "$UDID" ]; then
           echo "No available iPhone simulator found; creating one from the newest iOS runtime."
           SIMPAIR=$(xcrun simctl list runtimes -j | python3 -c '
-        import sys, json, re
+        import sys, json, re, subprocess
         def rt_key(r):
             v = r.get("version", "0")
             return [int(p) for p in v.split(".") if p.isdigit()]
+        def dev_key(d):
+            nums = re.findall(r"\d+", d.get("name", ""))
+            return int(nums[0]) if nums else 0
         rs = [r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and "iOS" in r.get("name", "")]
         if not rs:
             sys.exit("No available iOS runtime found")
         rs.sort(key=rt_key)
         rt = rs[-1]
+        # Prefer the device types this runtime declares as supported so we never
+        # pair an old iPhone with a too-new runtime (simctl "Incompatible device").
         iphones = [d for d in rt.get("supportedDeviceTypes", []) if "iPhone" in d.get("name", "")]
         if not iphones:
-            sys.exit("No supported iPhone device type for runtime %s" % rt.get("name"))
-        def dev_key(d):
-            nums = re.findall(r"\d+", d.get("name", ""))
-            return int(nums[0]) if nums else 0
+            # Fallback for older Xcode that omits supportedDeviceTypes: use the
+            # global device-type list. Bias toward modern iPhones so the geometry
+            # is compatible with a recent runtime.
+            allt = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devicetypes", "-j"]))
+            iphones = [d for d in allt.get("devicetypes", []) if "iPhone" in d.get("name", "")]
+            modern = [d for d in iphones if dev_key(d) >= 12]
+            iphones = modern or iphones
+        if not iphones:
+            sys.exit("No iPhone device type available for runtime %s" % rt.get("name"))
         iphones.sort(key=dev_key)
         print(rt["identifier"])
         print(iphones[-1]["identifier"])

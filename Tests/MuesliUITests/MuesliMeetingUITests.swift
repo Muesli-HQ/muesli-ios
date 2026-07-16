@@ -108,11 +108,17 @@ final class MuesliMeetingUITests: MuesliUITestCase {
             }
             XCTAssertTrue(stopButton.waitForExistence(timeout: 8))
 
-            // Live capture UI: the active waveform and/or the "Listening" status
-            // render while the meeting is being recorded.
+            // Live capture UI: once the microphone engages, the meeting detail
+            // shows the "Listening" status. Capture briefly passes through a
+            // "Preparing microphone" state first (the stop control is already
+            // present then), so wait for the active status to appear rather than
+            // asserting instantaneously. The decorative waveform (a Canvas) is
+            // not a reliable accessibility element, so treat its presence only as
+            // a best-effort secondary signal.
+            let listening = app.staticTexts["Listening"]
             let waveform = app.descendants(matching: .any)
                 .matching(identifier: "meeting.waveform").firstMatch
-            XCTAssertTrue(waveform.exists || app.staticTexts["Listening"].exists)
+            XCTAssertTrue(listening.waitForExistence(timeout: 8) || waveform.exists)
 
             // Stop the meeting. The stop button calls the coordinator directly;
             // there is no confirmation dialog on this control.

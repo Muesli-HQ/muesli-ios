@@ -184,6 +184,7 @@ struct SettingsView: View {
                     .foregroundStyle(MuesliTheme.accent)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("settings.backButton")
 
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                 Text(section.title)
@@ -228,6 +229,7 @@ struct SettingsView: View {
             MuesliSurface {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                     SettingsRow(icon: "keyboard", title: "Keyboard Extension", value: keyboardStatusText)
+                        .accessibilityIdentifier("settings.keyboardExtensionRow")
                     Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
                         HStack {
                             Text("Open iOS Settings")
@@ -248,7 +250,8 @@ struct SettingsView: View {
                         icon: "keyboard.badge.ellipsis",
                         title: "Keyboard Session Mode",
                         detail: keyboardSessionModeDetail,
-                        isOn: $keyboardSessionMode
+                        isOn: $keyboardSessionMode,
+                        accessibilityID: "settings.keyboardSessionToggle"
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsMicrophonePicker(selection: $microphonePreference)
@@ -1107,6 +1110,7 @@ private struct SettingsSectionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("settings.sectionRow.\(section.rawValue)")
     }
 }
 
@@ -1177,6 +1181,7 @@ private struct SettingsToggleRow: View {
     let title: String
     let detail: String
     @Binding var isOn: Bool
+    var accessibilityID: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
@@ -1200,6 +1205,7 @@ private struct SettingsToggleRow: View {
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .tint(MuesliTheme.accent)
+                .accessibilityIdentifier(accessibilityID ?? "")
         }
     }
 }

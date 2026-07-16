@@ -1,0 +1,38 @@
+version: 0.2
+env:
+  variables:
+    APP_NAME: "Muesli"
+    SCHEME: "Muesli"
+    CONFIGURATION: "Release"
+    PROJECT: "MuesliiOS.xcodeproj"
+phases:
+  install:
+    commands:
+      - set -euo pipefail
+      - which xcodegen || brew install xcodegen
+  pre_build:
+    commands:
+      - set -euo pipefail
+      - xcodegen generate
+      - xcodebuild -project "$PROJECT" -list
+  build:
+    commands:
+      - set -euo pipefail
+      - |
+        xcodebuild \
+          -project "$PROJECT" \
+          -scheme "$SCHEME" \
+          -configuration "$CONFIGURATION" \
+          -sdk iphonesimulator \
+          -destination 'generic/platform=iOS Simulator' \
+          -derivedDataPath build/derived \
+          CODE_SIGNING_ALLOWED=NO ARCHS="arm64 x86_64" \
+          build
+      - export APP_PATH=$(find build/derived -name "${APP_NAME}.app" -path "*/${CONFIGURATION}-iphonesimulator/*" | head -1)
+      - if [ -z "$APP_PATH" ]; then echo "ERROR no ${APP_NAME}.app found in derived data" >&2; exit 1; fi
+      - cp -r "$APP_PATH" "${CODEBUILD_SRC_DIR}/${APP_NAME}.app"
+      - cd "${CODEBUILD_SRC_DIR}" && zip -r "${APP_NAME}.app.zip" "${APP_NAME}.app"
+artifacts:
+  files:
+    - '*.app.zip'
+  discard-paths: yes

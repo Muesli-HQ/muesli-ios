@@ -460,7 +460,12 @@ struct DictationView: View {
             }
             .padding(MuesliTheme.spacing16)
         }
-        .accessibilityIdentifier("dictation.recorderPanel")
+        // NOTE: Do NOT put an `.accessibilityIdentifier` on this container.
+        // SwiftUI propagates a container identifier onto every descendant
+        // accessibility element, which clobbers the child identifiers
+        // (`dictation.primaryButton`, `dictation.cancelButton`) and makes them
+        // unaddressable by XCUITest (`app.buttons["dictation.primaryButton"]`
+        // never resolves). The child controls carry their own identifiers.
         .task(id: isActive) {
             guard isActive else { return }
             await runPreviewWaveformIfNeeded()
@@ -570,6 +575,7 @@ struct DictationView: View {
                     Label(status, systemImage: "checkmark")
                         .font(MuesliTheme.captionMedium())
                         .foregroundStyle(MuesliTheme.success)
+                        .accessibilityIdentifier("dictation.clipboardStatus")
                 }
             }
 
@@ -1447,6 +1453,8 @@ private struct DictationHistoryRow: View {
     let onDelete: () -> Void
     @State private var isConfirmingDelete = false
 
+    private var rowIdentifier: String { "dictation.historyRow.\(result.id.uuidString)" }
+
     var body: some View {
         Group {
             if let onOpen {
@@ -1456,8 +1464,19 @@ private struct DictationHistoryRow: View {
                     .accessibilityElement(children: .contain)
                     .accessibilityAddTraits(.isButton)
                     .accessibilityAction(named: "Open voice note", onOpen)
+                    // The row identifier lives HERE — on the `.contain`
+                    // container element — not on the inner `rowSurface`. A
+                    // container identifier applied inside the subtree propagates
+                    // onto and clobbers every descendant's own identifier (e.g.
+                    // `dictation.copyButton`, `dictation.readMore.<uuid>`),
+                    // making them unaddressable. `.contain` keeps children as
+                    // separate accessibility elements, so the id on the
+                    // container leaves the child identifiers intact.
+                    .accessibilityIdentifier(rowIdentifier)
             } else {
                 rowSurface
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(rowIdentifier)
             }
         }
         .confirmationDialog(
@@ -1544,6 +1563,20 @@ private struct DictationHistoryRow: View {
                 }
 
                 DictationOriginChip(origin: origin)
+
+                // Directly-tappable copy control so the main-screen copy action is
+                // addressable by XCUITest (the swipe/context-menu "Copy" action is
+                // not directly hittable). Mirrors `onCopy` used by the swipe action.
+                Button(action: onCopy) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Copy transcript")
+                .accessibilityIdentifier("dictation.copyButton")
             }
 
             ExpandableTranscriptPreview(text: result.text, resultID: result.id)
@@ -1762,6 +1795,7 @@ private struct DictationAudioDetailView: View {
                                     .font(MuesliTheme.captionMedium())
                             }
                             .foregroundStyle(MuesliTheme.accent)
+                            .accessibilityIdentifier("dictation.shareButton")
 
                             Button(action: saveAudioToFiles) {
                                 Label("Save to Files", systemImage: "folder")

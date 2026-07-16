@@ -1,0 +1,152 @@
+version: 0.2
+env:
+  variables:
+    APP_NAME: "Muesli"
+    SCHEME: "Muesli"
+    BUNDLE_ID: "com.phequals7.muesli.ios"
+    PROJECT: "MuesliiOS.xcodeproj"
+    RESULT_BUNDLE: "MuesliUITests.xcresult"
+    DENY_RESULT_BUNDLE: "MuesliUITests-deny.xcresult"
+    DENY_TEST: "MuesliUITests/MuesliOnboardingUITests/testOnboardingPermissionDenyStaysBlocked"
+phases:
+  install:
+    commands:
+      - set -euo pipefail
+      - which xcodegen || brew install xcodegen
+  pre_build:
+    commands:
+      - set -euo pipefail
+      # Generate the .xcodeproj from project.yml (not checked in).
+      - xcodegen generate
+      - xcodebuild -project "$PROJECT" -list
+      # Robust simulator selection: prefer an already-available iPhone sim; only if
+      # none exists, create one by pairing the NEWEST available iOS runtime with an
+      # iPhone device type that the SAME runtime declares as supported. Runtime
+      # versions are compared SEMANTICALLY (split on '.' and compared as integers,
+      # e.g. "17.5" < "17.10"), not by raw string sort. The device type is picked
+      # from that runtime's own `supportedDeviceTypes` (NOT the global device-type
+      # list) so we never pair an old device with a too-new runtime — e.g. iPhone 6s
+      # Plus + iOS 26.2, which simctl rejects with "Incompatible device". Among the
+      # supported iPhones we choose the highest model number so the geometry matches
+      # a modern device. The chosen udid is written to /tmp/sim_udid.
+      - |
+        UDID=$(xcrun simctl list devices available -j | python3 -c '
+        import sys, json
+        data = json.load(sys.stdin)
+        for runtime, devices in data.get("devices", {}).items():
+            if "iOS" not in runtime and "iOS" not in runtime.replace("-", " "):
+                continue
+            for d in devices:
+                if d.get("isAvailable") and "iPhone" in d.get("name", ""):
+                    print(d["udid"])
+                    sys.exit(0)
+        ')
+        if [ -z "$UDID" ]; then
+          echo "No available iPhone simulator found; creating one from the newest iOS runtime."
+          SIMPAIR=$(xcrun simctl list runtimes -j | python3 -c '
+        import sys, json, re, subprocess
+        def rt_key(r):
+            v = r.get("version", "0")
+            return [int(p) for p in v.split(".") if p.isdigit()]
+        def dev_key(d):
+            nums = re.findall(r"\d+", d.get("name", ""))
+            return int(nums[0]) if nums else 0
+        rs = [r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and "iOS" in r.get("name", "")]
+        if not rs:
+            sys.exit("No available iOS runtime found")
+        rs.sort(key=rt_key)
+        rt = rs[-1]
+        # Prefer the device types this runtime declares as supported so we never
+        # pair an old iPhone with a too-new runtime (simctl "Incompatible device").
+        iphones = [d for d in rt.get("supportedDeviceTypes", []) if "iPhone" in d.get("name", "")]
+        if not iphones:
+            # Fallback for older Xcode that omits supportedDeviceTypes: use the
+            # global device-type list. Bias toward modern iPhones so the geometry
+            # is compatible with a recent runtime.
+            allt = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devicetypes", "-j"]))
+            iphones = [d for d in allt.get("devicetypes", []) if "iPhone" in d.get("name", "")]
+            modern = [d for d in iphones if dev_key(d) >= 12]
+            iphones = modern or iphones
+        if not iphones:
+            sys.exit("No iPhone device type available for runtime %s" % rt.get("name"))
+        iphones.sort(key=dev_key)
+        print(rt["identifier"])
+        print(iphones[-1]["identifier"])
+        ')
+          RUNTIME=$(printf "%s\n" "$SIMPAIR" | sed -n 1p)
+          DEVTYPE=$(printf "%s\n" "$SIMPAIR" | sed -n 2p)
+          echo "Using runtime=$RUNTIME devicetype=$DEVTYPE"
+          UDID=$(xcrun simctl create "muesli-uitest" "$DEVTYPE" "$RUNTIME")
+        fi
+        echo "Selected simulator udid=$UDID"
+        echo "$UDID" > /tmp/sim_udid
+        xcrun simctl boot "$UDID" || true
+        xcrun simctl bootstatus "$UDID" -b
+  build:
+    commands:
+      - set -euo pipefail
+      - UDID="$(cat /tmp/sim_udid)"
+      - rm -rf "$RESULT_BUNDLE" "$DENY_RESULT_BUNDLE"
+      # (a) FIRST, before any mic pre-grant, run the onboarding permission-DENY test in
+      # its own invocation. Default sim state = mic not authorized, so the deny branch
+      # is exercised. Capture rc; do NOT hard-fail yet. The test guards itself with
+      # XCTSkipIf when the mic is already authorized, so ordering is defensive.
+      - |
+        set +e
+        xcodebuild test \
+          -project "$PROJECT" \
+          -scheme "$SCHEME" \
+          -destination "platform=iOS Simulator,id=$UDID" \
+          -only-testing:"$DENY_TEST" \
+          -resultBundlePath "$DENY_RESULT_BUNDLE" \
+          -derivedDataPath build/derived \
+          CODE_SIGNING_ALLOWED=NO \
+          | tee /tmp/xcodebuild-deny.log
+        DENY_RC=${PIPESTATUS[0]}
+        set -e
+        echo "$DENY_RC" > /tmp/deny_rc
+        echo "deny invocation exit code: $DENY_RC"
+      # (b) THEN pre-grant microphone so best-effort real-record tests exercise the
+      # recording branch.
+      - xcrun simctl privacy "$UDID" grant microphone "$BUNDLE_ID"
+      # (c) THEN run the rest of the suite, skipping the deny test (already run above).
+      - |
+        set +e
+        xcodebuild test \
+          -project "$PROJECT" \
+          -scheme "$SCHEME" \
+          -destination "platform=iOS Simulator,id=$UDID" \
+          -skip-testing:"$DENY_TEST" \
+          -resultBundlePath "$RESULT_BUNDLE" \
+          -derivedDataPath build/derived \
+          CODE_SIGNING_ALLOWED=NO \
+          | tee /tmp/xcodebuild-test.log
+        TEST_RC=${PIPESTATUS[0]}
+        set -e
+        echo "$TEST_RC" > /tmp/test_rc
+        echo "suite invocation exit code: $TEST_RC"
+      # (d) ZIP BOTH .xcresult bundles BEFORE any pass/fail gate, so failures are
+      # always triageable. Primary artifact: MuesliUITests.xcresult.zip; deny bundle:
+      # MuesliUITests-deny.xcresult.zip.
+      - zip -r "${CODEBUILD_SRC_DIR}/${RESULT_BUNDLE}.zip" "$RESULT_BUNDLE"
+      - zip -r "${CODEBUILD_SRC_DIR}/${DENY_RESULT_BUNDLE}.zip" "$DENY_RESULT_BUNDLE"
+      # Also publish the raw teed xcodebuild logs as plain-text artifacts so
+      # failures can be triaged directly on Linux without macOS `xcresulttool`.
+      - cp /tmp/xcodebuild-test.log "${CODEBUILD_SRC_DIR}/xcodebuild-test.log" 2>/dev/null || true
+      - cp /tmp/xcodebuild-deny.log "${CODEBUILD_SRC_DIR}/xcodebuild-deny.log" 2>/dev/null || true
+      # (e) FAIL the build (exit non-zero) only AFTER zipping, if EITHER invocation's
+      # rc was non-zero.
+      - |
+        DENY_RC="$(cat /tmp/deny_rc)"
+        TEST_RC="$(cat /tmp/test_rc)"
+        echo "deny_rc=$DENY_RC suite_rc=$TEST_RC"
+        if [ "$DENY_RC" != "0" ] || [ "$TEST_RC" != "0" ]; then
+          echo "One or more xcodebuild test invocations failed; failing the build."
+          exit 1
+        fi
+artifacts:
+  files:
+    - '*.xcresult.zip'
+    - 'xcodebuild-test.log'
+    - 'xcodebuild-deny.log'
+  discard-paths: yes

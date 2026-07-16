@@ -1519,13 +1519,32 @@ final class DictationCoordinator {
     }
 
     private func configureForUITesting() {
+        // When the onboarding UI-testing argument is present we still want the
+        // deterministic UI-testing setup (model-ready, use-case seeding, no model
+        // prewarm, no history refresh) but we must leave onboarding INCOMPLETE so
+        // the real `OnboardingView` steps render for the onboarding flow tests.
+        let isOnboardingUITest = ProcessInfo.processInfo.arguments.contains(
+            MuesliAppConstants.onboardingUITestLaunchArgument
+        )
+
         OnboardingPreferenceKeys.clear()
-        hasCompletedOnboarding = true
         userName = "UI Tests"
         selectedUseCase = .everything
         selectedTranscriptionModel = .defaultModel
         transitionKeyboardSession(.stop(.off))
-        UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
+
+        if isOnboardingUITest {
+            // Leave onboarding not-complete: skip the `hasCompletedOnboarding` /
+            // `onboardingCompletedKey` writes so the onboarding flow is driven by
+            // the real UI. Everything else (model-ready, use-case seeding) still
+            // applies so the model step shows "ready".
+            hasCompletedOnboarding = false
+            UserDefaults.standard.set(false, forKey: Self.onboardingCompletedKey)
+        } else {
+            hasCompletedOnboarding = true
+            UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
+        }
+
         UserDefaults.standard.set(userName, forKey: Self.userNameKey)
         UserDefaults.standard.set(selectedUseCase.rawValue, forKey: Self.useCaseKey)
         UserDefaults.standard.set(AppSection.defaultPinnedStorage, forKey: MuesliPreferences.pinnedSectionsKey)
@@ -1538,7 +1557,11 @@ final class DictationCoordinator {
             detail: "UI testing"
         )
 
-        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.completedDictationUITestLaunchArgument) {
+            configureCompletedDictationUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.dictionaryEntriesUITestLaunchArgument) {
+            configureDictionaryEntriesUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
             configureProcessingMeetingSummaryUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.liveMeetingTranscriptUITestLaunchArgument) {
             configureLiveMeetingTranscriptUITestFixture()
@@ -1737,6 +1760,98 @@ final class DictationCoordinator {
         cacheTranscript(transcript)
         presentedLongVoiceNoteSessionID = session.id
         statusText = "Ready"
+    }
+
+    private func configureCompletedDictationUITestFixture() {
+        let request = DictationRequest()
+        let audioFileName = "ui-test-completed-dictation.wav"
+
+        // Write a small placeholder audio file into the store recordings directory
+        // so the audio-detail ShareLink URL resolves. `DictationView` only exposes
+        // the audio-detail path / ShareLink when `keepsAudioRecording == true`, a
+        // valid `audioFileName` is set, AND the backing file exists on disk (see the
+        // `audioFileURL(fileName:)` guards ~687/1430). If writing fails we keep the
+        // history + session state below so the row + main-screen copy still work
+        // (the audio detail / share path just won't be reachable in that fallback).
+        let didWriteAudioFile = writePlaceholderAudioFile(named: audioFileName)
+
+        var session = RecordingSession(
+            requestID: request.id,
+            kind: .quickDictation,
+            startedAt: Date.now.addingTimeInterval(-8),
+            endedAt: .now,
+            phase: .completed,
+            audioFileName: didWriteAudioFile ? audioFileName : nil,
+            keepsAudioRecording: didWriteAudioFile,
+            source: "app"
+        )
+
+        let transcriptText = "Completed dictation transcript for copy and share."
+        let transcript = Transcript(
+            sessionID: session.id,
+            text: transcriptText,
+            engineIdentifier: selectedTranscriptionModel.engineIdentifier
+        )
+        session.transcriptID = transcript.id
+
+        let result = DictationResult(
+            requestID: request.id,
+            sessionID: session.id,
+            text: transcriptText,
+            engineIdentifier: selectedTranscriptionModel.engineIdentifier,
+            source: "app"
+        )
+
+        cacheTranscript(transcript)
+        dictationHistory = [result]
+        recordingSessions = [session]
+        statusText = "Ready"
+    }
+
+    private func configureDictionaryEntriesUITestFixture() {
+        let seededWords = [
+            CustomWord(word: "Muesli", replacement: nil),
+            CustomWord(word: "GPT", replacement: "ChatGPT"),
+        ]
+        for customWord in seededWords {
+            do {
+                try store.addCustomWord(customWord)
+            } catch {
+                // Surface seed failures in the xcodebuild test log instead of
+                // silently swallowing them (the SharedStore UI-testing fallback
+                // should make this succeed even without the App Group entitlement).
+                print("[UITest] Failed to seed dictionary custom word '\(customWord.word)': \(error)")
+            }
+        }
+    }
+
+    /// Writes a tiny placeholder audio file into the store recordings directory so
+    /// UI-testing fixtures that need a resolvable audio URL (ShareLink) work.
+    /// Returns `true` on success. The bytes are a minimal WAV header + no samples;
+    /// the fixtures only require the file to EXIST so the ShareLink URL resolves,
+    /// not that it is playable.
+    private func writePlaceholderAudioFile(named fileName: String) -> Bool {
+        guard let url = try? store.audioFileURL(fileName: fileName) else { return false }
+        if FileManager.default.fileExists(atPath: url.path) { return true }
+        let placeholderData = Data([
+            0x52, 0x49, 0x46, 0x46, // "RIFF"
+            0x24, 0x00, 0x00, 0x00, // chunk size (36 bytes, no samples)
+            0x57, 0x41, 0x56, 0x45, // "WAVE"
+            0x66, 0x6D, 0x74, 0x20, // "fmt "
+            0x10, 0x00, 0x00, 0x00, // subchunk1 size (16)
+            0x01, 0x00, 0x01, 0x00, // PCM, mono
+            0x44, 0xAC, 0x00, 0x00, // sample rate 44100
+            0x88, 0x58, 0x01, 0x00, // byte rate
+            0x02, 0x00, 0x10, 0x00, // block align, bits per sample
+            0x64, 0x61, 0x74, 0x61, // "data"
+            0x00, 0x00, 0x00, 0x00, // data size (0)
+        ])
+        do {
+            try placeholderData.write(to: url)
+            return true
+        } catch {
+            return false
+        }
     }
     #endif
 
@@ -2527,8 +2642,22 @@ final class DictationCoordinator {
 
     private func clearClipboardStatusSoon() {
         let statusToClear = clipboardStatusText
+        // The transient status auto-clears quickly in production, but a UI test
+        // asserting on it races against XCUITest's ~1s existence-poll cadence: if
+        // the status clears before the first poll lands the assertion flakes.
+        // Under UI testing we therefore hold the status long enough to be
+        // reliably observed; production behavior is unchanged. The UI-testing
+        // helper lives in a `#if DEBUG` block, so guard the branch accordingly —
+        // Release builds always use the production delay.
+        #if DEBUG
+        let clearDelay: Duration = Self.shouldConfigureForUITestingFromLaunchArguments()
+            ? .seconds(8)
+            : .seconds(1.2)
+        #else
+        let clearDelay: Duration = .seconds(1.2)
+        #endif
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.2))
+            try? await Task.sleep(for: clearDelay)
             if self?.clipboardStatusText == statusToClear {
                 self?.clipboardStatusText = nil
             }

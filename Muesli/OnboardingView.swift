@@ -223,6 +223,7 @@ struct OnboardingView: View {
                     .font(MuesliTheme.captionMedium())
                     .foregroundStyle(MuesliTheme.textTertiary)
                 TextField("Enter your name", text: $nameDraft)
+                    .accessibilityIdentifier("onboarding.nameField")
                     .textInputAutocapitalization(.words)
                     .submitLabel(.next)
                     .padding(.horizontal, MuesliTheme.spacing12)
@@ -280,6 +281,7 @@ struct OnboardingView: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("onboarding.useCaseCard.\(useCase.rawValue)")
     }
 
     private var permissionsStep: some View {
@@ -298,7 +300,8 @@ struct OnboardingView: View {
                 title: "Microphone",
                 detail: microphonePermissionDetail,
                 isComplete: microphoneGranted,
-                buttonTitle: microphonePermissionButtonTitle
+                buttonTitle: microphonePermissionButtonTitle,
+                accessibilityID: "onboarding.micPermissionButton"
             ) {
                 if microphonePermissionNeedsSettings {
                     openAppSettings()
@@ -381,6 +384,7 @@ struct OnboardingView: View {
         detail: String,
         isComplete: Bool,
         buttonTitle: String,
+        accessibilityID: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         MuesliSurface {
@@ -425,6 +429,7 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isComplete)
+                .accessibilityIdentifier(accessibilityID ?? "")
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -1032,6 +1037,7 @@ struct OnboardingView: View {
                         .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("onboarding.backButton")
             }
 
             Button {
@@ -1055,6 +1061,7 @@ struct OnboardingView: View {
             }
             .buttonStyle(.plain)
             .disabled(!canContinue)
+            .accessibilityIdentifier("onboarding.primaryButton")
         }
         .padding(.horizontal, MuesliTheme.spacing20)
         .padding(.top, MuesliTheme.spacing12)

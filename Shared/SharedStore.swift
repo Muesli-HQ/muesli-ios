@@ -403,6 +403,18 @@ struct SharedStore: Sendable {
         }
 
         guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
+            // Under UI testing the CodeBuild build runs with CODE_SIGNING_ALLOWED=NO,
+            // so the app has no App Group entitlement and the container is nil. Fall
+            // back to an app-local Application Support directory so fixtures (audio
+            // files, custom words) can be seeded/read. Production is unaffected: this
+            // path is only reached when the `--muesli-ui-testing` launch argument is
+            // present.
+            if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.uiTestingLaunchArgument),
+               let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                let fallback = support.appendingPathComponent("MuesliUITesting", isDirectory: true)
+                try FileManager.default.createDirectory(at: fallback, withIntermediateDirectories: true)
+                return fallback
+            }
             throw SharedStoreError.appGroupUnavailable(appGroupIdentifier)
         }
         return url

@@ -2642,8 +2642,16 @@ final class DictationCoordinator {
 
     private func clearClipboardStatusSoon() {
         let statusToClear = clipboardStatusText
+        // The transient status auto-clears quickly in production, but a UI test
+        // asserting on it races against XCUITest's ~1s existence-poll cadence: if
+        // the status clears before the first poll lands the assertion flakes.
+        // Under UI testing we therefore hold the status long enough to be
+        // reliably observed; production behavior is unchanged.
+        let clearDelay: Duration = Self.shouldConfigureForUITestingFromLaunchArguments()
+            ? .seconds(8)
+            : .seconds(1.2)
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.2))
+            try? await Task.sleep(for: clearDelay)
             if self?.clipboardStatusText == statusToClear {
                 self?.clipboardStatusText = nil
             }

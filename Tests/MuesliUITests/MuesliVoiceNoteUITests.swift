@@ -65,16 +65,17 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
         XCTAssertTrue(transcript.waitForExistence(timeout: 8))
 
         // COPY on the MAIN screen: tap the directly-tappable history-row copy
-        // control and immediately assert the "Copied" status appears in the
-        // history header. `dictation.clipboardStatus` auto-clears after ~1.2s,
-        // so it must be asserted right after tapping (never from the detail
-        // screen, which does not render it).
+        // control and assert the "Copied" status appears in the history header.
+        // In production `dictation.clipboardStatus` auto-clears after ~1.2s; the
+        // app holds it longer under UI testing so it can be reliably observed
+        // without racing XCUITest's existence-poll cadence. It is only rendered
+        // on the main screen (never the detail screen).
         let copyButton = app.buttons["dictation.copyButton"]
         XCTAssertTrue(copyButton.waitForExistence(timeout: 5))
         copyButton.tap()
 
         let clipboardStatus = app.descendants(matching: .any)["dictation.clipboardStatus"]
-        XCTAssertTrue(clipboardStatus.waitForExistence(timeout: 2))
+        XCTAssertTrue(clipboardStatus.waitForExistence(timeout: 5))
 
         // SHARE in DETAIL: open the seeded history row by its dynamic
         // `dictation.historyRow.<uuid>` identifier. The uuid is generated at

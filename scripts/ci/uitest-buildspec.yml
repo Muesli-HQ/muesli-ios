@@ -20,10 +20,15 @@ phases:
       - xcodegen generate
       - xcodebuild -project "$PROJECT" -list
       # Robust simulator selection: prefer an already-available iPhone sim; only if
-      # none exists, create one by pairing the NEWEST available iOS runtime with a
-      # compatible iPhone device type. Runtime versions are compared SEMANTICALLY
-      # (split on '.' and compared as integers, e.g. "17.5" < "17.10"), not by raw
-      # string sort. The chosen udid is written to /tmp/sim_udid.
+      # none exists, create one by pairing the NEWEST available iOS runtime with an
+      # iPhone device type that the SAME runtime declares as supported. Runtime
+      # versions are compared SEMANTICALLY (split on '.' and compared as integers,
+      # e.g. "17.5" < "17.10"), not by raw string sort. The device type is picked
+      # from that runtime's own `supportedDeviceTypes` (NOT the global device-type
+      # list) so we never pair an old device with a too-new runtime — e.g. iPhone 6s
+      # Plus + iOS 26.2, which simctl rejects with "Incompatible device". Among the
+      # supported iPhones we choose the highest model number so the geometry matches
+      # a modern device. The chosen udid is written to /tmp/sim_udid.
       - |
         UDID=$(xcrun simctl list devices available -j | python3 -c '
         import sys, json
@@ -38,24 +43,28 @@ phases:
         ')
         if [ -z "$UDID" ]; then
           echo "No available iPhone simulator found; creating one from the newest iOS runtime."
-          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c '
-        import sys, json
-        def key(r):
+          SIMPAIR=$(xcrun simctl list runtimes -j | python3 -c '
+        import sys, json, re
+        def rt_key(r):
             v = r.get("version", "0")
             return [int(p) for p in v.split(".") if p.isdigit()]
         rs = [r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and "iOS" in r.get("name", "")]
         if not rs:
             sys.exit("No available iOS runtime found")
-        rs.sort(key=key)
-        print(rs[-1]["identifier"])
+        rs.sort(key=rt_key)
+        rt = rs[-1]
+        iphones = [d for d in rt.get("supportedDeviceTypes", []) if "iPhone" in d.get("name", "")]
+        if not iphones:
+            sys.exit("No supported iPhone device type for runtime %s" % rt.get("name"))
+        def dev_key(d):
+            nums = re.findall(r"\d+", d.get("name", ""))
+            return int(nums[0]) if nums else 0
+        iphones.sort(key=dev_key)
+        print(rt["identifier"])
+        print(iphones[-1]["identifier"])
         ')
-          DEVTYPE=$(xcrun simctl list devicetypes -j | python3 -c '
-        import sys, json
-        ds = [d for d in json.load(sys.stdin)["devicetypes"] if "iPhone" in d.get("name", "")]
-        if not ds:
-            sys.exit("No iPhone device type found")
-        print(ds[-1]["identifier"])
-        ')
+          RUNTIME=$(printf "%s\n" "$SIMPAIR" | sed -n 1p)
+          DEVTYPE=$(printf "%s\n" "$SIMPAIR" | sed -n 2p)
           echo "Using runtime=$RUNTIME devicetype=$DEVTYPE"
           UDID=$(xcrun simctl create "muesli-uitest" "$DEVTYPE" "$RUNTIME")
         fi

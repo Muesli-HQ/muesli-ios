@@ -2646,10 +2646,16 @@ final class DictationCoordinator {
         // asserting on it races against XCUITest's ~1s existence-poll cadence: if
         // the status clears before the first poll lands the assertion flakes.
         // Under UI testing we therefore hold the status long enough to be
-        // reliably observed; production behavior is unchanged.
+        // reliably observed; production behavior is unchanged. The UI-testing
+        // helper lives in a `#if DEBUG` block, so guard the branch accordingly —
+        // Release builds always use the production delay.
+        #if DEBUG
         let clearDelay: Duration = Self.shouldConfigureForUITestingFromLaunchArguments()
             ? .seconds(8)
             : .seconds(1.2)
+        #else
+        let clearDelay: Duration = .seconds(1.2)
+        #endif
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: clearDelay)
             if self?.clipboardStatusText == statusToClear {

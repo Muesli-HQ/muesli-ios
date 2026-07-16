@@ -9,9 +9,8 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
             matchingIdentifierPrefix: "dictation.readMore.", ofType: .button, in: app
         )
         // The mock history rows live in the DictationView ScrollView/LazyVStack
-        // below the recorder panel, so on the CI simulator geometry the
-        // `readMore` button is below the fold and not realized in the a11y tree
-        // until scrolled into view.
+        // below the recorder panel, so scroll the `readMore` button into view to
+        // make it hittable before interacting with it.
         XCTAssertTrue(scrollToElement(readMore, in: app))
         XCTAssertTrue(readMore.waitForExistence(timeout: 8))
         XCTAssertTrue(app.descendants(matching: .any)["voiceNote.badge.notes"].firstMatch.exists)
@@ -58,10 +57,9 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
     func testCompletedDictationCopyAndShareFixture() {
         let app = launchApp([UITestArgs.completedDictation])
 
-        // The seeded transcript renders on the main voice-notes screen, but the
-        // history row lives in the DictationView ScrollView/LazyVStack below the
-        // recorder panel, so on the CI simulator geometry it is below the fold
-        // and must be scrolled into view before it appears in the a11y tree.
+        // The seeded transcript renders on the main voice-notes screen inside
+        // the DictationView ScrollView/LazyVStack below the recorder panel, so
+        // scroll it into view to make it hittable before interacting with it.
         let transcript = app.staticTexts["Completed dictation transcript for copy and share."]
         XCTAssertTrue(scrollToElement(transcript, in: app))
         XCTAssertTrue(transcript.waitForExistence(timeout: 8))
@@ -102,10 +100,9 @@ final class MuesliVoiceNoteUITests: MuesliUITestCase {
         let app = launchApp()
         addMicPermissionMonitor(on: app)
 
-        // The recorder panel (and its primary button) sits inside the
-        // DictationView ScrollView/LazyVStack below the header + stats, so on the
-        // CI simulator geometry it is below the fold and not realized in the a11y
-        // tree until scrolled into view.
+        // The primary button sits inside the DictationView ScrollView/LazyVStack
+        // below the header + stats, so scroll it into view first to ensure it is
+        // hittable before tapping.
         let primaryButton = app.buttons["dictation.primaryButton"]
         XCTAssertTrue(scrollToElement(primaryButton, in: app))
         XCTAssertTrue(primaryButton.waitForExistence(timeout: 8))

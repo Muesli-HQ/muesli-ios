@@ -260,12 +260,17 @@ struct MeetingsView: View {
                     .buttonStyle(.plain)
                     .disabled(isPrimaryMeetingActionDisabled)
                     .sensoryFeedback(.impact, trigger: coordinator.hasMeetingRecordingInProgress)
+                    .accessibilityAddTraits(.isButton)
                     .accessibilityIdentifier("meetings.primaryButton")
                 }
             }
             .padding(MuesliTheme.spacing16)
         }
-        .accessibilityIdentifier("meetings.startMeetingPanel")
+        // NOTE: Do NOT put an `.accessibilityIdentifier` on this container.
+        // SwiftUI propagates a container identifier onto every descendant
+        // accessibility element, which clobbers the child identifier
+        // (`meetings.primaryButton`) and makes it unaddressable by XCUITest.
+        // The Start Meeting button carries its own identifier.
     }
 
     private var meetingTemplatePicker: some View {

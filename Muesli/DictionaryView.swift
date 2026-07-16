@@ -128,7 +128,13 @@ struct DictionarySettingsContent: View {
                             CustomWordRow(customWord: customWord) {
                                 removeCustomWord(id: customWord.id)
                             }
-                            .accessibilityIdentifier("dictionary.entryRow.\(customWord.id.uuidString)")
+                            // NOTE: Do NOT put an `.accessibilityIdentifier` on
+                            // this row container. SwiftUI propagates a container
+                            // identifier onto every descendant, which clobbers
+                            // the delete button's identifier
+                            // (`dictionary.deleteButton.<uuid>`) and makes it
+                            // unaddressable by XCUITest. The delete button
+                            // carries its own identifier.
                         }
                     }
                 }

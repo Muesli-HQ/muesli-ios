@@ -460,7 +460,12 @@ struct DictationView: View {
             }
             .padding(MuesliTheme.spacing16)
         }
-        .accessibilityIdentifier("dictation.recorderPanel")
+        // NOTE: Do NOT put an `.accessibilityIdentifier` on this container.
+        // SwiftUI propagates a container identifier onto every descendant
+        // accessibility element, which clobbers the child identifiers
+        // (`dictation.primaryButton`, `dictation.cancelButton`) and makes them
+        // unaddressable by XCUITest (`app.buttons["dictation.primaryButton"]`
+        // never resolves). The child controls carry their own identifiers.
         .task(id: isActive) {
             guard isActive else { return }
             await runPreviewWaveformIfNeeded()
@@ -1457,8 +1462,19 @@ private struct DictationHistoryRow: View {
                     .accessibilityElement(children: .contain)
                     .accessibilityAddTraits(.isButton)
                     .accessibilityAction(named: "Open voice note", onOpen)
+                    // The row identifier lives HERE — on the `.contain`
+                    // container element — not on the inner `rowSurface`. A
+                    // container identifier applied inside the subtree propagates
+                    // onto and clobbers every descendant's own identifier (e.g.
+                    // `dictation.copyButton`, `dictation.readMore.<uuid>`),
+                    // making them unaddressable. `.contain` keeps children as
+                    // separate accessibility elements, so the id on the
+                    // container leaves the child identifiers intact.
+                    .accessibilityIdentifier("dictation.historyRow.\(result.id.uuidString)")
             } else {
                 rowSurface
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("dictation.historyRow.\(result.id.uuidString)")
             }
         }
         .confirmationDialog(
@@ -1502,7 +1518,6 @@ private struct DictationHistoryRow: View {
                 }
             }
         }
-        .accessibilityIdentifier("dictation.historyRow.\(result.id.uuidString)")
     }
 
     private var rowContent: some View {

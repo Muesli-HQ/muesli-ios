@@ -80,8 +80,8 @@ final class MuesliMeetingUITests: MuesliUITestCase {
         addMicPermissionMonitor(on: app)
 
         // The Start Meeting button lives inside the scrolling start-meeting
-        // panel, below the title field + template picker, so on the CI simulator
-        // geometry it can render below the fold. Scroll it into view first.
+        // panel, below the title field + template picker, so scroll it into view
+        // first to ensure it is hittable before tapping.
         let startButton = app.buttons["meetings.primaryButton"]
         XCTAssertTrue(scrollToElement(startButton, in: app))
         XCTAssertTrue(startButton.waitForExistence(timeout: 5))

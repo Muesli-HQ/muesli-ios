@@ -104,7 +104,22 @@ class MuesliUITestCase: XCTestCase {
                 return true
             }
         }
-        return element.exists && element.isHittable
+        let resolved = element.exists && element.isHittable
+        if !resolved {
+            // Diagnostic: attach the full accessibility tree (retained on
+            // failure) so CI `.xcresult` reveals whether the target is absent,
+            // present-but-not-hittable, or exposed under a different
+            // identifier/type. Also mirror to stdout/NSLog for the teed logs.
+            let tree = app.debugDescription
+            let attachment = XCTAttachment(string: tree)
+            attachment.name = "a11y-tree-on-scroll-failure"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            NSLog("MUESLI_UITEST_DIAG scrollToElement FAILED exists=%d hittable=%d",
+                  element.exists ? 1 : 0, element.isHittable ? 1 : 0)
+            print("MUESLI_UITEST_DIAG a11y tree on failure:\n\(tree)")
+        }
+        return resolved
     }
 
     /// Registers a UI interruption monitor that grants the microphone permission

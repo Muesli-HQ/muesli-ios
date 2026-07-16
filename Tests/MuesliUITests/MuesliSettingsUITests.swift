@@ -117,13 +117,14 @@ final class MuesliSettingsUITests: MuesliUITestCase {
         // "dictionary.deleteButton.<uuid>", so query it via a BEGINSWITH
         // predicate on the dynamic identifier.
         //
-        // Query by `.any`, NOT `.button`: the delete control is a
-        // `Button(role: .destructive)` with `.buttonStyle(.plain)` whose label
-        // is only an `Image(systemName: "trash")` (no text). SwiftUI surfaces
-        // such an image-only plain button to the accessibility tree as a
-        // non-`.button` element type, so filtering on `.button` finds nothing
-        // even though the identifier resolves. No ancestor combines/ignores the
-        // child, so `.any` locates the delete control reliably.
+        // Query by `.any` (a superset of `.button`) to be robust to how SwiftUI
+        // surfaces this image-only `Button(role: .destructive)` in the
+        // accessibility tree. Historically this test failed because the
+        // `CustomWordRow` container carried a `dictionary.entryRow.<uuid>`
+        // identifier, which propagated onto and clobbered every descendant's own
+        // id — so `dictionary.deleteButton.<uuid>` never resolved. That container
+        // id has since been removed; `.any` keeps the query resilient regardless
+        // of the leaf element type the delete control now reports.
         let deleteButton = firstElement(
             matchingIdentifierPrefix: "dictionary.deleteButton.", ofType: .any, in: app
         )

@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct KeyboardRootView: View {
+    static let preferredHeight: CGFloat = 245
+
     private static let recorderBodyHeight: CGFloat = 84
     private static let activeStatusWidth: CGFloat = 84
     private static let activeControlButtonWidth: CGFloat = 120
@@ -16,6 +18,13 @@ struct KeyboardRootView: View {
         .padding(.horizontal, MuesliTheme.spacing8)
         .padding(.top, 4)
         .padding(.bottom, 5)
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.preferredHeight, alignment: .bottom)
+        .transaction { transaction in
+            if !controller.isLaunchSettled {
+                transaction.animation = nil
+            }
+        }
         .background(
             LinearGradient(
                 colors: [
@@ -26,9 +35,10 @@ struct KeyboardRootView: View {
                 endPoint: .bottom
             )
         )
-        .onAppear {
-            controller.prepareLaunchRequestIfNeeded()
-        }
+        // iOS temporarily hosts third-party keyboards at full-screen and at
+        // an intermediate height. Keep those extra host regions transparent;
+        // only the final keyboard envelope should paint Muesli's surface.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 
     private var keyboardDeck: some View {

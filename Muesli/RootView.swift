@@ -139,7 +139,10 @@ struct RootView: View {
     private func sectionView(for section: AppSection, isActive: Bool) -> some View {
         switch section {
         case .dictations:
-            DictationView(coordinator: coordinator, isActive: isActive)
+            DictationView(
+                coordinator: coordinator,
+                isActive: isActive && coordinator.presentedLongVoiceNoteSessionID == nil
+            )
         case .meetings:
             MeetingsView(coordinator: coordinator, isActive: isActive)
         case .settings:
@@ -231,10 +234,11 @@ private struct KeyboardHandoffOverlay: View {
                 Spacer(minLength: MuesliTheme.spacing32)
 
                 VStack(spacing: MuesliTheme.spacing16) {
-                    MuesliInlineWaveformView(
+                    VoiceNoteWaveformLeaf(
+                        liveState: coordinator.voiceNoteLiveState,
                         mode: coordinator.isRecording ? .level : .waiting,
                         color: coordinator.isRecording ? MuesliTheme.recording : MuesliTheme.transcribing,
-                        level: coordinator.isRecording ? coordinator.inputLevel : nil,
+                        isActive: true,
                         barCount: 32
                     )
                     .frame(width: 220, height: 56)

@@ -18,8 +18,8 @@ struct DictationView: View {
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
-    @State private var previewInputLevel = 0.0
     @State private var dashboardStats = DictationDashboardStats.empty
+    @State private var voiceNoteTimelineCache = VoiceNoteTimelineCache()
     @State private var navigationPath = NavigationPath()
 
     var body: some View {
@@ -30,8 +30,7 @@ struct DictationView: View {
                     homeStatsRow
                     keyboardSessionHomeControl
                     recorderPanel
-                    historyHeader
-                    historyRows
+                    voiceNoteHistorySection
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)
                 .padding(.top, MuesliTheme.spacing24)
@@ -330,16 +329,11 @@ struct DictationView: View {
 
                     VStack(alignment: .trailing, spacing: MuesliTheme.spacing8) {
                         if coordinator.isRecording {
-                            Text(formatElapsedTime(coordinator.recordingElapsedTime))
-                                .font(MuesliTheme.captionMedium())
-                                .monospacedDigit()
-                                .foregroundStyle(statusColor)
-                                .padding(.horizontal, MuesliTheme.spacing8)
-                                .padding(.vertical, MuesliTheme.spacing4)
-                                .background(statusColor.opacity(0.13))
-                                .clipShape(Capsule())
-                                .accessibilityLabel("Recording elapsed time")
-                                .accessibilityValue(formatElapsedTime(coordinator.recordingElapsedTime))
+                            VoiceNoteElapsedBadge(
+                                liveState: coordinator.voiceNoteLiveState,
+                                color: statusColor,
+                                isActive: isActive
+                            )
                         }
 
                         microphoneMenu
@@ -349,12 +343,13 @@ struct DictationView: View {
 
                 if isWaveformActive {
                     VStack(spacing: MuesliTheme.spacing8) {
-                        MuesliInlineWaveformView(
+                        VoiceNoteWaveformLeaf(
+                            liveState: coordinator.voiceNoteLiveState,
                             mode: isListeningWaveformActive ? .level : .waiting,
                             color: statusColor,
-                            level: waveformLevel,
                             isActive: isActive,
-                            barCount: 32
+                            barCount: 32,
+                            usesPreviewSignal: isPreviewWaveformActive
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: 54)
@@ -369,24 +364,8 @@ struct DictationView: View {
                     .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: statusColor)
                 }
 
-                if shouldShowRealtimeTranscript {
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                        HStack(spacing: MuesliTheme.spacing8) {
-                            Image(systemName: "text.bubble")
-                            Text("Live Transcript")
-                        }
-                        .font(MuesliTheme.captionMedium())
-                        .foregroundStyle(MuesliTheme.accent)
-
-                        Text(coordinator.liveDictationTranscript)
-                            .font(MuesliTheme.body())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                            .lineLimit(nil)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(MuesliTheme.spacing12)
-                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
+                if shouldReserveRealtimeTranscript {
+                    VoiceNoteLiveTranscriptRegion(liveState: coordinator.voiceNoteLiveState)
                 }
 
                 VStack(spacing: MuesliTheme.spacing8) {
@@ -430,7 +409,7 @@ struct DictationView: View {
                         .accessibilityIdentifier("dictation.cancelButton")
                     }
                 }
-                .padding(.top, isWaveformActive || shouldShowRealtimeTranscript ? 0 : MuesliTheme.spacing4)
+                .padding(.top, isWaveformActive || shouldReserveRealtimeTranscript ? 0 : MuesliTheme.spacing4)
 
                 if longVoiceNoteModeEnabled && !coordinator.isRecording {
                     Button {
@@ -461,10 +440,6 @@ struct DictationView: View {
             .padding(MuesliTheme.spacing16)
         }
         .accessibilityIdentifier("dictation.recorderPanel")
-        .task(id: isActive) {
-            guard isActive else { return }
-            await runPreviewWaveformIfNeeded()
-        }
     }
 
     private var longModeThresholdLabel: String {
@@ -545,14 +520,26 @@ struct DictationView: View {
     }
 
     @ViewBuilder
-    private var historyHeader: some View {
+    private var voiceNoteHistorySection: some View {
+        let timeline = voiceNoteTimelineCache.items(
+            for: VoiceNoteTimelineInput(
+                history: displayHistory,
+                sessions: timelineSessions,
+                sourceFilter: sourceFilter
+            )
+        )
+        historyHeader(timeline: timeline)
+        historyRows(timeline: timeline)
+    }
+
+    private func historyHeader(timeline: [VoiceNoteTimelineItem]) -> some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                     Text("Recent Voice Notes")
                         .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("\(voiceNoteTimeline.count) saved")
+                    Text("\(timeline.count) saved")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }
@@ -573,20 +560,20 @@ struct DictationView: View {
                 }
             }
 
-            if !voiceNoteTimeline.isEmpty {
+            if !timeline.isEmpty {
                 DictationSourceFilterPicker(selection: $sourceFilter)
             }
         }
     }
 
     @ViewBuilder
-    private var historyRows: some View {
+    private func historyRows(timeline: [VoiceNoteTimelineItem]) -> some View {
         Group {
-            if voiceNoteTimeline.isEmpty {
+            if timeline.isEmpty {
                 emptyHistory
             } else {
                 LazyVStack(spacing: MuesliTheme.spacing12) {
-                    ForEach(voiceNoteTimeline) { item in
+                    ForEach(timeline) { item in
                         switch item {
                         case .recoverable(let session):
                             RecoverableVoiceNoteRow(session: session) {
@@ -618,33 +605,14 @@ struct DictationView: View {
         }
     }
 
-    private var filteredHistory: [DictationResult] {
-        displayHistory.filter { sourceFilter.includes($0.syncOrigin) }
-    }
-
-    private var filteredRecoverableVoiceNotes: [RecordingSession] {
-        coordinator.recoverableVoiceNoteSessions.filter { sourceFilter.includes($0.syncOrigin) }
-    }
-
-    private var voiceNoteTimeline: [VoiceNoteTimelineItem] {
+    private var timelineSessions: [RecordingSession] {
         var sessions = coordinator.recordingSessions
         #if DEBUG
         if shouldUseMockDictations {
             sessions = Self.mockRecordingSessions
         }
         #endif
-
-        let sessionsByID = Dictionary(
-            uniqueKeysWithValues: sessions.map { ($0.id, $0) }
-        )
-        let completed = filteredHistory.map { result in
-            VoiceNoteTimelineItem.completed(
-                result,
-                result.sessionID.flatMap { sessionsByID[$0] }
-            )
-        }
-        let recoverable = filteredRecoverableVoiceNotes.map(VoiceNoteTimelineItem.recoverable)
-        return VoiceNoteTimelineItem.mergeNewestFirst(completed, recoverable)
+        return sessions
     }
 
     private func openCompletedVoiceNote(
@@ -683,13 +651,6 @@ struct DictationView: View {
 
     private var isPreviewWaveformActive: Bool {
         Self.hasDebugSimulatorLaunchArgument("--muesli-preview-waveform")
-    }
-
-    private var waveformLevel: Double? {
-        if isPreviewWaveformActive {
-            return previewInputLevel
-        }
-        return coordinator.isRecording ? coordinator.inputLevel : nil
     }
 
     private var shouldHideKeyboardSetupRowForMockPreview: Bool {
@@ -750,10 +711,10 @@ struct DictationView: View {
         coordinator.statusText == "Transcribing"
     }
 
-    private var shouldShowRealtimeTranscript: Bool {
-        coordinator.selectedTranscriptionModel.supportsRealtimeStreaming
+    private var shouldReserveRealtimeTranscript: Bool {
+        isActive
+            && coordinator.selectedTranscriptionModel.supportsRealtimeStreaming
             && isWaveformActive
-            && !coordinator.liveDictationTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var isDictationButtonDisabled: Bool {
@@ -814,32 +775,6 @@ struct DictationView: View {
         let keyboardConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed)
         let fullAccessConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.fullAccessConfirmed)
         shouldShowKeyboardSetupRow = extensionStatus?.hasOpenAccess != true && !(keyboardConfirmed && fullAccessConfirmed)
-    }
-
-    private func formatElapsedTime(_ time: TimeInterval) -> String {
-        guard time.isFinite, time > 0 else { return "0:00" }
-        let totalSeconds = Int(time.rounded(.down))
-        let minutes = totalSeconds / 60
-        let seconds = totalSeconds % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
-
-    private func runPreviewWaveformIfNeeded() async {
-        guard isPreviewWaveformActive else { return }
-
-        var tick = 0.0
-        while !Task.isCancelled {
-            let phrase = (sin(tick * 0.82) + 1) * 0.28
-            let syllable = (sin(tick * 2.7) + 1) * 0.18
-            let transient = (sin(tick * 7.1) + 1) * 0.08
-            if sin(tick * 0.31) > 0.72 {
-                previewInputLevel = 0.02
-            } else {
-                previewInputLevel = min(0.95, max(0.02, 0.08 + phrase + syllable + transient))
-            }
-            tick += 0.18
-            try? await Task.sleep(for: .milliseconds(55))
-        }
     }
 
     private static func hasDebugSimulatorLaunchArgument(_ argument: String) -> Bool {
@@ -985,50 +920,6 @@ private struct DictationHomeStatTile: View {
         .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 3)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(value) \(label)")
-    }
-}
-
-private enum VoiceNoteTimelineItem: Identifiable {
-    case completed(DictationResult, RecordingSession?)
-    case recoverable(RecordingSession)
-
-    var id: String {
-        switch self {
-        case .completed(let result, _): "result-\(result.id.uuidString)"
-        case .recoverable(let session): "session-\(session.id.uuidString)"
-        }
-    }
-
-    var createdAt: Date {
-        switch self {
-        case .completed(let result, _): result.createdAt
-        case .recoverable(let session): session.createdAt
-        }
-    }
-
-    static func mergeNewestFirst(
-        _ completed: [VoiceNoteTimelineItem],
-        _ recoverable: [VoiceNoteTimelineItem]
-    ) -> [VoiceNoteTimelineItem] {
-        var completedIndex = 0
-        var recoverableIndex = 0
-        var merged: [VoiceNoteTimelineItem] = []
-        merged.reserveCapacity(completed.count + recoverable.count)
-
-        while completedIndex < completed.count || recoverableIndex < recoverable.count {
-            if completedIndex == completed.count {
-                merged.append(recoverable[recoverableIndex])
-                recoverableIndex += 1
-            } else if recoverableIndex == recoverable.count
-                        || completed[completedIndex].createdAt >= recoverable[recoverableIndex].createdAt {
-                merged.append(completed[completedIndex])
-                completedIndex += 1
-            } else {
-                merged.append(recoverable[recoverableIndex])
-                recoverableIndex += 1
-            }
-        }
-        return merged
     }
 }
 
@@ -1322,47 +1213,6 @@ private struct RotatingSyncGlyph: View {
         rotationDegrees = 0
         withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
             rotationDegrees = 360
-        }
-    }
-}
-
-private enum DictationSourceFilter: String, CaseIterable, Identifiable {
-    case all
-    case thisIPhone
-    case fromMac
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .all:
-            "All"
-        case .thisIPhone:
-            "This iPhone"
-        case .fromMac:
-            "From Mac"
-        }
-    }
-
-    func includes(_ origin: SyncOrigin) -> Bool {
-        switch self {
-        case .all:
-            true
-        case .thisIPhone:
-            origin == .thisIPhone
-        case .fromMac:
-            origin == .fromMac
-        }
-    }
-
-    func statTint(default tint: Color) -> Color {
-        switch self {
-        case .all:
-            tint
-        case .thisIPhone:
-            MuesliTheme.accent
-        case .fromMac:
-            MuesliTheme.success
         }
     }
 }

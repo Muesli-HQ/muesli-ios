@@ -110,7 +110,7 @@ struct MeetingsView: View {
                         canStopRecording: coordinator.canStopMeetingCapture(sessionID: session.id),
                         isRecoveryNeeded: coordinator.meetingNeedsRecovery(sessionID: session.id),
                         isProcessingCurrentMeeting: session.phase == .transcribing,
-                        inputLevel: coordinator.inputLevel,
+                        liveState: coordinator.voiceNoteLiveState,
                         statusText: coordinator.activeMeetingSessionID == session.id ? coordinator.effectiveMeetingStatusText : session.phase.title,
                         actionStatusText: coordinator.clipboardStatusText,
                         onTranscribe: { coordinator.transcribeSession(session) },
@@ -932,7 +932,7 @@ private struct MeetingSessionDetailView: View {
     let canStopRecording: Bool
     let isRecoveryNeeded: Bool
     let isProcessingCurrentMeeting: Bool
-    let inputLevel: Double
+    let liveState: VoiceNoteLiveState
     let statusText: String
     let actionStatusText: String?
     let onTranscribe: () -> Void
@@ -1182,10 +1182,10 @@ private struct MeetingSessionDetailView: View {
                     }
 
                     if !isRecoveryNeeded {
-                        MuesliInlineWaveformView(
+                        VoiceNoteWaveformLeaf(
+                            liveState: liveState,
                             mode: isActiveRecording ? .level : .waiting,
                             color: captureTint,
-                            level: isActiveRecording ? inputLevel : nil,
                             isActive: isActiveRecording || isProcessingCurrentMeeting,
                             barCount: 34
                         )

@@ -32,6 +32,7 @@ final class KeyboardController {
     var keyboardDismisser: (@MainActor () -> Void)?
     var liveTranscript = ""
     var inputLevel = 0.0
+    var isLaunchSettled = false
     private var lastInsertedCharacterCount = 0
     private var canUseRuntimeStart = false
 
@@ -377,6 +378,11 @@ final class KeyboardController {
     private func hasPendingCancelCommand() -> Bool {
         guard let command = try? store.pendingCommand(), command.action == .cancel else { return false }
         return cancelledRequestIDs.contains(command.requestID)
+    }
+
+    func prepareInitialPresentationState() {
+        refreshLatestDictation()
+        prepareLaunchRequestIfNeeded()
     }
 
     func startObservingSharedState() {

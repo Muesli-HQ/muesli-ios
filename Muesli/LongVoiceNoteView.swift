@@ -111,11 +111,17 @@ struct LongVoiceNoteView: View {
                         .foregroundStyle(statusColor)
                 }
 
-                Text(elapsedTimeCopy)
+                if isActivelyRecording {
+                    LongVoiceNoteElapsedText(liveState: coordinator.voiceNoteLiveState)
+                } else {
+                    Text(VoiceNoteDurationFormatter.padded(
+                        max(Int((session?.duration ?? 0).rounded(.down)), 0)
+                    ))
                     .font(.system(.title3, design: .monospaced, weight: .medium))
                     .monospacedDigit()
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .padding(.top, MuesliTheme.spacing4)
+                }
             }
 
             Spacer()
@@ -150,10 +156,10 @@ struct LongVoiceNoteView: View {
 
     private var activeWaveform: some View {
         VStack(spacing: MuesliTheme.spacing12) {
-            MuesliInlineWaveformView(
+            VoiceNoteWaveformLeaf(
+                liveState: coordinator.voiceNoteLiveState,
                 mode: .level,
                 color: MuesliTheme.accent,
-                level: coordinator.inputLevel,
                 isActive: true,
                 barCount: 44
             )
@@ -382,14 +388,6 @@ struct LongVoiceNoteView: View {
             return MuesliTheme.success
         }
         return MuesliTheme.accent
-    }
-
-    private var elapsedTimeCopy: String {
-        let duration = isActivelyRecording
-            ? coordinator.recordingElapsedTime
-            : session?.duration ?? 0
-        let totalSeconds = max(Int(duration.rounded(.down)), 0)
-        return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
     private var fallbackSession: RecordingSession {

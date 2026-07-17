@@ -156,6 +156,7 @@ final class DictationCoordinator {
     private var modelPrewarmTask: Task<Void, Never>?
     private var meteringTask: Task<Void, Never>?
     private var recordingTimerTask: Task<Void, Never>?
+    @ObservationIgnored private var recordingTimerStartedAt: Date?
     @ObservationIgnored nonisolated(unsafe) private var sharedEventObservationTask: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var longVoiceNoteRecoveryTask: Task<Void, Never>?
     private var keyboardCommandProcessingInProgress = false
@@ -282,13 +283,23 @@ final class DictationCoordinator {
     var onboardingTestTranscript = ""
     var onboardingTestError: String?
     var isRecording = false
-    var inputLevel = 0.0
-    var recordingElapsedTime: TimeInterval = 0
+    let voiceNoteLiveState = VoiceNoteLiveState()
+    var inputLevel: Double {
+        get { voiceNoteLiveState.inputLevel }
+        set { voiceNoteLiveState.setInputLevel(newValue) }
+    }
+    var recordingElapsedTime: TimeInterval {
+        get { TimeInterval(voiceNoteLiveState.elapsedSeconds) }
+        set { voiceNoteLiveState.setElapsedTime(newValue) }
+    }
     var statusText = "Ready"
     var audioInputRouteText = AudioInputRouteManager.currentSnapshot().displayText
     var meetingStatusText = "Ready"
     var lastTranscript = ""
-    var liveDictationTranscript = ""
+    var liveDictationTranscript: String {
+        get { voiceNoteLiveState.transcript }
+        set { voiceNoteLiveState.setTranscript(newValue) }
+    }
     var dictationHistory: [DictationResult] = []
     var recordingSessions: [RecordingSession] = []
     private var transcriptCache: [UUID: Transcript] = [:]
@@ -1021,7 +1032,7 @@ final class DictationCoordinator {
         else { return }
 
         if let threshold = session.longFormThresholdSeconds,
-           recordingElapsedTime >= Double(threshold),
+           currentRecordingElapsedTime() >= Double(threshold),
            let promotedSession = promoteActiveVoiceNoteToLongForm(sessionID: session.id) {
             session = promotedSession
         }
@@ -1158,7 +1169,7 @@ final class DictationCoordinator {
         checkpointCount: Int? = nil
     ) -> [String: String] {
         guard let session else { return [:] }
-        let duration = max(0, session.duration ?? recordingElapsedTime)
+        let duration = max(0, session.duration ?? currentRecordingElapsedTime())
         let durationBucket: String
         switch duration {
         case ..<60: durationBucket = "under_60"
@@ -3831,7 +3842,7 @@ final class DictationCoordinator {
         if let thresholdSession = session,
            !thresholdSession.isLongForm,
            let threshold = thresholdSession.longFormThresholdSeconds,
-           recordingElapsedTime >= Double(threshold),
+           currentRecordingElapsedTime() >= Double(threshold),
            let promotedSession = promoteActiveVoiceNoteToLongForm(sessionID: thresholdSession.id) {
             session = promotedSession
         }
@@ -5294,33 +5305,53 @@ final class DictationCoordinator {
     }
 
     private func startMetering(update: @escaping @MainActor (Double) -> Void) {
+        beginMetering(
+            readPower: { [weak self] in
+                guard let self else { return -160 }
+                if self.keyboardSessionKeeper.isRecordingSegment {
+                    return Double(self.keyboardSessionKeeper.currentPower())
+                }
+                return Double(self.realtimeDictationRecorder?.currentPower() ?? self.recorder.currentPower())
+            },
+            update: update
+        )
+    }
+
+    private func beginMetering(
+        readPower: @escaping @MainActor () -> Double,
+        update: @escaping @MainActor (Double) -> Void
+    ) {
         meteringTask?.cancel()
         meteringTask = Task { @MainActor [weak self] in
             var smoothedLevel = 0.0
 
             while !Task.isCancelled {
-                guard let self else { return }
-                let power = if self.keyboardSessionKeeper.isRecordingSegment {
-                    Double(self.keyboardSessionKeeper.currentPower())
-                } else {
-                    Double(self.realtimeDictationRecorder?.currentPower() ?? self.recorder.currentPower())
-                }
-                let normalized = min(max((power + 50) / 50, 0), 1)
-                smoothedLevel = (0.35 * normalized) + (0.65 * smoothedLevel)
+                // The callbacks intentionally capture the coordinator weakly.
+                // End this unstructured loop when its owner disappears instead
+                // of leaving a 20 Hz orphan task alive for the process lifetime.
+                guard self != nil else { return }
+                let normalized = min(max((readPower() + 50) / 50, 0), 1)
+                // 0.48 at 20 Hz preserves approximately the same response time
+                // as the previous 0.35 smoothing factor at 30 Hz.
+                smoothedLevel = (0.48 * normalized) + (0.52 * smoothedLevel)
                 update(smoothedLevel)
-                try? await Task.sleep(for: .milliseconds(33))
+                try? await Task.sleep(for: .milliseconds(50))
             }
         }
     }
 
     private func startRecordingTimer(startedAt: Date) {
         recordingTimerTask?.cancel()
-        recordingElapsedTime = 0
+        recordingTimerStartedAt = startedAt
+        recordingElapsedTime = currentRecordingElapsedTime()
         recordingTimerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                self.recordingElapsedTime = max(0, Date().timeIntervalSince(startedAt))
-                try? await Task.sleep(for: .milliseconds(250))
+                let elapsed = self.currentRecordingElapsedTime()
+                self.recordingElapsedTime = elapsed
+                let fractionalSecond = elapsed - elapsed.rounded(.down)
+                let delay = max(0.05, 1 - fractionalSecond)
+                try? await Task.sleep(for: .seconds(delay))
             }
         }
     }
@@ -5328,7 +5359,16 @@ final class DictationCoordinator {
     private func stopRecordingTimer() {
         recordingTimerTask?.cancel()
         recordingTimerTask = nil
+        recordingTimerStartedAt = nil
         recordingElapsedTime = 0
+    }
+
+    private func currentRecordingElapsedTime(now: Date = .now) -> TimeInterval {
+        VoiceNoteElapsedClock.exactElapsed(
+            startedAt: recordingTimerStartedAt,
+            now: now,
+            fallback: recordingElapsedTime
+        )
     }
 
     private func offlineTranscriptionTimeout(for audioURL: URL?) -> TimeInterval {
@@ -5482,19 +5522,14 @@ final class DictationCoordinator {
     }
 
     private func startMeetingMetering() {
-        meteringTask?.cancel()
-        meteringTask = Task { @MainActor [weak self] in
-            var smoothedLevel = 0.0
-
-            while !Task.isCancelled {
-                guard let self else { return }
-                let power = Double(self.meetingRecorder?.currentPower() ?? -160)
-                let normalized = min(max((power + 50) / 50, 0), 1)
-                smoothedLevel = (0.35 * normalized) + (0.65 * smoothedLevel)
-                self.inputLevel = smoothedLevel
-                try? await Task.sleep(for: .milliseconds(33))
+        beginMetering(
+            readPower: { [weak self] in
+                Double(self?.meetingRecorder?.currentPower() ?? -160)
+            },
+            update: { [weak self] level in
+                self?.inputLevel = level
             }
-        }
+        )
     }
 
     private func stopMetering() {

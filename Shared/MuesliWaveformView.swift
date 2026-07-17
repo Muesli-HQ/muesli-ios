@@ -63,6 +63,18 @@ enum MuesliFloatingWaveformMode: Equatable {
     case waiting
 }
 
+enum MuesliInlineWaveformRefreshDriver: Equatable {
+    /// Redraw only when a new metered input level arrives.
+    case inputLevel
+    /// Animate independently of level publication, used by the keyboard where
+    /// cross-process meter values are intentionally throttled.
+    case timeline
+
+    func usesTimeline(for mode: MuesliFloatingWaveformMode) -> Bool {
+        mode == .waiting || self == .timeline
+    }
+}
+
 enum MuesliKeyboardWaveformPresentation {
     static func mode(for phase: DictationPhase) -> MuesliFloatingWaveformMode {
         phase == .recording ? .level : .waiting
@@ -104,9 +116,7 @@ struct MuesliInlineWaveformView: View {
     var barCount: Int = 24
     var spacing: CGFloat = 3
     var framesPerSecond: Double = 24
-
-    @State private var liveSamples: [CGFloat] = []
-    @State private var sampleSequence = 0
+    var refreshDriver: MuesliInlineWaveformRefreshDriver = .inputLevel
 
     private let basePattern: [CGFloat] = [
         0.18, 0.26, 0.42, 0.58, 0.76, 0.92,
@@ -117,28 +127,16 @@ struct MuesliInlineWaveformView: View {
 
     var body: some View {
         Group {
-            if isActive {
+            if isActive && refreshDriver.usesTimeline(for: mode) {
                 TimelineView(.animation(minimumInterval: 1.0 / max(framesPerSecond, 1.0))) { timeline in
                     let elapsed = timeline.date.timeIntervalSinceReferenceDate
                     waveformCanvas(elapsed: elapsed)
                 }
             } else {
-                waveformCanvas(elapsed: 0)
+                waveformCanvas(
+                    elapsed: isActive ? Date.now.timeIntervalSinceReferenceDate : 0
+                )
             }
-        }
-        .onAppear {
-            seedLiveSamplesIfNeeded()
-        }
-        .onChange(of: level ?? 0) { _, newValue in
-            guard isActive else { return }
-            appendLiveSample(newValue)
-        }
-        .onChange(of: mode) { _, _ in
-            seedLiveSamplesIfNeeded(force: true)
-        }
-        .onChange(of: isActive) { _, active in
-            guard active else { return }
-            seedLiveSamplesIfNeeded(force: true)
         }
     }
 
@@ -196,13 +194,13 @@ struct MuesliInlineWaveformView: View {
     }
 
     private func liveLevelSamples(count: Int, elapsed: TimeInterval) -> [CGFloat] {
-        var samples = paddedLiveSamples(count: count)
+        var samples = Array(repeating: CGFloat.zero, count: count)
         guard let level else { return samples }
 
         let normalized = CGFloat(min(max(level, 0), 1))
         let gatedLevel = gatedLevel(for: normalized)
         guard gatedLevel > 0.02 else {
-            return samples.map { min($0, 0.02) }
+            return samples
         }
 
         let shaped = pow(gatedLevel, 0.72)
@@ -220,19 +218,6 @@ struct MuesliInlineWaveformView: View {
         return samples
     }
 
-    private func paddedLiveSamples(count: Int) -> [CGFloat] {
-        guard !liveSamples.isEmpty else {
-            return Array(repeating: 0, count: count)
-        }
-
-        let suffix = liveSamples.suffix(count)
-        if suffix.count == count {
-            return Array(suffix)
-        }
-
-        return Array(repeating: 0, count: count - suffix.count) + suffix
-    }
-
     private func waitingSamples(count: Int, elapsed: TimeInterval) -> [CGFloat] {
         (0..<count).map { index in
             let base = basePattern[index % basePattern.count]
@@ -244,29 +229,6 @@ struct MuesliInlineWaveformView: View {
     private func waitingOpacity(index: Int, elapsed: TimeInterval) -> Double {
         let phase = CGFloat(elapsed) * 5.8 + CGFloat(index) * 0.72
         return Double(0.48 + (sin(phase) + 1) * 0.16)
-    }
-
-    private func seedLiveSamplesIfNeeded(force: Bool = false) {
-        guard force || liveSamples.isEmpty else { return }
-
-        liveSamples = Array(repeating: 0, count: sampleCount)
-    }
-
-    private func appendLiveSample(_ rawLevel: Double) {
-        guard mode == .level else { return }
-
-        let normalized = CGFloat(min(max(rawLevel, 0), 1))
-        let gatedLevel = gatedLevel(for: normalized)
-        let shaped = pow(gatedLevel, 0.72)
-        let texture = CGFloat(0.90 + 0.16 * sin(Double(sampleSequence) * 1.73))
-        let sample = gatedLevel <= 0.02 ? 0 : min(0.98, max(0.01, shaped * 0.92 * texture))
-        let maxSamples = sampleCount * 3
-
-        sampleSequence += 1
-        liveSamples.append(sample)
-        if liveSamples.count > maxSamples {
-            liveSamples.removeFirst(liveSamples.count - maxSamples)
-        }
     }
 
     private func gatedLevel(for normalized: CGFloat) -> CGFloat {

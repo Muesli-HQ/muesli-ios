@@ -78,12 +78,14 @@ struct LongVoiceNoteElapsedText: View {
     let liveState: VoiceNoteLiveState
 
     var body: some View {
-        Text(VoiceNoteDurationFormatter.padded(liveState.elapsedSeconds))
+        let value = VoiceNoteDurationFormatter.padded(liveState.elapsedSeconds)
+        Text(value)
             .font(.system(.title3, design: .monospaced, weight: .medium))
             .monospacedDigit()
             .foregroundStyle(MuesliTheme.textSecondary)
             .padding(.top, MuesliTheme.spacing4)
             .accessibilityLabel("Recording elapsed time")
+            .accessibilityValue(value)
     }
 }
 

@@ -560,7 +560,7 @@ struct DictationView: View {
                 }
             }
 
-            if !timeline.isEmpty {
+            if sourceFilter != .all || !timeline.isEmpty {
                 DictationSourceFilterPicker(selection: $sourceFilter)
             }
         }

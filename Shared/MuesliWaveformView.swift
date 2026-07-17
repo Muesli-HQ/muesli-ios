@@ -200,7 +200,7 @@ struct MuesliInlineWaveformView: View {
         let normalized = CGFloat(min(max(level, 0), 1))
         let gatedLevel = gatedLevel(for: normalized)
         guard gatedLevel > 0.02 else {
-            return samples.map { min($0, 0.02) }
+            return samples
         }
 
         let shaped = pow(gatedLevel, 0.72)

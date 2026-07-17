@@ -9,6 +9,7 @@ final class KeyboardViewController: UIInputViewController {
     private var hasEnteredAppearance = false
     private var isKeyboardPresented = false
     private var hasActivatedKeyboardRuntime = false
+    private var appearanceGuard = MuesliKeyboardAppearanceGuard()
     private var stableGeometryFrameCount = 0
     private var launchSnapshotWidth: CGFloat = 0
     private var launchGeometryDisplayLink: CADisplayLink?
@@ -89,6 +90,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     override func viewWillAppear(_ animated: Bool) {
+        appearanceGuard.beginAppearance()
         controller.isLaunchSettled = false
         controller.prepareInitialPresentationState()
         refreshLaunchSnapshot()
@@ -128,6 +130,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     override func viewWillDisappear(_ animated: Bool) {
+        appearanceGuard.endAppearance()
         super.viewWillDisappear(animated)
 
         isKeyboardPresented = false
@@ -189,6 +192,7 @@ private extension KeyboardViewController {
 
     func activateKeyboardRuntimeIfNeeded() {
         guard isKeyboardPresented, !hasActivatedKeyboardRuntime else { return }
+        let generation = appearanceGuard.generation
         hasActivatedKeyboardRuntime = true
         stopLaunchGeometryGate()
         revealLiveKeyboardSurface()
@@ -198,11 +202,21 @@ private extension KeyboardViewController {
         // launch animations disabled while the observer performs its first
         // reconciliation so presentation state cannot visibly cross-fade.
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.isKeyboardPresented, self.hasActivatedKeyboardRuntime else { return }
+            guard let self,
+                  self.appearanceGuard.acceptsDeferredWork(
+                    from: generation,
+                    isPresented: self.isKeyboardPresented,
+                    hasActivatedRuntime: self.hasActivatedKeyboardRuntime
+                  ) else { return }
             self.controller.startObservingSharedState()
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                guard let self, self.isKeyboardPresented, self.hasActivatedKeyboardRuntime else { return }
+                guard let self,
+                      self.appearanceGuard.acceptsDeferredWork(
+                        from: generation,
+                        isPresented: self.isKeyboardPresented,
+                        hasActivatedRuntime: self.hasActivatedKeyboardRuntime
+                      ) else { return }
                 self.controller.isLaunchSettled = true
             }
         }

@@ -2,6 +2,47 @@ import XCTest
 @testable import Muesli
 
 final class KeyboardWaveformTests: XCTestCase {
+    func testStaleAppearanceCannotSettleANewerKeyboardPresentation() {
+        var appearanceGuard = MuesliKeyboardAppearanceGuard()
+        let firstAppearance = appearanceGuard.beginAppearance()
+
+        XCTAssertTrue(appearanceGuard.acceptsDeferredWork(
+            from: firstAppearance,
+            isPresented: true,
+            hasActivatedRuntime: true
+        ))
+
+        appearanceGuard.endAppearance()
+        let secondAppearance = appearanceGuard.beginAppearance()
+
+        XCTAssertFalse(appearanceGuard.acceptsDeferredWork(
+            from: firstAppearance,
+            isPresented: true,
+            hasActivatedRuntime: true
+        ))
+        XCTAssertTrue(appearanceGuard.acceptsDeferredWork(
+            from: secondAppearance,
+            isPresented: true,
+            hasActivatedRuntime: true
+        ))
+    }
+
+    func testCurrentAppearanceStillRequiresPresentationAndRuntimeActivation() {
+        var appearanceGuard = MuesliKeyboardAppearanceGuard()
+        let appearance = appearanceGuard.beginAppearance()
+
+        XCTAssertFalse(appearanceGuard.acceptsDeferredWork(
+            from: appearance,
+            isPresented: false,
+            hasActivatedRuntime: true
+        ))
+        XCTAssertFalse(appearanceGuard.acceptsDeferredWork(
+            from: appearance,
+            isPresented: true,
+            hasActivatedRuntime: false
+        ))
+    }
+
     func testKeyboardWaveformUsesMeteredLevelOnlyWhileRecording() {
         XCTAssertEqual(MuesliKeyboardWaveformPresentation.mode(for: .recording), .level)
         XCTAssertEqual(

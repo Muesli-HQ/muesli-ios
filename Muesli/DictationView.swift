@@ -928,6 +928,8 @@ private struct RecoverableVoiceNoteRow: View {
     let action: () -> Void
 
     var body: some View {
+        let hasDraft = !(session.draftTranscriptText?
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         Button(action: action) {
             HStack(spacing: MuesliTheme.spacing12) {
                 Image(systemName: session.audioFileName == nil ? "waveform.slash" : "waveform.badge.exclamationmark")
@@ -938,15 +940,18 @@ private struct RecoverableVoiceNoteRow: View {
                     .clipShape(Circle())
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                    Text(session.audioFileName == nil ? "Audio unavailable" : "Needs transcription")
+                    Text(hasDraft
+                        ? "Partial transcript recovered"
+                        : (session.audioFileName == nil ? "Audio unavailable" : "Needs transcription"))
                         .font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text(session.createdAt.formatted(date: .abbreviated, time: .shortened))
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
-                    if let scratchpad = session.scratchpadText?.trimmingCharacters(in: .whitespacesAndNewlines),
-                       !scratchpad.isEmpty {
-                        Text(scratchpad)
+                    if let preview = (session.draftTranscriptText ?? session.scratchpadText)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                       !preview.isEmpty {
+                        Text(preview)
                             .font(MuesliTheme.callout())
                             .foregroundStyle(MuesliTheme.textSecondary)
                             .lineLimit(2)

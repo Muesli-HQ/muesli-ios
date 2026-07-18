@@ -10,6 +10,8 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         let activatedAt = Date(timeIntervalSince1970: 200)
         let attemptedAt = Date(timeIntervalSince1970: 300)
         let recoveryValidatedAt = Date(timeIntervalSince1970: 400)
+        let interruptedAt = Date(timeIntervalSince1970: 500)
+        let draftUpdatedAt = Date(timeIntervalSince1970: 510)
         let session = RecordingSession(
             kind: .quickDictation,
             phase: .failed,
@@ -23,7 +25,11 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
             lastTranscriptionAttemptAt: attemptedAt,
             lastTranscriptionFailureReason: .timeout,
             scratchpadText: "Remember the second point",
-            longFormRecoveryValidatedAt: recoveryValidatedAt
+            longFormRecoveryValidatedAt: recoveryValidatedAt,
+            captureInterruptionReason: .appSuspended,
+            captureInterruptedAt: interruptedAt,
+            draftTranscriptText: "A durable partial transcript",
+            draftTranscriptUpdatedAt: draftUpdatedAt
         )
 
         try store.saveSession(session)
@@ -39,6 +45,10 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertEqual(recovered.lastTranscriptionFailureReason, .timeout)
         XCTAssertEqual(recovered.scratchpadText, "Remember the second point")
         XCTAssertEqual(recovered.longFormRecoveryValidatedAt, recoveryValidatedAt)
+        XCTAssertEqual(recovered.captureInterruptionReason, .appSuspended)
+        XCTAssertEqual(recovered.captureInterruptedAt, interruptedAt)
+        XCTAssertEqual(recovered.draftTranscriptText, "A durable partial transcript")
+        XCTAssertEqual(recovered.draftTranscriptUpdatedAt, draftUpdatedAt)
         XCTAssertEqual(recovered.voiceNoteDurabilityEvidence, .durableCheckpoint)
     }
 
@@ -50,7 +60,8 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
             "isLongForm", "longFormActivatedAt", "longFormThresholdSeconds",
             "hasDurableAudioCheckpoint", "protectedAudioUntilTranscriptCompletes", "transcriptionRetryCount",
             "lastTranscriptionAttemptAt", "lastTranscriptionFailureReason", "scratchpadText",
-            "longFormRecoveryValidatedAt"
+            "longFormRecoveryValidatedAt", "captureInterruptionReason", "captureInterruptedAt",
+            "draftTranscriptText", "draftTranscriptUpdatedAt"
         ] {
             payload.removeValue(forKey: key)
         }
@@ -69,6 +80,10 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertNil(decoded.lastTranscriptionFailureReason)
         XCTAssertNil(decoded.scratchpadText)
         XCTAssertNil(decoded.longFormRecoveryValidatedAt)
+        XCTAssertNil(decoded.captureInterruptionReason)
+        XCTAssertNil(decoded.captureInterruptedAt)
+        XCTAssertNil(decoded.draftTranscriptText)
+        XCTAssertNil(decoded.draftTranscriptUpdatedAt)
         XCTAssertEqual(decoded.voiceNoteDurabilityEvidence, .unavailable)
     }
 
@@ -82,19 +97,18 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         XCTAssertEqual(referencedOnly.voiceNoteDurabilityEvidence, .audioReferenceOnly)
     }
 
-    func testTranscriptionRetryRequiresAFailedSessionWithDurableCheckpoint() {
+    func testTranscriptionRetryRequiresVerifiedProtectedAudio() {
         let retryable = RecordingSession(
             kind: .quickDictation,
             phase: .failed,
             audioFileName: "voice-note.wav",
-            isLongForm: true,
-            hasDurableAudioCheckpoint: true
+            protectedAudioUntilTranscriptCompletes: true
         )
         XCTAssertTrue(retryable.canRetryVoiceNoteTranscription)
 
-        var referenceOnly = retryable
-        referenceOnly.hasDurableAudioCheckpoint = false
-        XCTAssertFalse(referenceOnly.canRetryVoiceNoteTranscription)
+        var unverified = retryable
+        unverified.protectedAudioUntilTranscriptCompletes = false
+        XCTAssertFalse(unverified.canRetryVoiceNoteTranscription)
 
         var missingAudio = retryable
         missingAudio.audioFileName = nil
@@ -103,6 +117,18 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         var completed = retryable
         completed.phase = .completed
         XCTAssertFalse(completed.canRetryVoiceNoteTranscription)
+    }
+
+    func testInterruptedVoiceNoteStillOwnsActiveWork() {
+        let session = RecordingSession(
+            kind: .keyboardDictation,
+            phase: .interrupted,
+            source: "keyboard",
+            captureInterruptionReason: .appSuspended
+        )
+
+        XCTAssertTrue(session.hasActiveVoiceNoteWork)
+        XCTAssertTrue(session.isKeyboardOwnedVoiceNote)
     }
 
     func testVoiceNoteWorkOwnershipDistinguishesAppAndKeyboardSessions() {

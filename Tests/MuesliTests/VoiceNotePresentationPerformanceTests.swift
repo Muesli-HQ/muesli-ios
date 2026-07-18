@@ -89,8 +89,10 @@ final class VoiceNotePresentationPerformanceTests: XCTestCase {
             kind: .quickDictation,
             createdAt: Date(timeIntervalSinceReferenceDate: 200),
             phase: .failed,
+            audioFileName: "recoverable.wav",
             source: "ios",
-            isLongForm: true
+            isLongForm: true,
+            protectedAudioUntilTranscriptCompletes: true
         )
 
         let items = VoiceNoteTimelineBuilder.build(
@@ -106,6 +108,29 @@ final class VoiceNotePresentationPerformanceTests: XCTestCase {
             return XCTFail("The newest recoverable session should lead the timeline")
         }
         XCTAssertEqual(first.id, recoverable.id)
+    }
+
+    func testTimelineBuilderKeepsInterruptedShortNoteWithOnlyDraftEvidence() {
+        let session = Muesli.RecordingSession(
+            kind: .keyboardDictation,
+            createdAt: Date(timeIntervalSinceReferenceDate: 250),
+            phase: .interrupted,
+            source: "keyboard",
+            isLongForm: false,
+            captureInterruptionReason: .appSuspended,
+            draftTranscriptText: "Words captured before the screen locked",
+            draftTranscriptUpdatedAt: Date(timeIntervalSinceReferenceDate: 251)
+        )
+
+        let items = VoiceNoteTimelineBuilder.build(
+            from: VoiceNoteTimelineInput(
+                history: [],
+                sessions: [session],
+                sourceFilter: .all
+            )
+        )
+
+        XCTAssertEqual(items, [.recoverable(session)])
     }
 
     func testTranscriptPreviewIsBoundedAndPreservesTheNewestText() {

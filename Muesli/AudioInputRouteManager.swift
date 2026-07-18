@@ -56,7 +56,12 @@ enum AudioInputRouteManager {
         do {
             try session.setCategory(
                 .playAndRecord,
-                mode: .spokenAudio,
+                // `.spokenAudio` is a playback-only mode. Pairing it with
+                // `.playAndRecord` causes AVAudioSession to fall back to its
+                // default behavior, which makes lock/route recovery depend on
+                // an implicit configuration. Use the supported recording mode
+                // explicitly so the active session survives background capture.
+                mode: .default,
                 options: recordingCategoryOptions
             )
             try session.setActive(true)
@@ -65,7 +70,7 @@ enum AudioInputRouteManager {
                 try? session.setActive(false, options: .notifyOthersOnDeactivation)
                 try session.setCategory(
                     .playAndRecord,
-                    mode: .spokenAudio,
+                    mode: .default,
                     options: recordingCategoryOptions
                 )
                 try session.setActive(true)

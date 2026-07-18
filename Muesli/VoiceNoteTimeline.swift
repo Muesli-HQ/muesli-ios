@@ -80,10 +80,17 @@ enum VoiceNoteTimelineBuilder {
             )
         }
         let recoverable = input.sessions.compactMap { session -> VoiceNoteTimelineItem? in
+            let hasDraft = !(session.draftTranscriptText?
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            let hasRecoveryEvidence = session.audioFileName != nil
+                || session.protectedAudioUntilTranscriptCompletes
+                || session.hasDurableAudioCheckpoint
+                || hasDraft
             guard input.sourceFilter.includes(session.syncOrigin),
                   session.kind != .meeting,
-                  session.isLongForm,
-                  [.recording, .transcriptionQueued, .transcribing, .failed].contains(session.phase)
+                  hasRecoveryEvidence,
+                  [.recording, .interrupted, .transcriptionQueued, .transcribing, .failed]
+                    .contains(session.phase)
             else { return nil }
             return .recoverable(session)
         }

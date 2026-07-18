@@ -98,7 +98,7 @@ struct LongVoiceNoteView: View {
     private var recordingHeader: some View {
         HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                Text("Long Voice Note")
+                Text(session?.isLongForm == true ? "Long Voice Note" : "Voice Note Recovery")
                     .font(MuesliTheme.title2())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
@@ -214,7 +214,9 @@ struct LongVoiceNoteView: View {
     @ViewBuilder
     private var failureRecoveryPanel: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            Text(session?.canRetryVoiceNoteTranscription == true ? "Transcription failed" : "Recovery unavailable")
+            Text(session?.canRetryVoiceNoteTranscription == true
+                ? "Transcription interrupted"
+                : (session?.draftTranscriptText == nil ? "Recovery unavailable" : "Partial transcript recovered"))
                 .font(MuesliTheme.headline())
                 .foregroundStyle(MuesliTheme.textPrimary)
 
@@ -227,7 +229,7 @@ struct LongVoiceNoteView: View {
 
             if session?.canRetryVoiceNoteTranscription != true,
                session?.audioFileName != nil {
-                Text("A durable audio checkpoint is not available, so this transcription cannot be retried safely.")
+                Text("The audio could not be verified yet. Muesli preserved the recovery files instead of deleting them.")
                     .font(MuesliTheme.callout())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -246,12 +248,16 @@ struct LongVoiceNoteView: View {
 
     @ViewBuilder
     private var completedTranscript: some View {
-        if session?.phase == .completed,
-           let text = coordinator.transcript(for: session ?? fallbackSession)?.text
-                ?? coordinator.dictationHistory.first(where: { $0.sessionID == sessionID })?.text,
+        if let text = (session?.phase == .completed
+            ? coordinator.transcript(for: session ?? fallbackSession)?.text
+                ?? coordinator.dictationHistory.first(where: { $0.sessionID == sessionID })?.text
+            : session?.draftTranscriptText),
            !text.isEmpty {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                Label("Transcript", systemImage: "text.alignleft")
+                Label(
+                    session?.phase == .completed ? "Transcript" : "Recovered partial transcript",
+                    systemImage: "text.alignleft"
+                )
                     .font(MuesliTheme.headline())
                     .foregroundStyle(MuesliTheme.textPrimary)
                 Text(text)
@@ -367,6 +373,7 @@ struct LongVoiceNoteView: View {
         }
         switch session.phase {
         case .recording: return "Recovered recording"
+        case .interrupted: return "Recording interrupted — audio saved locally"
         case .transcriptionQueued: return "Waiting to transcribe"
         case .transcribing: return "Transcribing"
         case .completed: return "Transcript ready"

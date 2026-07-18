@@ -43,27 +43,29 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
         self.checkpointDirectory = checkpointDirectory
         self.format = format
         if let continuousAudioURL {
-            try FileManager.default.createDirectory(
-                at: continuousAudioURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+            try SharedFileProtection.prepareMetadataDirectory(
+                at: continuousAudioURL.deletingLastPathComponent()
             )
         }
-        try FileManager.default.createDirectory(at: checkpointDirectory, withIntermediateDirectories: true)
+        try SharedFileProtection.prepareMetadataDirectory(at: checkpointDirectory)
         let checkpointURL = Self.checkpointURL(directory: checkpointDirectory, index: 0)
         state = State(
             continuousFile: try continuousAudioURL.map {
-                try AVAudioFile(forWriting: $0, settings: format.settings)
+                try Self.makeProtectedAudioFile(at: $0, format: format)
             },
             continuousURL: continuousAudioURL,
-            checkpointFile: try AVAudioFile(forWriting: checkpointURL, settings: format.settings),
+            checkpointFile: try Self.makeProtectedAudioFile(at: checkpointURL, format: format),
             checkpointURL: checkpointURL
         )
     }
 
-    func append(_ buffer: AVAudioPCMBuffer) {
+    func append(
+        _ buffer: AVAudioPCMBuffer,
+        onAccepted: (@Sendable () -> Void)? = nil
+    ) {
         guard let copy = Self.copyBuffer(buffer), copy.frameLength > 0 else { return }
         queue.async { [weak self] in
-            self?.write(copy)
+            self?.write(copy, onAccepted: onAccepted)
         }
     }
 
@@ -85,7 +87,7 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
             let nextIndex = state.checkpointIndex + 1
             let nextURL = Self.checkpointURL(directory: checkpointDirectory, index: nextIndex)
             do {
-                state.checkpointFile = try AVAudioFile(forWriting: nextURL, settings: format.settings)
+                state.checkpointFile = try Self.makeProtectedAudioFile(at: nextURL, format: format)
                 state.checkpointURL = nextURL
                 state.checkpointIndex = nextIndex
                 state.checkpointStartFrame = state.totalFrames
@@ -147,7 +149,10 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
         }
     }
 
-    private func write(_ buffer: AVAudioPCMBuffer) {
+    private func write(
+        _ buffer: AVAudioPCMBuffer,
+        onAccepted: (@Sendable () -> Void)?
+    ) {
         guard !state.isClosed else { return }
         let frameCount = AVAudioFramePosition(buffer.frameLength)
         guard frameCount > 0 else { return }
@@ -175,6 +180,7 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
         }
         if wroteFrames {
             state.totalFrames += frameCount
+            onAccepted?()
         }
     }
 
@@ -189,6 +195,17 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
         directory
             .appendingPathComponent("chunk-\(String(format: "%04d", index))")
             .appendingPathExtension("wav")
+    }
+
+    private static func makeProtectedAudioFile(at url: URL, format: AVAudioFormat) throws -> AVAudioFile {
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try SharedFileProtection.protectAudio(at: url)
+            return file
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
     }
 
     private static func copyBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {

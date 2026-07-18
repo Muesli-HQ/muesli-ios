@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum DictationPhase: String, Codable, Sendable, Equatable {
@@ -13,6 +14,30 @@ enum DictationCommandAction: String, Codable, Sendable, Equatable {
     case start
     case stop
     case cancel
+}
+
+enum KeyboardIntentTransitionPolicy {
+    /// `pending_command` is a durable desired state, not a lossy event edge.
+    /// Within one request intent may only become more terminal; an old Start
+    /// retry must never revive a Stop/Cancel that the user already requested.
+    static func permits(
+        current: DictationCommand?,
+        proposed: DictationCommand
+    ) -> Bool {
+        guard let current else { return true }
+
+        guard current.requestID == proposed.requestID else {
+            return proposed.action == .start && proposed.createdAt >= current.createdAt
+        }
+        guard proposed.createdAt >= current.createdAt else { return false }
+
+        switch (current.action, proposed.action) {
+        case (.start, _), (.stop, .stop), (.stop, .cancel), (.cancel, .cancel):
+            return true
+        case (.stop, .start), (.cancel, .start), (.cancel, .stop):
+            return false
+        }
+    }
 }
 
 enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
@@ -47,6 +72,81 @@ enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
     }
 }
 
+enum KeyboardHandoffTransitionPolicy {
+    /// Handoff rows are shared by the container app and keyboard extension. Writes
+    /// can therefore arrive out of order even though each process is internally
+    /// serialized. Keep same-request transitions monotonic so a late container
+    /// update cannot revive a result that the keyboard already inserted.
+    static func permits(
+        current: KeyboardHandoffState?,
+        proposed: KeyboardHandoffState
+    ) -> Bool {
+        guard let current else { return true }
+        guard current.requestID == proposed.requestID else {
+            // Only an explicit Start may replace the global handoff row. Late
+            // completion/failure callbacks from an older request must never
+            // clobber a different request that is already in flight.
+            guard proposed.phase == .startRequested,
+                  [.idle, .inserted, .failed, .cancelled].contains(current.phase)
+            else { return false }
+            return proposed.createdAt >= current.createdAt
+        }
+
+        if current.phase == proposed.phase {
+            return proposed.updatedAt >= current.updatedAt
+        }
+
+        switch current.phase {
+        case .inserted, .cancelled:
+            return false
+        case .failed:
+            return proposed.phase == .inserted
+                || (proposed.phase == .transcribingStarted
+                    && proposed.recoveryAttemptCount > current.recoveryAttemptCount)
+        case .resultReady:
+            return proposed.phase == .inserted
+        case .recoveryRequested:
+            // Opening Muesli explicitly resumes the same durable request. The
+            // container is then allowed to replace the transport-recovery marker
+            // with the authoritative lifecycle phase it observes.
+            return ![.idle, .startRequested].contains(proposed.phase)
+        default:
+            break
+        }
+
+        if proposed.phase == .inserted {
+            return true
+        }
+        if [.failed, .cancelled, .recoveryRequested].contains(proposed.phase) {
+            return true
+        }
+
+        let proposedProgress = progress(of: proposed.phase)
+        let currentProgress = progress(of: current.phase)
+        if proposedProgress == currentProgress {
+            return proposed.updatedAt >= current.updatedAt
+        }
+        return proposedProgress > currentProgress
+    }
+
+    private static func progress(of phase: KeyboardHandoffPhase) -> Int {
+        switch phase {
+        case .idle: 0
+        case .startRequested: 10
+        case .startAcknowledged: 20
+        case .recordingStarted: 30
+        case .stopRequested, .cancelRequested: 40
+        case .stopAcknowledged: 50
+        case .audioSaved: 60
+        case .transcribingStarted: 70
+        case .resultReady: 80
+        case .recoveryRequested: 85
+        case .failed: 90
+        case .inserted, .cancelled: 100
+        }
+    }
+}
+
 enum RecordingSessionKind: String, Codable, Sendable, Equatable, CaseIterable {
     case quickDictation
     case keyboardDictation
@@ -66,11 +166,21 @@ enum RecordingSessionKind: String, Codable, Sendable, Equatable, CaseIterable {
 
 enum RecordingSessionPhase: String, Codable, Sendable, Equatable, Hashable {
     case recording
+    case interrupted
     case transcriptionQueued
     case transcribing
     case completed
     case failed
     case cancelled
+}
+
+enum VoiceNoteCaptureInterruptionReason: String, Codable, Sendable, Equatable {
+    case system
+    case appSuspended
+    case routeDisconnected
+    case microphoneMuted
+    case mediaServicesReset
+    case engineConfigurationChanged
 }
 
 enum VoiceNoteTranscriptionFailureReason: String, Codable, Sendable, Equatable {
@@ -185,18 +295,69 @@ struct DictationRequest: Codable, Sendable, Equatable, Identifiable {
 }
 
 struct DictationCommand: Codable, Sendable, Equatable {
+    let id: UUID
     let requestID: UUID
     let action: DictationCommandAction
     let createdAt: Date
 
     init(
+        id: UUID = UUID(),
         requestID: UUID,
         action: DictationCommandAction,
         createdAt: Date = .now
     ) {
+        self.id = id
         self.requestID = requestID
         self.action = action
         self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case requestID
+        case action
+        case createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let requestID = try container.decode(UUID.self, forKey: .requestID)
+        let action = try container.decode(DictationCommandAction.self, forKey: .action)
+        let createdAt = try container.decode(Date.self, forKey: .createdAt)
+        self.requestID = requestID
+        self.action = action
+        self.createdAt = createdAt
+        id = try container.decodeIfPresent(UUID.self, forKey: .id)
+            ?? Self.legacyIdentifier(
+                requestID: requestID,
+                action: action,
+                createdAt: createdAt
+            )
+    }
+
+    private static func legacyIdentifier(
+        requestID: UUID,
+        action: DictationCommandAction,
+        createdAt: Date
+    ) -> UUID {
+        var fingerprint = Data("muesli.keyboard.intent.v1".utf8)
+        var requestBytes = requestID.uuid
+        withUnsafeBytes(of: &requestBytes) { fingerprint.append(contentsOf: $0) }
+        fingerprint.append(contentsOf: action.rawValue.utf8)
+        var timestamp = createdAt.timeIntervalSinceReferenceDate.bitPattern.bigEndian
+        withUnsafeBytes(of: &timestamp) { fingerprint.append(contentsOf: $0) }
+
+        var bytes = Array(SHA256.hash(data: fingerprint).prefix(16))
+        // RFC 4122 variant with a name-derived (v5-shaped) identifier. SHA-256
+        // supplies the bytes; these bits make the serialized UUID conventional.
+        bytes[6] = (bytes[6] & 0x0f) | 0x50
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
     }
 }
 
@@ -246,6 +407,29 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
     }
 
     static let idle = KeyboardHandoffState(requestID: nil, phase: .idle)
+}
+
+struct KeyboardPresentationLease: Codable, Sendable, Equatable {
+    static let expirationInterval: TimeInterval = 3
+
+    let ownerID: UUID
+    let updatedAt: Date
+}
+
+struct KeyboardResultInsertionClaim: Codable, Sendable, Equatable {
+    static let expirationInterval: TimeInterval = 30
+
+    let id: UUID
+    let requestID: UUID
+    let ownerID: UUID
+    let claimedAt: Date
+}
+
+enum KeyboardResultInsertionClaimOutcome: Sendable, Equatable {
+    case acquired
+    case busy
+    case recoveryRequired
+    case unavailable
 }
 
 enum KeyboardHandoffRecoveryAction: Sendable, Equatable {
@@ -407,6 +591,10 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
     var scratchpadText: String?
     var longFormRecoveryValidatedAt: Date?
     var meetingOperationID: UUID?
+    var captureInterruptionReason: VoiceNoteCaptureInterruptionReason?
+    var captureInterruptedAt: Date?
+    var draftTranscriptText: String?
+    var draftTranscriptUpdatedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -435,7 +623,11 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         lastTranscriptionFailureReason: VoiceNoteTranscriptionFailureReason? = nil,
         scratchpadText: String? = nil,
         longFormRecoveryValidatedAt: Date? = nil,
-        meetingOperationID: UUID? = nil
+        meetingOperationID: UUID? = nil,
+        captureInterruptionReason: VoiceNoteCaptureInterruptionReason? = nil,
+        captureInterruptedAt: Date? = nil,
+        draftTranscriptText: String? = nil,
+        draftTranscriptUpdatedAt: Date? = nil
     ) {
         self.id = id
         self.requestID = requestID
@@ -464,6 +656,10 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         self.scratchpadText = scratchpadText
         self.longFormRecoveryValidatedAt = longFormRecoveryValidatedAt
         self.meetingOperationID = meetingOperationID
+        self.captureInterruptionReason = captureInterruptionReason
+        self.captureInterruptedAt = captureInterruptedAt
+        self.draftTranscriptText = draftTranscriptText
+        self.draftTranscriptUpdatedAt = draftTranscriptUpdatedAt
     }
 
     var duration: TimeInterval? {
@@ -485,7 +681,7 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
 
     var hasActiveVoiceNoteWork: Bool {
         kind != .meeting
-            && [.recording, .transcriptionQueued, .transcribing].contains(phase)
+            && [.recording, .interrupted, .transcriptionQueued, .transcribing].contains(phase)
     }
 
     var voiceNoteDurabilityEvidence: VoiceNoteDurabilityEvidence {
@@ -497,9 +693,8 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
 
     var canRetryVoiceNoteTranscription: Bool {
         kind != .meeting
-            && isLongForm
             && phase == .failed
-            && voiceNoteDurabilityEvidence == .durableCheckpoint
+            && protectedAudioUntilTranscriptCompletes
             && audioFileName != nil
     }
 
@@ -539,6 +734,10 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         case scratchpadText
         case longFormRecoveryValidatedAt
         case meetingOperationID
+        case captureInterruptionReason
+        case captureInterruptedAt
+        case draftTranscriptText
+        case draftTranscriptUpdatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -582,6 +781,13 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
             forKey: .longFormRecoveryValidatedAt
         )
         meetingOperationID = try container.decodeIfPresent(UUID.self, forKey: .meetingOperationID)
+        captureInterruptionReason = try container.decodeIfPresent(
+            VoiceNoteCaptureInterruptionReason.self,
+            forKey: .captureInterruptionReason
+        )
+        captureInterruptedAt = try container.decodeIfPresent(Date.self, forKey: .captureInterruptedAt)
+        draftTranscriptText = try container.decodeIfPresent(String.self, forKey: .draftTranscriptText)
+        draftTranscriptUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .draftTranscriptUpdatedAt)
     }
 }
 
@@ -753,6 +959,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
     let supportsBackgroundStart: Bool
     let canAcceptStartCommand: Bool
     let inputLevel: Double
+    let isRecoveringCapture: Bool
     let updatedAt: Date
 
     init(
@@ -763,6 +970,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         supportsBackgroundStart: Bool = false,
         canAcceptStartCommand: Bool? = nil,
         inputLevel: Double = 0,
+        isRecoveringCapture: Bool = false,
         updatedAt: Date = .now
     ) {
         self.isActive = isActive
@@ -772,6 +980,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         self.supportsBackgroundStart = supportsBackgroundStart
         self.canAcceptStartCommand = canAcceptStartCommand ?? (isActive && supportsBackgroundStart)
         self.inputLevel = min(max(inputLevel, 0), 1)
+        self.isRecoveringCapture = isRecoveringCapture
         self.updatedAt = updatedAt
     }
 
@@ -783,6 +992,7 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         case supportsBackgroundStart
         case canAcceptStartCommand
         case inputLevel
+        case isRecoveringCapture
         case updatedAt
     }
 
@@ -795,6 +1005,10 @@ struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {
         supportsBackgroundStart = try container.decodeIfPresent(Bool.self, forKey: .supportsBackgroundStart) ?? false
         canAcceptStartCommand = try container.decodeIfPresent(Bool.self, forKey: .canAcceptStartCommand) ?? (isActive && supportsBackgroundStart)
         inputLevel = try container.decodeIfPresent(Double.self, forKey: .inputLevel) ?? 0
+        isRecoveringCapture = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .isRecoveringCapture
+        ) ?? false
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
 }

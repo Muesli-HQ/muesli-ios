@@ -29,6 +29,7 @@ struct MuesliApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active, !isUITesting {
                         coordinator.reconcileMeetingRuntime(reason: "foreground")
+                        coordinator.reconcileVoiceNoteRuntime(reason: "foreground")
                         coordinator.prewarmModelIfNeeded(reason: "foreground")
                         coordinator.syncICloudTextIfEnabled(reason: "foreground")
                         coordinator.recoverLongVoiceNotesIfNeeded()

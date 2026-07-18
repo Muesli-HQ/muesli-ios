@@ -90,6 +90,7 @@ targets:
     sources:
       - path: Tests/MuesliTests
       - path: Shared
+      - path: MuesliKeyboard/KeyboardController.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.tests

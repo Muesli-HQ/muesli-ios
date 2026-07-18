@@ -9,6 +9,11 @@ final class KeyboardViewController: UIInputViewController {
     private var hasEnteredAppearance = false
     private var isKeyboardPresented = false
     private var hasActivatedKeyboardRuntime = false
+    private var hasPendingHostActivation = false
+    private var extensionHostIsActive = true
+    private var presentationGeneration: UInt64 = 0
+    private var suspendedPresentationGeneration: UInt64?
+    private var pendingHostResumeGeneration: UInt64?
     private var appearanceGuard = MuesliKeyboardAppearanceGuard()
     private var stableGeometryFrameCount = 0
     private var launchSnapshotWidth: CGFloat = 0
@@ -52,8 +57,6 @@ final class KeyboardViewController: UIInputViewController {
         controller.keyboardDismisser = { [weak self] in
             self?.dismissKeyboard()
         }
-        controller.prepareInitialPresentationState()
-
         let hostingController = UIHostingController(
             rootView: KeyboardRootView(controller: controller)
         )
@@ -87,9 +90,27 @@ final class KeyboardViewController: UIInputViewController {
             launchSnapshotView.heightAnchor.constraint(equalToConstant: KeyboardRootView.preferredHeight)
         ])
         refreshLaunchSnapshot()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(extensionHostDidBecomeActive),
+            name: .NSExtensionHostDidBecomeActive,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(extensionHostWillResignActive),
+            name: .NSExtensionHostWillResignActive,
+            object: nil
+        )
     }
 
     override func viewWillAppear(_ animated: Bool) {
+        presentationGeneration &+= 1
+        suspendedPresentationGeneration = nil
+        pendingHostResumeGeneration = nil
+        extensionHostIsActive = true
+        controller.activatePresentationLease()
         appearanceGuard.beginAppearance()
         controller.isLaunchSettled = false
         controller.prepareInitialPresentationState()
@@ -120,6 +141,8 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
 
+        resumeSuspendedPresentationIfAttached()
+
         let laidOutWidth = view.bounds.width
         guard isKeyboardPresented,
               !hasActivatedKeyboardRuntime,
@@ -136,16 +159,88 @@ final class KeyboardViewController: UIInputViewController {
         isKeyboardPresented = false
         hasEnteredAppearance = false
         stopLaunchGeometryGate()
+        controller.deactivatePresentationLease()
         controller.isLaunchSettled = false
         launchSnapshotView.isHidden = false
+    }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
         controller.stopObservingSharedState()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }
 
 private extension KeyboardViewController {
     static let settledHeightTolerance: CGFloat = 1
     static let requiredStableGeometryFrames = 2
+
+    @objc
+    func extensionHostDidBecomeActive() {
+        extensionHostIsActive = true
+        pendingHostResumeGeneration = suspendedPresentationGeneration
+        resumeSuspendedPresentationIfAttached()
+        // The host-active notification can precede UIKit reattaching the input
+        // view. Retain the generation and retry from layout instead of guessing
+        // with a delay. A keyboard that was switched away never regains a window.
+        DispatchQueue.main.async { [weak self] in
+            self?.resumeSuspendedPresentationIfAttached()
+        }
+    }
+
+    @objc
+    func extensionHostWillResignActive() {
+        extensionHostIsActive = false
+        suspendedPresentationGeneration = presentationGeneration == 0
+            ? nil
+            : presentationGeneration
+        pendingHostResumeGeneration = nil
+        hasPendingHostActivation = false
+        stopLaunchGeometryGate()
+        controller.suspendPresentationEligibility()
+        controller.stopObservingSharedState()
+    }
+
+    func resumeSuspendedPresentationIfAttached() {
+        guard extensionHostIsActive,
+              let generation = pendingHostResumeGeneration,
+              generation == presentationGeneration,
+              viewIfLoaded?.window != nil || inputView?.window != nil
+        else { return }
+
+        pendingHostResumeGeneration = nil
+        suspendedPresentationGeneration = nil
+        isKeyboardPresented = true
+        hasEnteredAppearance = true
+        controller.activatePresentationLease()
+
+        if hasActivatedKeyboardRuntime {
+            hasPendingHostActivation = true
+            resumePendingHostActivationIfPossible()
+            return
+        }
+
+        // Lock can occur before the initial 0.75-second geometry gate settles.
+        // Restart that same presentation generation instead of leaving the
+        // keyboard permanently on a stale launch snapshot.
+        appearanceGuard.beginAppearance()
+        controller.isLaunchSettled = false
+        refreshLaunchSnapshot()
+        launchSnapshotView.isHidden = false
+        stableGeometryFrameCount = 0
+        startLaunchGeometryGate()
+    }
+
+    func resumePendingHostActivationIfPossible() {
+        guard hasPendingHostActivation,
+              hasActivatedKeyboardRuntime
+        else { return }
+        hasPendingHostActivation = false
+        controller.resumeAfterHostActivation()
+    }
 
     func startLaunchGeometryGate() {
         stopLaunchGeometryGate()
@@ -208,7 +303,13 @@ private extension KeyboardViewController {
                     isPresented: self.isKeyboardPresented,
                     hasActivatedRuntime: self.hasActivatedKeyboardRuntime
                   ) else { return }
-            self.controller.startObservingSharedState()
+            // Runtime activation is also a successful host activation. Using
+            // the resume path both rehydrates the lightweight presentation
+            // projection and recreates the leaf waveform timeline. This also
+            // consumes a host-active notification that arrived before launch
+            // geometry settled instead of dropping it.
+            self.hasPendingHostActivation = false
+            self.controller.resumeAfterHostActivation()
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 guard let self,

@@ -5,6 +5,8 @@ struct VoiceNoteLifecycleState: Equatable {
         case idle
         case recordingShort(UUID)
         case recordingLongProtected(UUID)
+        case interruptedShort(UUID)
+        case interruptedLongProtected(UUID)
         case stopping(UUID)
         case audioSaved(UUID)
         case transcriptionQueued(UUID)
@@ -17,6 +19,8 @@ struct VoiceNoteLifecycleState: Equatable {
             case .idle: "idle"
             case .recordingShort: "recording_short"
             case .recordingLongProtected: "recording_long_protected"
+            case .interruptedShort: "interrupted_short"
+            case .interruptedLongProtected: "interrupted_long_protected"
             case .stopping: "stopping"
             case .audioSaved: "audio_saved"
             case .transcriptionQueued: "transcription_queued"
@@ -33,9 +37,10 @@ struct VoiceNoteLifecycleState: Equatable {
         switch phase {
         case .idle:
             nil
-        case .recordingShort(let id), .recordingLongProtected(let id), .stopping(let id),
-             .audioSaved(let id), .transcriptionQueued(let id), .transcribing(let id),
-             .failedRetryable(let id), .cancelling(let id):
+        case .recordingShort(let id), .recordingLongProtected(let id),
+             .interruptedShort(let id), .interruptedLongProtected(let id),
+             .stopping(let id), .audioSaved(let id), .transcriptionQueued(let id),
+             .transcribing(let id), .failedRetryable(let id), .cancelling(let id):
             id
         }
     }
@@ -44,25 +49,27 @@ struct VoiceNoteLifecycleState: Equatable {
         switch phase {
         case .recordingShort, .recordingLongProtected, .stopping:
             true
-        case .idle, .audioSaved, .transcriptionQueued, .transcribing, .failedRetryable, .cancelling:
+        case .idle, .interruptedShort, .interruptedLongProtected, .audioSaved,
+             .transcriptionQueued, .transcribing, .failedRetryable, .cancelling:
             false
         }
     }
 
     var isLongFormVisible: Bool {
         switch phase {
-        case .recordingLongProtected, .stopping, .audioSaved, .transcriptionQueued,
-             .transcribing, .failedRetryable:
+        case .recordingLongProtected, .interruptedLongProtected, .stopping, .audioSaved,
+             .transcriptionQueued, .transcribing, .failedRetryable:
             true
-        case .idle, .recordingShort, .cancelling:
+        case .idle, .recordingShort, .interruptedShort, .cancelling:
             false
         }
     }
 
     var isWorkActive: Bool {
         switch phase {
-        case .recordingShort, .recordingLongProtected, .stopping, .audioSaved,
-             .transcriptionQueued, .transcribing, .cancelling:
+        case .recordingShort, .recordingLongProtected, .interruptedShort,
+             .interruptedLongProtected, .stopping, .audioSaved, .transcriptionQueued,
+             .transcribing, .cancelling:
             true
         case .idle, .failedRetryable:
             false
@@ -73,6 +80,8 @@ struct VoiceNoteLifecycleState: Equatable {
 enum VoiceNoteLifecycleEvent {
     case recordingStarted(UUID)
     case longFormActivated(UUID)
+    case captureInterrupted(UUID)
+    case captureResumed(UUID)
     case stopRequested(UUID)
     case audioFinalized(UUID)
     case transcriptionQueued(UUID)
@@ -86,6 +95,8 @@ enum VoiceNoteLifecycleEvent {
         switch self {
         case .recordingStarted: "recording_started"
         case .longFormActivated: "long_form_activated"
+        case .captureInterrupted: "capture_interrupted"
+        case .captureResumed: "capture_resumed"
         case .stopRequested: "stop_requested"
         case .audioFinalized: "audio_finalized"
         case .transcriptionQueued: "transcription_queued"
@@ -118,9 +129,31 @@ enum VoiceNoteLifecycleReducer {
             nextState = state
         case (.recordingShort(let activeID), .longFormActivated(let id)) where activeID == id:
             nextState = VoiceNoteLifecycleState(phase: .recordingLongProtected(id))
+        case (.interruptedShort(let activeID), .longFormActivated(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .interruptedLongProtected(id))
+        case (.recordingShort(let activeID), .captureInterrupted(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .interruptedShort(id))
+        case (.recordingLongProtected(let activeID), .captureInterrupted(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .interruptedLongProtected(id))
+        case (.interruptedShort(let activeID), .captureInterrupted(let id)) where activeID == id:
+            nextState = state
+        case (.interruptedLongProtected(let activeID), .captureInterrupted(let id)) where activeID == id:
+            nextState = state
+        case (.interruptedShort(let activeID), .captureResumed(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .recordingShort(id))
+        case (.interruptedLongProtected(let activeID), .captureResumed(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .recordingLongProtected(id))
+        case (.recordingShort(let activeID), .captureResumed(let id)) where activeID == id:
+            nextState = state
+        case (.recordingLongProtected(let activeID), .captureResumed(let id)) where activeID == id:
+            nextState = state
         case (.recordingShort(let activeID), .stopRequested(let id)) where activeID == id:
             nextState = VoiceNoteLifecycleState(phase: .stopping(id))
         case (.recordingLongProtected(let activeID), .stopRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .stopping(id))
+        case (.interruptedShort(let activeID), .stopRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .stopping(id))
+        case (.interruptedLongProtected(let activeID), .stopRequested(let id)) where activeID == id:
             nextState = VoiceNoteLifecycleState(phase: .stopping(id))
         case (.stopping(let activeID), .audioFinalized(let id)) where activeID == id:
             nextState = VoiceNoteLifecycleState(phase: .audioSaved(id))
@@ -147,6 +180,10 @@ enum VoiceNoteLifecycleReducer {
         case (.recordingShort(let activeID), .cancelRequested(let id)) where activeID == id:
             nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
         case (.recordingLongProtected(let activeID), .cancelRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
+        case (.interruptedShort(let activeID), .cancelRequested(let id)) where activeID == id:
+            nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
+        case (.interruptedLongProtected(let activeID), .cancelRequested(let id)) where activeID == id:
             nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
         case (.stopping(let activeID), .cancelRequested(let id)) where activeID == id:
             nextState = VoiceNoteLifecycleState(phase: .cancelling(id))
@@ -283,7 +320,7 @@ enum VoiceNoteFailureLifecycleDisposition: Equatable {
     case finished
 
     static func resolve(for session: RecordingSession) -> VoiceNoteFailureLifecycleDisposition {
-        session.isLongForm ? .retryable : .finished
+        session.protectedAudioUntilTranscriptCompletes ? .retryable : .finished
     }
 }
 
@@ -310,8 +347,8 @@ enum VoiceNoteFailureSessionPolicy {
         failedSession.phase = .failed
         failedSession.errorMessage = message
         failedSession.lastTranscriptionFailureReason = reason
-        failedSession.protectedAudioUntilTranscriptCompletes = session.isLongForm
-            && hasRecoverableAudio
+        failedSession.protectedAudioUntilTranscriptCompletes =
+            session.protectedAudioUntilTranscriptCompletes || hasRecoverableAudio
         return failedSession
     }
 }
@@ -336,14 +373,9 @@ enum VoiceNoteCheckpointRetentionPolicy {
         if session.phase == .completed || session.phase == .cancelled {
             return true
         }
-        if session.protectedAudioUntilTranscriptCompletes,
-           session.audioFileName != nil {
-            return false
-        }
-        if !session.isLongForm {
-            return ![.recording, .transcriptionQueued, .transcribing].contains(session.phase)
-        }
-        return session.audioFileName == nil
-            && !session.protectedAudioUntilTranscriptCompletes
+        // A failed/interrupted row can lag a checkpoint already sealed on disk.
+        // Only an explicit completion/cancellation may garbage-collect that evidence;
+        // treating missing booleans as proof of absence recreates the lock-screen loss.
+        return false
     }
 }

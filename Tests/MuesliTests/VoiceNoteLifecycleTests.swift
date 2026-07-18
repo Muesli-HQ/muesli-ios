@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import Muesli
 
@@ -66,6 +67,99 @@ final class VoiceNoteLifecycleTests: XCTestCase {
             VoiceNoteLifecycleReducer.reduce(state, event: .longFormActivated(stale)),
             state
         )
+        XCTAssertEqual(
+            VoiceNoteLifecycleReducer.reduce(state, event: .captureInterrupted(stale)),
+            state
+        )
+    }
+
+    func testShortCaptureCanInterruptResumeAndThenStop() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureInterrupted(id))
+        XCTAssertEqual(state.phase, .interruptedShort(id))
+        XCTAssertFalse(state.isRecording)
+        XCTAssertTrue(state.isWorkActive)
+        XCTAssertFalse(state.isLongFormVisible)
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureResumed(id))
+        XCTAssertEqual(state.phase, .recordingShort(id))
+        XCTAssertTrue(state.isRecording)
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .stopRequested(id))
+        XCTAssertEqual(state.phase, .stopping(id))
+    }
+
+    func testLongCaptureCanInterruptResumeAndThenCancel() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .longFormActivated(id))
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureInterrupted(id))
+        XCTAssertEqual(state.phase, .interruptedLongProtected(id))
+        XCTAssertFalse(state.isRecording)
+        XCTAssertTrue(state.isWorkActive)
+        XCTAssertTrue(state.isLongFormVisible)
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureResumed(id))
+        XCTAssertEqual(state.phase, .recordingLongProtected(id))
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureInterrupted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .cancelRequested(id))
+        XCTAssertEqual(state.phase, .cancelling(id))
+    }
+
+    func testLongFormActivationWhileInterruptedPreservesInterruption() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureInterrupted(id))
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .longFormActivated(id))
+
+        XCTAssertEqual(state.phase, .interruptedLongProtected(id))
+        XCTAssertFalse(state.isRecording)
+        XCTAssertTrue(state.isLongFormVisible)
+        XCTAssertTrue(state.isWorkActive)
+    }
+
+    func testInterruptedLifecycleRejectsStaleResumeStopAndCancel() {
+        let id = UUID()
+        let stale = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureInterrupted(id))
+
+        for event in [
+            VoiceNoteLifecycleEvent.captureResumed(stale),
+            .longFormActivated(stale),
+            .stopRequested(stale),
+            .cancelRequested(stale),
+        ] {
+            let transition = VoiceNoteLifecycleReducer.transition(state, event: event)
+            XCTAssertFalse(transition.accepted)
+            XCTAssertEqual(transition.state, state)
+        }
+    }
+
+    func testDuplicateInterruptionAndResumeAreIdempotent() {
+        let id = UUID()
+        var state = VoiceNoteLifecycleReducer.reduce(.init(), event: .recordingStarted(id))
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureInterrupted(id))
+
+        let duplicateInterruption = VoiceNoteLifecycleReducer.transition(
+            state,
+            event: .captureInterrupted(id)
+        )
+        XCTAssertTrue(duplicateInterruption.accepted)
+        XCTAssertEqual(duplicateInterruption.state, state)
+
+        state = VoiceNoteLifecycleReducer.reduce(state, event: .captureResumed(id))
+        let duplicateResume = VoiceNoteLifecycleReducer.transition(
+            state,
+            event: .captureResumed(id)
+        )
+        XCTAssertTrue(duplicateResume.accepted)
+        XCTAssertEqual(duplicateResume.state, state)
     }
 
     func testLifecycleRejectsLongFormActivationAfterStop() {
@@ -251,6 +345,8 @@ final class VoiceNoteLifecycleTests: XCTestCase {
             ("idle", .init()),
             ("recordingShort", .init(phase: .recordingShort(id))),
             ("recordingLongProtected", .init(phase: .recordingLongProtected(id))),
+            ("interruptedShort", .init(phase: .interruptedShort(id))),
+            ("interruptedLongProtected", .init(phase: .interruptedLongProtected(id))),
             ("stopping", .init(phase: .stopping(id))),
             ("audioSaved", .init(phase: .audioSaved(id))),
             ("transcriptionQueued", .init(phase: .transcriptionQueued(id))),
@@ -261,6 +357,8 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         let events: [(name: String, event: VoiceNoteLifecycleEvent)] = [
             ("recordingStarted", .recordingStarted(id)),
             ("longFormActivated", .longFormActivated(id)),
+            ("captureInterrupted", .captureInterrupted(id)),
+            ("captureResumed", .captureResumed(id)),
             ("stopRequested", .stopRequested(id)),
             ("audioFinalized", .audioFinalized(id)),
             ("transcriptionQueued", .transcriptionQueued(id)),
@@ -275,12 +373,27 @@ final class VoiceNoteLifecycleTests: XCTestCase {
             "idle.retryRequested",
             "recordingShort.recordingStarted",
             "recordingShort.longFormActivated",
+            "recordingShort.captureInterrupted",
+            "recordingShort.captureResumed",
             "recordingShort.stopRequested",
             "recordingShort.cancelRequested",
             "recordingShort.finished",
             "recordingLongProtected.stopRequested",
+            "recordingLongProtected.captureInterrupted",
+            "recordingLongProtected.captureResumed",
             "recordingLongProtected.cancelRequested",
             "recordingLongProtected.finished",
+            "interruptedShort.longFormActivated",
+            "interruptedShort.captureInterrupted",
+            "interruptedShort.captureResumed",
+            "interruptedShort.stopRequested",
+            "interruptedShort.cancelRequested",
+            "interruptedShort.finished",
+            "interruptedLongProtected.captureInterrupted",
+            "interruptedLongProtected.captureResumed",
+            "interruptedLongProtected.stopRequested",
+            "interruptedLongProtected.cancelRequested",
+            "interruptedLongProtected.finished",
             "stopping.audioFinalized",
             "stopping.transcriptionStarted",
             "stopping.transcriptionFailed",
@@ -434,7 +547,7 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         XCTAssertEqual(schedule.nextDeadlineSeconds, 90)
     }
 
-    func testCheckpointRetentionPolicyKeepsOnlyRecoverableAudio() {
+    func testCheckpointRetentionPolicyDeletesOnlyTerminalOrOrphanedAudio() {
         let protectedFailure = Muesli.RecordingSession(
             kind: .quickDictation,
             phase: .failed,
@@ -445,24 +558,39 @@ final class VoiceNoteLifecycleTests: XCTestCase {
             VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: protectedFailure)
         )
 
-        let explicitlyDeleted = Muesli.RecordingSession(
+        let failedWithoutPersistedEvidence = Muesli.RecordingSession(
             kind: .quickDictation,
             phase: .failed,
             audioFileName: nil,
             protectedAudioUntilTranscriptCompletes: false
         )
-        XCTAssertTrue(
-            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: explicitlyDeleted)
+        XCTAssertFalse(
+            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(
+                for: failedWithoutPersistedEvidence
+            )
         )
 
         let failedShortNote = Muesli.RecordingSession(
             kind: .keyboardDictation,
             phase: .failed,
             audioFileName: "short.wav",
+            longFormThresholdSeconds: 60,
+            hasDurableAudioCheckpoint: true
+        )
+        XCTAssertFalse(
+            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: failedShortNote)
+        )
+
+        let unverifiedFailedShortNote = Muesli.RecordingSession(
+            kind: .keyboardDictation,
+            phase: .failed,
+            audioFileName: "short.wav",
             longFormThresholdSeconds: 60
         )
-        XCTAssertTrue(
-            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: failedShortNote)
+        XCTAssertFalse(
+            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(
+                for: unverifiedFailedShortNote
+            )
         )
 
         let activeShortNote = Muesli.RecordingSession(
@@ -472,6 +600,15 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         )
         XCTAssertFalse(
             VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: activeShortNote)
+        )
+
+        let interruptedShortNote = Muesli.RecordingSession(
+            kind: .keyboardDictation,
+            phase: .interrupted,
+            longFormThresholdSeconds: 60
+        )
+        XCTAssertFalse(
+            VoiceNoteCheckpointRetentionPolicy.shouldDeleteCheckpoints(for: interruptedShortNote)
         )
 
         let completed = Muesli.RecordingSession(kind: .quickDictation, phase: .completed)
@@ -493,12 +630,26 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         XCTAssertFalse(VoiceNoteAudioRetentionPolicy.shouldDeleteAudioAfterSuccess(retained))
     }
 
-    func testFailureDispositionKeepsOnlyLongNotesRetryable() {
-        let short = Muesli.RecordingSession(kind: .quickDictation, isLongForm: false)
-        let long = Muesli.RecordingSession(kind: .quickDictation, isLongForm: true)
+    func testFailureDispositionUsesDurabilityInsteadOfLongFormThreshold() {
+        let recoverableShort = Muesli.RecordingSession(
+            kind: .quickDictation,
+            isLongForm: false,
+            hasDurableAudioCheckpoint: true,
+            protectedAudioUntilTranscriptCompletes: true
+        )
+        let unavailableLong = Muesli.RecordingSession(
+            kind: .quickDictation,
+            isLongForm: true
+        )
 
-        XCTAssertEqual(VoiceNoteFailureLifecycleDisposition.resolve(for: short), .finished)
-        XCTAssertEqual(VoiceNoteFailureLifecycleDisposition.resolve(for: long), .retryable)
+        XCTAssertEqual(
+            VoiceNoteFailureLifecycleDisposition.resolve(for: recoverableShort),
+            .retryable
+        )
+        XCTAssertEqual(
+            VoiceNoteFailureLifecycleDisposition.resolve(for: unavailableLong),
+            .finished
+        )
     }
 
     func testRecordingTerminationCausePreservesSpecificFailureReason() {
@@ -512,7 +663,7 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         )
     }
 
-    func testFailureSessionPolicyProtectsOnlyRecoverableLongFormAudio() {
+    func testFailureSessionPolicyProtectsAnyRecoverableVoiceNoteAudio() {
         let shortSession = Muesli.RecordingSession(
             kind: .keyboardDictation,
             phase: .transcribing,
@@ -527,7 +678,7 @@ final class VoiceNoteLifecycleTests: XCTestCase {
 
         XCTAssertEqual(failedShortSession.phase, .failed)
         XCTAssertEqual(failedShortSession.lastTranscriptionFailureReason, .timeout)
-        XCTAssertFalse(failedShortSession.protectedAudioUntilTranscriptCompletes)
+        XCTAssertTrue(failedShortSession.protectedAudioUntilTranscriptCompletes)
 
         let longSession = Muesli.RecordingSession(
             kind: .keyboardDictation,
@@ -552,6 +703,24 @@ final class VoiceNoteLifecycleTests: XCTestCase {
         XCTAssertFalse(unavailableLongSession.protectedAudioUntilTranscriptCompletes)
     }
 
+    func testFailureSessionPolicyDoesNotClearExistingAudioProtectionOnAProbeFailure() {
+        let protectedSession = Muesli.RecordingSession(
+            kind: .keyboardDictation,
+            phase: .transcribing,
+            audioFileName: "protected.wav",
+            protectedAudioUntilTranscriptCompletes: true
+        )
+
+        let failedSession = VoiceNoteFailureSessionPolicy.prepare(
+            protectedSession,
+            reason: .engineFailure,
+            message: "Try again later",
+            hasRecoverableAudio: false
+        )
+
+        XCTAssertTrue(failedSession.protectedAudioUntilTranscriptCompletes)
+    }
+
     func testFailureTelemetryPolicyPreservesTimeoutStageNames() {
         XCTAssertEqual(
             VoiceNoteFailureTelemetryPolicy.stage(
@@ -569,5 +738,58 @@ final class VoiceNoteLifecycleTests: XCTestCase {
             ),
             "transcription"
         )
+    }
+
+    func testAudioInterruptionPolicyClassifiesRealSystemReasons() {
+        XCTAssertEqual(
+            VoiceNoteAudioInterruptionPolicy.captureReason(
+                interruptionReason: nil,
+                rawReason: 1
+            ),
+            .appSuspended
+        )
+        XCTAssertEqual(
+            VoiceNoteAudioInterruptionPolicy.captureReason(
+                interruptionReason: .routeDisconnected,
+                rawReason: nil
+            ),
+            .routeDisconnected
+        )
+        XCTAssertEqual(
+            VoiceNoteAudioInterruptionPolicy.captureReason(
+                interruptionReason: .builtInMicMuted,
+                rawReason: nil
+            ),
+            .microphoneMuted
+        )
+        XCTAssertEqual(
+            VoiceNoteAudioInterruptionPolicy.captureReason(
+                interruptionReason: nil,
+                rawReason: nil
+            ),
+            .system
+        )
+    }
+
+    func testRouteChangePolicyOnlyTreatsRemovedInputAsDisconnected() {
+        XCTAssertEqual(
+            VoiceNoteAudioInterruptionPolicy.captureReason(
+                routeChangeReason: .oldDeviceUnavailable
+            ),
+            .routeDisconnected
+        )
+        for reason: AVAudioSession.RouteChangeReason? in [
+            .newDeviceAvailable,
+            .categoryChange,
+            .routeConfigurationChange,
+            nil,
+        ] {
+            XCTAssertEqual(
+                VoiceNoteAudioInterruptionPolicy.captureReason(
+                    routeChangeReason: reason
+                ),
+                .engineConfigurationChanged
+            )
+        }
     }
 }

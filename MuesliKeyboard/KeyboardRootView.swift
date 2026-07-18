@@ -170,6 +170,7 @@ struct KeyboardRootView: View {
                     framesPerSecond: 18,
                     refreshDriver: .timeline
                 )
+                .id(controller.waveformRenderGeneration)
                 .frame(height: 24)
                 .shadow(color: activeStatusColor.opacity(0.28), radius: 8)
 
@@ -271,13 +272,23 @@ struct KeyboardRootView: View {
     }
 
     private var activeStatusText: String {
+        if controller.isCaptureRecovering {
+            return "Resuming"
+        }
+
         switch controller.dictationPhase {
         case .transcribing:
-            "Transcribing"
+            return "Transcribing"
         case .requested:
-            "Starting"
+            return "Starting"
         default:
-            controller.statusText == "Stopping" ? "Stopping" : "Listening"
+            if controller.statusText == "Stopping" {
+                return "Stopping"
+            }
+            if controller.statusText == "Cancelling" {
+                return "Cancelling"
+            }
+            return "Listening"
         }
     }
 

@@ -1,6 +1,45 @@
 import Foundation
 import SQLite3
 
+enum SharedFileProtection {
+    // Voice-note audio is deliberately reopenable after the first device unlock.
+    // Checkpoint rotation closes a chunk before validation, and transcription may
+    // reopen finalized audio while the screen is locked. `completeUnlessOpen`
+    // only protects an already-open descriptor and therefore cannot satisfy that
+    // lifecycle contract.
+    static let reopenableAudio: FileProtectionType = .completeUntilFirstUserAuthentication
+    static let metadata: FileProtectionType = .completeUntilFirstUserAuthentication
+
+    static func prepareMetadataDirectory(at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true,
+            attributes: [.protectionKey: metadata]
+        )
+        try protectMetadata(at: url)
+    }
+
+    static func protectAudio(at url: URL) throws {
+        try protect(url, as: reopenableAudio)
+    }
+
+    static func protectMetadata(at url: URL) throws {
+        try protect(url, as: metadata)
+    }
+
+    static func protectMetadataBestEffort(at url: URL) {
+        try? protectMetadata(at: url)
+    }
+
+    private static func protect(_ url: URL, as protection: FileProtectionType) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.setAttributes(
+            [.protectionKey: protection],
+            ofItemAtPath: url.path
+        )
+    }
+}
+
 enum SharedStoreError: Error, LocalizedError {
     case appGroupUnavailable(String)
 
@@ -10,6 +49,20 @@ enum SharedStoreError: Error, LocalizedError {
             "App Group container is unavailable for \(identifier)."
         }
     }
+}
+
+/// A coherent, lightweight view of the shared keyboard presentation state.
+///
+/// The keyboard extension refreshes these values together. Reading them through
+/// one store operation avoids repeatedly opening SQLite and ensures every field
+/// comes from the same read transaction.
+struct KeyboardPresentationSnapshot: Sendable, Equatable {
+    let runtimeStatus: KeyboardRuntimeStatus?
+    let status: DictationStatus
+    let handoffState: KeyboardHandoffState
+    let liveTranscript: KeyboardLiveTranscript?
+    let targetRequestID: UUID?
+    let result: DictationResult?
 }
 
 struct SharedStore: Sendable {
@@ -43,9 +96,62 @@ struct SharedStore: Sendable {
         try database().clearValue(key: .pendingRequest)
     }
 
-    func saveCommand(_ command: DictationCommand) throws {
-        try database().saveValue(command, key: .pendingCommand)
-        eventPoster.post(.commandChanged)
+    @discardableResult
+    func clearPendingRequest(id: UUID) throws -> Bool {
+        try database().clearPendingRequest(id: id)
+    }
+
+    @discardableResult
+    func saveCommand(_ command: DictationCommand) throws -> Bool {
+        let didSave = try database().saveKeyboardIntent(command)
+        if didSave {
+            eventPoster.post(.commandChanged)
+        }
+        return didSave
+    }
+
+    /// Publishes the keyboard request, desired intent, and its presentation
+    /// projection as one SQLite commit. Cross-process observers can never see a
+    /// Stop without its request or a handoff phase without the matching intent.
+    @discardableResult
+    func submitKeyboardIntent(
+        request: DictationRequest?,
+        command: DictationCommand,
+        handoffState: KeyboardHandoffState
+    ) throws -> Bool {
+        let didSubmit = try database().submitKeyboardIntent(
+            request: request,
+            command: command,
+            handoffState: handoffState
+        )
+        if didSubmit {
+            eventPoster.post(.commandChanged)
+            eventPoster.post(.handoffStatusChanged)
+        }
+        return didSubmit
+    }
+
+    /// Resolves an exact intent generation together with its terminal handoff.
+    /// Used when Stop/Cancel arrives before capture has begun; a newer keyboard
+    /// request cannot be erased by late cleanup from this request.
+    @discardableResult
+    func resolveKeyboardIntent(
+        commandID: UUID,
+        requestID: UUID,
+        handoffState: KeyboardHandoffState,
+        clearsPendingRequest: Bool
+    ) throws -> Bool {
+        let didResolve = try database().resolveKeyboardIntent(
+            commandID: commandID,
+            requestID: requestID,
+            handoffState: handoffState,
+            clearsPendingRequest: clearsPendingRequest
+        )
+        if didResolve {
+            eventPoster.post(.commandChanged)
+            eventPoster.post(.handoffStatusChanged)
+        }
+        return didResolve
     }
 
     func pendingCommand() throws -> DictationCommand? {
@@ -56,9 +162,22 @@ struct SharedStore: Sendable {
         try database().clearValue(key: .pendingCommand)
     }
 
-    func saveKeyboardHandoffState(_ state: KeyboardHandoffState) throws {
-        try database().saveValue(state, key: .keyboardHandoffState)
-        eventPoster.post(.handoffStatusChanged)
+    @discardableResult
+    func clearPendingCommand(id: UUID) throws -> Bool {
+        let didClear = try database().clearPendingCommand(id: id)
+        if didClear {
+            eventPoster.post(.commandChanged)
+        }
+        return didClear
+    }
+
+    @discardableResult
+    func saveKeyboardHandoffState(_ state: KeyboardHandoffState) throws -> Bool {
+        let didSave = try database().saveKeyboardHandoffState(state)
+        if didSave {
+            eventPoster.post(.handoffStatusChanged)
+        }
+        return didSave
     }
 
     func keyboardHandoffState() throws -> KeyboardHandoffState {
@@ -133,6 +252,75 @@ struct SharedStore: Sendable {
         try database().value(KeyboardLiveTranscript.self, key: .keyboardLiveTranscript)
     }
 
+    func keyboardPresentationSnapshot(
+        preferredRequestID: UUID? = nil
+    ) throws -> KeyboardPresentationSnapshot {
+        try database().keyboardPresentationSnapshot(preferredRequestID: preferredRequestID)
+    }
+
+    @discardableResult
+    func acquireKeyboardPresentationLease(
+        ownerID: UUID,
+        now: Date = .now,
+        expirationInterval: TimeInterval = KeyboardPresentationLease.expirationInterval
+    ) throws -> Bool {
+        try database().acquireKeyboardPresentationLease(
+            ownerID: ownerID,
+            now: now,
+            expirationInterval: expirationInterval
+        )
+    }
+
+    @discardableResult
+    func releaseKeyboardPresentationLease(ownerID: UUID) throws -> Bool {
+        try database().releaseKeyboardPresentationLease(ownerID: ownerID)
+    }
+
+    func claimKeyboardResultInsertion(
+        claim: KeyboardResultInsertionClaim,
+        now: Date = .now,
+        leaseExpirationInterval: TimeInterval = KeyboardPresentationLease.expirationInterval,
+        claimExpirationInterval: TimeInterval = KeyboardResultInsertionClaim.expirationInterval,
+        allowsAbandonedClaimRecovery: Bool = false
+    ) throws -> KeyboardResultInsertionClaimOutcome {
+        try database().claimKeyboardResultInsertion(
+            claim: claim,
+            now: now,
+            leaseExpirationInterval: leaseExpirationInterval,
+            claimExpirationInterval: claimExpirationInterval,
+            allowsAbandonedClaimRecovery: allowsAbandonedClaimRecovery
+        )
+    }
+
+    func validateKeyboardResultInsertionClaim(
+        _ claim: KeyboardResultInsertionClaim,
+        now: Date = .now,
+        leaseExpirationInterval: TimeInterval = KeyboardPresentationLease.expirationInterval
+    ) throws -> Bool {
+        try database().validateKeyboardResultInsertionClaim(
+            claim,
+            now: now,
+            leaseExpirationInterval: leaseExpirationInterval
+        )
+    }
+
+    @discardableResult
+    func finalizeKeyboardResultInsertion(
+        claim: KeyboardResultInsertionClaim,
+        handoffState: KeyboardHandoffState
+    ) throws -> Bool {
+        let didFinalize = try database().finalizeKeyboardResultInsertion(
+            claim: claim,
+            handoffState: handoffState
+        )
+        if didFinalize {
+            eventPoster.post(.resultChanged)
+            eventPoster.post(.handoffStatusChanged)
+            eventPoster.post(.commandChanged)
+        }
+        return didFinalize
+    }
+
     func clearKeyboardLiveTranscript() throws {
         try database().clearValue(key: .keyboardLiveTranscript)
         eventPoster.post(.liveTranscriptChanged)
@@ -170,6 +358,48 @@ struct SharedStore: Sendable {
             eventPoster.post(.ownershipChanged)
         }
         return session
+    }
+
+    @discardableResult
+    func transitionVoiceNoteSession(
+        id: UUID,
+        expectedPhases: Set<RecordingSessionPhase>,
+        update: (inout RecordingSession) -> Void
+    ) throws -> RecordingSession? {
+        let session = try database().transitionVoiceNoteSession(
+            id: id,
+            expectedPhases: expectedPhases,
+            update: update
+        )
+        if session != nil {
+            eventPoster.post(.ownershipChanged)
+        }
+        return session
+    }
+
+    @discardableResult
+    func completeVoiceNoteSession(
+        _ completedSession: RecordingSession,
+        transcript: Transcript,
+        result: DictationResult,
+        expectedPhase: RecordingSessionPhase = .transcribing,
+        keyboardHandoffState: KeyboardHandoffState? = nil
+    ) throws -> Bool {
+        let outcome = try database().completeVoiceNoteSession(
+            completedSession,
+            transcript: transcript,
+            result: result,
+            expectedPhase: expectedPhase,
+            keyboardHandoffState: keyboardHandoffState
+        )
+        if outcome.didComplete {
+            eventPoster.post(.ownershipChanged)
+            eventPoster.post(.resultChanged)
+            if outcome.didUpdateKeyboardHandoff {
+                eventPoster.post(.handoffStatusChanged)
+            }
+        }
+        return outcome.didComplete
     }
 
     @discardableResult
@@ -295,14 +525,14 @@ struct SharedStore: Sendable {
     func voiceNoteCheckpointDirectoryURL(sessionID: UUID) throws -> URL {
         let root = try recordingsDirectoryURL()
             .appendingPathComponent("VoiceNoteCheckpoints", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try SharedFileProtection.prepareMetadataDirectory(at: root)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var mutableRoot = root
         try? mutableRoot.setResourceValues(values)
 
         let directory = root.appendingPathComponent(sessionID.uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try SharedFileProtection.prepareMetadataDirectory(at: directory)
         return directory
     }
 
@@ -334,6 +564,7 @@ struct SharedStore: Sendable {
             try FileManager.default.removeItem(at: destinationURL)
         }
         try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        try SharedFileProtection.protectAudio(at: destinationURL)
         return destinationURL
     }
 
@@ -376,7 +607,7 @@ struct SharedStore: Sendable {
 
     private func recordingsDirectoryURL() throws -> URL {
         let directory = try containerURL().appendingPathComponent("Recordings", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try SharedFileProtection.prepareMetadataDirectory(at: directory)
         return directory
     }
 
@@ -386,7 +617,7 @@ struct SharedStore: Sendable {
         }
 
         let directory = documentsURL.appendingPathComponent("Muesli Recordings", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try SharedFileProtection.prepareMetadataDirectory(at: directory)
         return directory
     }
 
@@ -398,7 +629,7 @@ struct SharedStore: Sendable {
 
     private func containerURL() throws -> URL {
         if let overrideContainerURL {
-            try FileManager.default.createDirectory(at: overrideContainerURL, withIntermediateDirectories: true)
+            try SharedFileProtection.prepareMetadataDirectory(at: overrideContainerURL)
             return overrideContainerURL
         }
 
@@ -417,6 +648,8 @@ private enum SharedStoreKey: String {
     case keyboardExtensionStatus = "keyboard_extension_status"
     case keyboardRuntimeStatus = "keyboard_runtime_status"
     case keyboardLiveTranscript = "keyboard_live_transcript"
+    case keyboardPresentationLease = "keyboard_presentation_lease"
+    case keyboardResultInsertionClaim = "keyboard_result_insertion_claim"
     case legacyJSONMigrated = "legacy_json_migrated_v1"
     case customWordsInitialized = "custom_words_initialized"
 }
@@ -439,6 +672,11 @@ private enum SharedStoreDatabaseError: Error, LocalizedError {
             "Could not bind Muesli data query: \(message)"
         }
     }
+}
+
+private struct VoiceNoteCompletionOutcome {
+    var didComplete = false
+    var didUpdateKeyboardHandoff = false
 }
 
 private struct SharedStoreDatabase {
@@ -467,6 +705,145 @@ private struct SharedStoreDatabase {
         }
     }
 
+    func saveKeyboardIntent(_ command: DictationCommand) throws -> Bool {
+        try withDatabase { db in
+            var didSave = false
+            try transaction(db: db) {
+                let current = try valueData(key: .pendingCommand, db: db)
+                    .map { try decoder.decode(DictationCommand.self, from: $0) }
+                guard KeyboardIntentTransitionPolicy.permits(
+                    current: current,
+                    proposed: command
+                ) else { return }
+                try upsertValue(
+                    try encoder.encode(command),
+                    key: .pendingCommand,
+                    db: db
+                )
+                didSave = true
+            }
+            return didSave
+        }
+    }
+
+    func submitKeyboardIntent(
+        request: DictationRequest?,
+        command: DictationCommand,
+        handoffState: KeyboardHandoffState
+    ) throws -> Bool {
+        try withDatabase { db in
+            var didSubmit = false
+            try transaction(db: db) {
+                guard handoffState.requestID == command.requestID else { return }
+                if let request, request.id != command.requestID { return }
+
+                let currentCommand = try valueData(key: .pendingCommand, db: db)
+                    .map { try decoder.decode(DictationCommand.self, from: $0) }
+                let currentHandoff = try valueData(key: .keyboardHandoffState, db: db)
+                    .map { try decoder.decode(KeyboardHandoffState.self, from: $0) }
+                guard KeyboardIntentTransitionPolicy.permits(
+                    current: currentCommand,
+                    proposed: command
+                ), KeyboardHandoffTransitionPolicy.permits(
+                    current: currentHandoff,
+                    proposed: handoffState
+                ) else { return }
+
+                if let request {
+                    try upsertValue(
+                        try encoder.encode(request),
+                        key: .pendingRequest,
+                        db: db
+                    )
+                }
+                try upsertValue(
+                    try encoder.encode(command),
+                    key: .pendingCommand,
+                    db: db
+                )
+                try upsertValue(
+                    try encoder.encode(handoffState),
+                    key: .keyboardHandoffState,
+                    db: db
+                )
+                didSubmit = true
+            }
+            return didSubmit
+        }
+    }
+
+    func resolveKeyboardIntent(
+        commandID: UUID,
+        requestID: UUID,
+        handoffState: KeyboardHandoffState,
+        clearsPendingRequest: Bool
+    ) throws -> Bool {
+        try withDatabase { db in
+            var didResolve = false
+            try transaction(db: db) {
+                guard handoffState.requestID == requestID,
+                      let commandData = try valueData(key: .pendingCommand, db: db),
+                      let command = try? decoder.decode(DictationCommand.self, from: commandData),
+                      command.id == commandID,
+                      command.requestID == requestID
+                else { return }
+
+                let currentHandoff = try valueData(key: .keyboardHandoffState, db: db)
+                    .map { try decoder.decode(KeyboardHandoffState.self, from: $0) }
+                guard KeyboardHandoffTransitionPolicy.permits(
+                    current: currentHandoff,
+                    proposed: handoffState
+                ) else { return }
+
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
+                }
+                if clearsPendingRequest,
+                   let requestData = try valueData(key: .pendingRequest, db: db),
+                   let pendingRequest = try? decoder.decode(DictationRequest.self, from: requestData),
+                   pendingRequest.id == requestID {
+                    try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                        try bind(SharedStoreKey.pendingRequest.rawValue, to: statement, at: 1)
+                    }
+                }
+                try upsertValue(
+                    try encoder.encode(handoffState),
+                    key: .keyboardHandoffState,
+                    db: db
+                )
+                try upsertValue(
+                    try encoder.encode(DictationStatus.idle),
+                    key: .dictationStatus,
+                    db: db
+                )
+                didResolve = true
+            }
+            return didResolve
+        }
+    }
+
+    func saveKeyboardHandoffState(_ state: KeyboardHandoffState) throws -> Bool {
+        try withDatabase { db in
+            var didSave = false
+            try transaction(db: db) {
+                let current = try valueData(key: .keyboardHandoffState, db: db)
+                    .map { try decoder.decode(KeyboardHandoffState.self, from: $0) }
+                guard KeyboardHandoffTransitionPolicy.permits(
+                    current: current,
+                    proposed: state
+                ) else { return }
+
+                try upsertValue(
+                    try encoder.encode(state),
+                    key: .keyboardHandoffState,
+                    db: db
+                )
+                didSave = true
+            }
+            return didSave
+        }
+    }
+
     func value<T: Decodable>(_ type: T.Type, key: SharedStoreKey) throws -> T? {
         try withDatabase { db in
             guard let data = try valueData(key: key, db: db) else { return nil }
@@ -479,6 +856,40 @@ private struct SharedStoreDatabase {
             try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
                 try bind(key.rawValue, to: statement, at: 1)
             }
+        }
+    }
+
+    func clearPendingCommand(id: UUID) throws -> Bool {
+        try withDatabase { db in
+            var didClear = false
+            try transaction(db: db) {
+                guard let data = try valueData(key: .pendingCommand, db: db),
+                      let current = try? decoder.decode(DictationCommand.self, from: data),
+                      current.id == id
+                else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
+                }
+                didClear = true
+            }
+            return didClear
+        }
+    }
+
+    func clearPendingRequest(id: UUID) throws -> Bool {
+        try withDatabase { db in
+            var didClear = false
+            try transaction(db: db) {
+                guard let data = try valueData(key: .pendingRequest, db: db),
+                      let current = try? decoder.decode(DictationRequest.self, from: data),
+                      current.id == id
+                else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingRequest.rawValue, to: statement, at: 1)
+                }
+                didClear = true
+            }
+            return didClear
         }
     }
 
@@ -495,13 +906,251 @@ private struct SharedStoreDatabase {
 
     func result(for requestID: UUID) throws -> DictationResult? {
         try withDatabase { db in
-            try querySingleBlob(
-                "SELECT payload FROM result_pickups WHERE request_id = ? LIMIT 1",
-                db: db
-            ) { statement in
-                try bind(requestID.uuidString, to: statement, at: 1)
-            }.map { try decoder.decode(DictationResult.self, from: $0) }
+            try result(for: requestID, db: db)
         }
+    }
+
+    func keyboardPresentationSnapshot(
+        preferredRequestID: UUID?
+    ) throws -> KeyboardPresentationSnapshot {
+        try withDatabase { db in
+            try readTransaction(db: db) {
+                let runtimeStatus = try valueData(key: .keyboardRuntimeStatus, db: db)
+                    .map { try decoder.decode(KeyboardRuntimeStatus.self, from: $0) }
+                let status = try valueData(key: .dictationStatus, db: db)
+                    .map { try decoder.decode(DictationStatus.self, from: $0) }
+                    ?? .idle
+                let handoffState = try valueData(key: .keyboardHandoffState, db: db)
+                    .map { try decoder.decode(KeyboardHandoffState.self, from: $0) }
+                    ?? .idle
+                let liveTranscript = try valueData(key: .keyboardLiveTranscript, db: db)
+                    .map { try decoder.decode(KeyboardLiveTranscript.self, from: $0) }
+                let targetRequestID = preferredRequestID
+                    ?? handoffState.requestID
+                    ?? status.requestID
+                    ?? runtimeStatus?.activeRequestID
+                let presentationResult: DictationResult?
+                if let targetRequestID {
+                    presentationResult = try result(for: targetRequestID, db: db)
+                } else {
+                    presentationResult = nil
+                }
+
+                return KeyboardPresentationSnapshot(
+                    runtimeStatus: runtimeStatus,
+                    status: status,
+                    handoffState: handoffState,
+                    liveTranscript: liveTranscript,
+                    targetRequestID: targetRequestID,
+                    result: presentationResult
+                )
+            }
+        }
+    }
+
+    func acquireKeyboardPresentationLease(
+        ownerID: UUID,
+        now: Date,
+        expirationInterval: TimeInterval
+    ) throws -> Bool {
+        try withDatabase { db in
+            var didAcquire = false
+            try transaction(db: db) {
+                let current = try valueData(key: .keyboardPresentationLease, db: db)
+                    .flatMap { try? decoder.decode(KeyboardPresentationLease.self, from: $0) }
+                let isExpired = current.map {
+                    let age = now.timeIntervalSince($0.updatedAt)
+                    return age < 0 || age >= expirationInterval
+                } ?? true
+                guard current?.ownerID == ownerID || isExpired else { return }
+                let lease = KeyboardPresentationLease(ownerID: ownerID, updatedAt: now)
+                try upsertValue(
+                    try encoder.encode(lease),
+                    key: .keyboardPresentationLease,
+                    db: db
+                )
+                didAcquire = true
+            }
+            return didAcquire
+        }
+    }
+
+    func releaseKeyboardPresentationLease(ownerID: UUID) throws -> Bool {
+        try withDatabase { db in
+            var didRelease = false
+            try transaction(db: db) {
+                guard let data = try valueData(key: .keyboardPresentationLease, db: db),
+                      let current = try? decoder.decode(KeyboardPresentationLease.self, from: data),
+                      current.ownerID == ownerID
+                else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.keyboardPresentationLease.rawValue, to: statement, at: 1)
+                }
+                didRelease = true
+            }
+            return didRelease
+        }
+    }
+
+    func claimKeyboardResultInsertion(
+        claim: KeyboardResultInsertionClaim,
+        now: Date,
+        leaseExpirationInterval: TimeInterval,
+        claimExpirationInterval: TimeInterval,
+        allowsAbandonedClaimRecovery: Bool
+    ) throws -> KeyboardResultInsertionClaimOutcome {
+        try withDatabase { db in
+            var outcome = KeyboardResultInsertionClaimOutcome.unavailable
+            try transaction(db: db) {
+                guard let leaseData = try valueData(key: .keyboardPresentationLease, db: db),
+                      let lease = try? decoder.decode(KeyboardPresentationLease.self, from: leaseData),
+                      lease.ownerID == claim.ownerID,
+                      Self.isFresh(
+                        timestamp: lease.updatedAt,
+                        now: now,
+                        expirationInterval: leaseExpirationInterval
+                      ),
+                      try result(for: claim.requestID, db: db) != nil,
+                      let handoffData = try valueData(key: .keyboardHandoffState, db: db),
+                      let handoff = try? decoder.decode(KeyboardHandoffState.self, from: handoffData),
+                      handoff.requestID == claim.requestID,
+                      handoff.phase == .resultReady
+                else { return }
+
+                if let existingData = try valueData(key: .keyboardResultInsertionClaim, db: db),
+                   let existing = try? decoder.decode(
+                    KeyboardResultInsertionClaim.self,
+                    from: existingData
+                   ) {
+                    if try result(for: existing.requestID, db: db) != nil {
+                        if Self.isFresh(
+                            timestamp: existing.claimedAt,
+                            now: now,
+                            expirationInterval: claimExpirationInterval
+                        ) {
+                            outcome = .busy
+                            return
+                        }
+                        guard existing.requestID == claim.requestID,
+                              allowsAbandonedClaimRecovery
+                        else {
+                            outcome = .recoveryRequired
+                            return
+                        }
+                    } else {
+                        try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                            try bind(SharedStoreKey.keyboardResultInsertionClaim.rawValue, to: statement, at: 1)
+                        }
+                    }
+                }
+
+                try upsertValue(
+                    try encoder.encode(claim),
+                    key: .keyboardResultInsertionClaim,
+                    db: db
+                )
+                outcome = .acquired
+            }
+            return outcome
+        }
+    }
+
+    func finalizeKeyboardResultInsertion(
+        claim: KeyboardResultInsertionClaim,
+        handoffState: KeyboardHandoffState
+    ) throws -> Bool {
+        try withDatabase { db in
+            var didFinalize = false
+            try transaction(db: db) {
+                guard handoffState.requestID == claim.requestID,
+                      handoffState.phase == .inserted,
+                      let claimData = try valueData(key: .keyboardResultInsertionClaim, db: db),
+                      let currentClaim = try? decoder.decode(
+                        KeyboardResultInsertionClaim.self,
+                        from: claimData
+                      ), currentClaim == claim,
+                      try result(for: claim.requestID, db: db) != nil,
+                      let handoffData = try valueData(key: .keyboardHandoffState, db: db),
+                      let currentHandoff = try? decoder.decode(
+                        KeyboardHandoffState.self,
+                        from: handoffData
+                      ), KeyboardHandoffTransitionPolicy.permits(
+                        current: currentHandoff,
+                        proposed: handoffState
+                      )
+                else { return }
+
+                try execute("DELETE FROM result_pickups WHERE request_id = ?", db: db) { statement in
+                    try bind(claim.requestID.uuidString, to: statement, at: 1)
+                }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.keyboardResultInsertionClaim.rawValue, to: statement, at: 1)
+                }
+                if let requestData = try valueData(key: .pendingRequest, db: db),
+                   let request = try? decoder.decode(DictationRequest.self, from: requestData),
+                   request.id == claim.requestID {
+                    try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                        try bind(SharedStoreKey.pendingRequest.rawValue, to: statement, at: 1)
+                    }
+                }
+                if let commandData = try valueData(key: .pendingCommand, db: db),
+                   let command = try? decoder.decode(DictationCommand.self, from: commandData),
+                   command.requestID == claim.requestID {
+                    try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                        try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
+                    }
+                }
+                try upsertValue(
+                    try encoder.encode(handoffState),
+                    key: .keyboardHandoffState,
+                    db: db
+                )
+                didFinalize = true
+            }
+            return didFinalize
+        }
+    }
+
+    func validateKeyboardResultInsertionClaim(
+        _ claim: KeyboardResultInsertionClaim,
+        now: Date,
+        leaseExpirationInterval: TimeInterval
+    ) throws -> Bool {
+        try withDatabase { db in
+            try readTransaction(db: db) {
+                guard let leaseData = try valueData(key: .keyboardPresentationLease, db: db),
+                      let lease = try? decoder.decode(KeyboardPresentationLease.self, from: leaseData),
+                      lease.ownerID == claim.ownerID,
+                      Self.isFresh(
+                        timestamp: lease.updatedAt,
+                        now: now,
+                        expirationInterval: leaseExpirationInterval
+                      ),
+                      let claimData = try valueData(key: .keyboardResultInsertionClaim, db: db),
+                      let currentClaim = try? decoder.decode(
+                        KeyboardResultInsertionClaim.self,
+                        from: claimData
+                      ), currentClaim == claim,
+                      try result(for: claim.requestID, db: db) != nil,
+                      let handoffData = try valueData(key: .keyboardHandoffState, db: db),
+                      let handoff = try? decoder.decode(
+                        KeyboardHandoffState.self,
+                        from: handoffData
+                      ), handoff.requestID == claim.requestID,
+                      handoff.phase == .resultReady
+                else { return false }
+                return true
+            }
+        }
+    }
+
+    private static func isFresh(
+        timestamp: Date,
+        now: Date,
+        expirationInterval: TimeInterval
+    ) -> Bool {
+        let age = now.timeIntervalSince(timestamp)
+        return age >= 0 && age < expirationInterval
     }
 
     func resultsHistory() throws -> [DictationResult] {
@@ -604,6 +1253,98 @@ private struct SharedStoreDatabase {
                 transitionedSession = session
             }
             return transitionedSession
+        }
+    }
+
+    func transitionVoiceNoteSession(
+        id: UUID,
+        expectedPhases: Set<RecordingSessionPhase>,
+        update: (inout RecordingSession) -> Void
+    ) throws -> RecordingSession? {
+        try withDatabase { db in
+            var transitionedSession: RecordingSession?
+            try transaction(db: db) {
+                guard var session = try activeRecordingSession(id: id, db: db),
+                      session.kind != .meeting,
+                      expectedPhases.contains(session.phase)
+                else { return }
+
+                update(&session)
+                try upsertSession(session, db: db)
+                transitionedSession = session
+            }
+            return transitionedSession
+        }
+    }
+
+    func completeVoiceNoteSession(
+        _ completedSession: RecordingSession,
+        transcript: Transcript,
+        result: DictationResult,
+        expectedPhase: RecordingSessionPhase,
+        keyboardHandoffState: KeyboardHandoffState?
+    ) throws -> VoiceNoteCompletionOutcome {
+        try withDatabase { db in
+            var outcome = VoiceNoteCompletionOutcome()
+            try transaction(db: db) {
+                guard let current = try activeRecordingSession(id: completedSession.id, db: db),
+                      current.kind != .meeting,
+                      current.phase == expectedPhase,
+                      completedSession.phase == .completed,
+                      completedSession.requestID == current.requestID,
+                      transcript.sessionID == current.id,
+                      completedSession.transcriptID == transcript.id,
+                      result.sessionID == current.id,
+                      result.requestID == current.requestID,
+                      result.text == transcript.text,
+                      keyboardHandoffState.map({ handoff in
+                          current.isKeyboardOwnedVoiceNote
+                              && handoff.requestID == current.requestID
+                              && handoff.phase == .resultReady
+                      }) ?? true
+                else { return }
+
+                var resolvedSession = completedSession
+                resolvedSession.cloudRecordName = current.cloudRecordName
+                resolvedSession.scratchpadText = current.scratchpadText
+                // Retention controls remain user-owned while transcription runs.
+                // A concurrent Keep/Delete action must win over the caller's
+                // pre-transcription snapshot, otherwise post-commit cleanup can
+                // remove audio the user explicitly chose to retain.
+                resolvedSession.keepsAudioRecording = current.keepsAudioRecording
+                resolvedSession.audioFileName = current.audioFileName
+
+                try execute("DELETE FROM transcripts WHERE id = ? OR session_id = ?", db: db) { statement in
+                    try bind(transcript.id.uuidString, to: statement, at: 1)
+                    try bind(transcript.sessionID.uuidString, to: statement, at: 2)
+                }
+                try insertTranscript(transcript, db: db)
+                try upsertSession(resolvedSession, db: db)
+                try upsertResultPickup(result, db: db)
+                try upsertResultHistory(result, db: db)
+                let status = DictationStatus(requestID: result.requestID, phase: .finished)
+                try upsertValue(try encoder.encode(status), key: .dictationStatus, db: db)
+                if let keyboardHandoffState {
+                    let currentHandoff = try valueData(key: .keyboardHandoffState, db: db)
+                        .map { try decoder.decode(KeyboardHandoffState.self, from: $0) }
+                    let handoffBelongsToCompletedRequest = currentHandoff?.requestID == nil
+                        || currentHandoff?.requestID == result.requestID
+                    if handoffBelongsToCompletedRequest,
+                       KeyboardHandoffTransitionPolicy.permits(
+                        current: currentHandoff,
+                        proposed: keyboardHandoffState
+                    ) {
+                        try upsertValue(
+                            try encoder.encode(keyboardHandoffState),
+                            key: .keyboardHandoffState,
+                            db: db
+                        )
+                        outcome.didUpdateKeyboardHandoff = true
+                    }
+                }
+                outcome.didComplete = true
+            }
+            return outcome
         }
     }
 
@@ -1072,6 +1813,11 @@ private struct SharedStoreDatabase {
     }
 
     private func withDatabase<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+        try SharedFileProtection.prepareMetadataDirectory(at: containerURL)
+        if FileManager.default.fileExists(atPath: databaseURL.path) {
+            try SharedFileProtection.protectMetadata(at: databaseURL)
+        }
+
         var database: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(databaseURL.path, &database, flags, nil) == SQLITE_OK,
@@ -1082,12 +1828,27 @@ private struct SharedStoreDatabase {
             }
             throw SharedStoreDatabaseError.openFailed(message)
         }
-        defer { sqlite3_close(database) }
+        defer {
+            protectDatabaseFilesBestEffort()
+            sqlite3_close(database)
+        }
 
+        try SharedFileProtection.protectMetadata(at: databaseURL)
         try configure(database)
+        protectDatabaseFilesBestEffort()
         try ensureInitialized(database)
 
         return try body(database)
+    }
+
+    private func protectDatabaseFilesBestEffort() {
+        SharedFileProtection.protectMetadataBestEffort(at: databaseURL)
+        SharedFileProtection.protectMetadataBestEffort(
+            at: URL(fileURLWithPath: databaseURL.path + "-wal")
+        )
+        SharedFileProtection.protectMetadataBestEffort(
+            at: URL(fileURLWithPath: databaseURL.path + "-shm")
+        )
     }
 
     private func configure(_ db: OpaquePointer) throws {
@@ -1484,6 +2245,15 @@ private struct SharedStoreDatabase {
         try querySingleBlob("SELECT payload FROM key_values WHERE key = ? LIMIT 1", db: db) { statement in
             try bind(key.rawValue, to: statement, at: 1)
         }
+    }
+
+    private func result(for requestID: UUID, db: OpaquePointer) throws -> DictationResult? {
+        try querySingleBlob(
+            "SELECT payload FROM result_pickups WHERE request_id = ? LIMIT 1",
+            db: db
+        ) { statement in
+            try bind(requestID.uuidString, to: statement, at: 1)
+        }.map { try decoder.decode(DictationResult.self, from: $0) }
     }
 
     private func upsertResultPickup(_ result: DictationResult, db: OpaquePointer) throws {
@@ -1981,6 +2751,21 @@ private struct SharedStoreDatabase {
         do {
             try body()
             try exec("COMMIT", db: db)
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
+    }
+
+    private func readTransaction<T>(
+        db: OpaquePointer,
+        _ body: () throws -> T
+    ) throws -> T {
+        try exec("BEGIN DEFERRED TRANSACTION", db: db)
+        do {
+            let value = try body()
+            try exec("COMMIT", db: db)
+            return value
         } catch {
             try? exec("ROLLBACK", db: db)
             throw error

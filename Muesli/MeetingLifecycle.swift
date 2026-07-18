@@ -218,6 +218,8 @@ enum MeetingPresentationPolicy {
         switch persistedPhase {
         case .completed, .failed, .cancelled:
             return .idle
+        case .interrupted:
+            return .recovery(sessionID)
         case .transcriptionQueued:
             return .recovery(sessionID)
         case .transcribing:

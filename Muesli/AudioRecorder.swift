@@ -38,6 +38,7 @@ final class AudioRecorder {
         let recorder: AVAudioRecorder
         do {
             recorder = try AVAudioRecorder(url: url, settings: settings)
+            try SharedFileProtection.protectAudio(at: url)
         } catch {
             throw RecordingError.recorderSetupFailed(stage: "create", underlying: error)
         }
@@ -55,6 +56,10 @@ final class AudioRecorder {
         guard let recorder, recorder.isRecording else { return -160 }
         recorder.updateMeters()
         return recorder.averagePower(forChannel: 0)
+    }
+
+    var isCapturingAudio: Bool {
+        recorder?.isRecording == true
     }
 
     @discardableResult

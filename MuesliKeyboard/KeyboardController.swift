@@ -7,10 +7,13 @@ final class KeyboardController {
     private static let staleRecordingInterval: TimeInterval = 45
     private static let staleStoppingInterval: TimeInterval = 10
     private static let staleTranscribingInterval: TimeInterval = 120
+    private static let runtimeFreshnessInterval: TimeInterval = 2
+    private static let activeReconciliationInterval = Duration.milliseconds(750)
     private let store: SharedStore
     private let eventBus: any CrossProcessEventStreaming
     private let handoffRecoveryPolicy = KeyboardHandoffRecoveryPolicy.keyboardDefaults
     private var eventObservationTask: Task<Void, Never>?
+    private var presentationReconciliationTask: Task<Void, Never>?
     private var commandAcknowledgementTask: Task<Void, Never>?
     private var latestResultID: UUID?
     private var preparedRequest: DictationRequest?
@@ -20,6 +23,11 @@ final class KeyboardController {
     private var latestRuntimeStatus: KeyboardRuntimeStatus?
     private var insertedRequestIDs = Set<UUID>()
     private var cancelledRequestIDs = Set<UUID>()
+    private let presentationOwnerID = UUID()
+    private var isPresentationEligible = false
+    private var hasPresentationLease = false
+    private var pendingManualInsertionResult: DictationResult?
+    private var manualInsertionAwaitingConfirmation = false
     private var isBlockedByAppVoiceNote = false
 
     var statusText = "Record a voice note first"
@@ -32,7 +40,9 @@ final class KeyboardController {
     var keyboardDismisser: (@MainActor () -> Void)?
     var liveTranscript = ""
     var inputLevel = 0.0
+    var isCaptureRecovering = false
     var isLaunchSettled = false
+    var waveformRenderGeneration = 0
     private var lastInsertedCharacterCount = 0
     private var canUseRuntimeStart = false
 
@@ -66,6 +76,10 @@ final class KeyboardController {
             "Transcribing"
         case .inserted:
             "Inserted"
+        case .manualInsert:
+            manualInsertionAwaitingConfirmation
+                ? "Insert if missing"
+                : "Review recovered text"
         case .record:
             "Record"
         }
@@ -87,6 +101,10 @@ final class KeyboardController {
             "waveform"
         case .inserted:
             "checkmark"
+        case .manualInsert:
+            manualInsertionAwaitingConfirmation
+                ? "text.badge.plus"
+                : "exclamationmark.triangle"
         case .record:
             "mic.fill"
         }
@@ -102,6 +120,9 @@ final class KeyboardController {
         }
         if recoveryRequestID != nil {
             return .openMuesliRecovery
+        }
+        if pendingManualInsertionResult != nil {
+            return .manualInsert
         }
 
         if latestHandoffState.map({ [.stopRequested, .cancelRequested].contains($0.phase) }) == true {
@@ -138,15 +159,22 @@ final class KeyboardController {
     }
 
     var waveformMode: MuesliFloatingWaveformMode {
-        MuesliKeyboardWaveformPresentation.mode(for: dictationPhase)
+        isCaptureRecovering
+            ? .waiting
+            : MuesliKeyboardWaveformPresentation.mode(for: dictationPhase)
     }
 
     var waveformLevel: Double? {
-        MuesliKeyboardWaveformPresentation.level(for: dictationPhase, inputLevel: inputLevel)
+        isCaptureRecovering
+            ? nil
+            : MuesliKeyboardWaveformPresentation.level(for: dictationPhase, inputLevel: inputLevel)
     }
 
     var canCancelActiveDictation: Bool {
         [.requested, .recording, .transcribing].contains(dictationPhase)
+            && latestHandoffState.map {
+                ![.stopRequested, .cancelRequested].contains($0.phase)
+            } != false
     }
 
     var settingsURL: URL? {
@@ -182,6 +210,15 @@ final class KeyboardController {
     func primaryAction() {
         refreshLatestDictation()
         guard !isBlockedByAppVoiceNote else { return }
+        if pendingManualInsertionResult != nil {
+            guard manualInsertionAwaitingConfirmation else {
+                manualInsertionAwaitingConfirmation = true
+                statusText = "Verify the text is missing before inserting"
+                return
+            }
+            insertRecoveredResultAfterUserConfirmation()
+            return
+        }
         switch dictationPhase {
         case .requested, .recording:
             stopActiveDictation()
@@ -217,16 +254,13 @@ final class KeyboardController {
         }
     }
 
-    func prepareLaunchRequestIfNeeded(clearsPendingCommand: Bool = true) {
+    func prepareLaunchRequestIfNeeded() {
         guard preparedRequest == nil, activeRequestID == nil else { return }
         let request = DictationRequest()
         preparedRequest = request
         launchURL = makeLaunchURL(for: request)
 
         do {
-            if clearsPendingCommand, !hasPendingCancelCommand() {
-                try store.clearPendingCommand()
-            }
             try store.saveRequest(request)
         } catch {
             statusText = "Enable Full Access"
@@ -236,8 +270,9 @@ final class KeyboardController {
     func startDictation() {
         refreshLatestDictation()
         guard !isBlockedByAppVoiceNote else { return }
-        if hasPendingCancelCommand() {
-            try? store.clearPendingCommand()
+        guard ensurePresentationAuthority() else {
+            statusText = "Switch back to Muesli Keyboard"
+            return
         }
 
         MuesliHaptics.dictationStart()
@@ -253,16 +288,24 @@ final class KeyboardController {
         statusText = "Opening Muesli"
 
         do {
-            try store.clearPendingCommand()
             try store.clearKeyboardLiveTranscript()
-            try store.saveRequest(request)
-            try store.saveKeyboardHandoffState(.init(
+            let handoff = makeLocalHandoffState(
                 requestID: request.id,
                 phase: .startRequested,
-                message: canUseRuntimeStart ? "Starting" : "Opening Muesli"
-            ))
+                message: canUseRuntimeStart ? "Starting" : "Opening Muesli",
+                createdAt: request.createdAt
+            )
+            let command = DictationCommand(requestID: request.id, action: .start)
+            guard try store.submitKeyboardIntent(
+                request: request,
+                command: command,
+                handoffState: handoff
+            ) else {
+                refreshLatestDictation()
+                return
+            }
+            latestHandoffState = handoff
             if canUseRuntimeStart {
-                try store.saveCommand(.init(requestID: request.id, action: .start))
                 awaitCommandAcknowledgement(
                     requestID: request.id,
                     action: .start,
@@ -280,6 +323,10 @@ final class KeyboardController {
     }
 
     private func stopActiveDictation() {
+        guard ensurePresentationAuthority() else {
+            statusText = "Switch back to Muesli Keyboard"
+            return
+        }
         guard let activeRequestID else {
             dictationPhase = .idle
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
@@ -289,12 +336,21 @@ final class KeyboardController {
 
         MuesliHaptics.dictationStop()
         do {
-            try store.saveKeyboardHandoffState(.init(
+            let handoff = makeLocalHandoffState(
                 requestID: activeRequestID,
                 phase: .stopRequested,
                 message: "Stopping"
-            ))
-            try store.saveCommand(.init(requestID: activeRequestID, action: .stop))
+            )
+            let command = DictationCommand(requestID: activeRequestID, action: .stop)
+            guard try store.submitKeyboardIntent(
+                request: nil,
+                command: command,
+                handoffState: handoff
+            ) else {
+                refreshLatestDictation()
+                return
+            }
+            latestHandoffState = handoff
             dictationPhase = .recording
             statusText = "Stopping"
             awaitCommandAcknowledgement(
@@ -346,6 +402,10 @@ final class KeyboardController {
             statusText = dictationPhase == .transcribing ? "Transcribing" : statusText
             return
         }
+        guard ensurePresentationAuthority() else {
+            statusText = "Switch back to Muesli Keyboard"
+            return
+        }
 
         guard let activeRequestID else {
             dictationPhase = .idle
@@ -357,12 +417,21 @@ final class KeyboardController {
 
         MuesliHaptics.dictationStop()
         do {
-            try store.saveKeyboardHandoffState(.init(
+            let handoff = makeLocalHandoffState(
                 requestID: activeRequestID,
                 phase: .cancelRequested,
                 message: "Cancelling"
-            ))
-            try store.saveCommand(.init(requestID: activeRequestID, action: .cancel))
+            )
+            let command = DictationCommand(requestID: activeRequestID, action: .cancel)
+            guard try store.submitKeyboardIntent(
+                request: nil,
+                command: command,
+                handoffState: handoff
+            ) else {
+                refreshLatestDictation()
+                return
+            }
+            latestHandoffState = handoff
             dictationPhase = .recording
             statusText = "Cancelling"
             awaitCommandAcknowledgement(
@@ -375,21 +444,32 @@ final class KeyboardController {
         }
     }
 
-    private func hasPendingCancelCommand() -> Bool {
-        guard let command = try? store.pendingCommand(), command.action == .cancel else { return false }
-        return cancelledRequestIDs.contains(command.requestID)
-    }
-
     func prepareInitialPresentationState() {
+        guard isPresentationEligible else { return }
         refreshLatestDictation()
         prepareLaunchRequestIfNeeded()
     }
 
     func startObservingSharedState() {
+        beginObservingSharedState(reconciliation: .full)
+    }
+
+    private enum ObservationReconciliation {
+        case full
+        case activePresentation
+    }
+
+    private func beginObservingSharedState(reconciliation: ObservationReconciliation) {
+        renewPresentationLease()
         markKeyboardVisible()
         eventObservationTask?.cancel()
         let events = eventBus.events()
-        refreshLatestDictation()
+        switch reconciliation {
+        case .full:
+            refreshLatestDictation()
+        case .activePresentation:
+            refreshActivePresentationState()
+        }
         prepareLaunchRequestIfNeeded()
         eventObservationTask = Task { @MainActor [weak self] in
             for await event in events {
@@ -399,13 +479,51 @@ final class KeyboardController {
                     self.refreshRuntimeStatus()
                 case .liveTranscriptChanged:
                     self.refreshLiveTranscript()
-                case .handoffStatusChanged, .resultChanged, .ownershipChanged:
+                case .handoffStatusChanged, .resultChanged:
                     self.refreshLatestDictation()
+                case .ownershipChanged:
+                    if self.hasActivePresentationWork {
+                        self.refreshActivePresentationState()
+                    } else {
+                        self.refreshLatestDictation()
+                    }
                 case .commandChanged:
                     break
                 }
             }
         }
+        startActivePresentationReconciliation()
+    }
+
+    /// Darwin notifications are an acceleration hint, not a durable event log.
+    /// The extension host may suspend while the container continues recording,
+    /// so every host activation restarts the stream and pulls the latest SQLite
+    /// projection before accepting more UI input.
+    func resumeAfterHostActivation() {
+        guard isPresentationEligible else { return }
+        renewPresentationLease()
+        waveformRenderGeneration &+= 1
+        beginObservingSharedState(reconciliation: .activePresentation)
+    }
+
+    func activatePresentationLease() {
+        isPresentationEligible = true
+        renewPresentationLease()
+    }
+
+    func suspendPresentationEligibility() {
+        isPresentationEligible = false
+        hasPresentationLease = false
+    }
+
+    func deactivatePresentationLease() {
+        isPresentationEligible = false
+        _ = try? store.releaseKeyboardPresentationLease(ownerID: presentationOwnerID)
+        hasPresentationLease = false
+    }
+
+    func reconcileSharedPresentationState() {
+        refreshActivePresentationState()
     }
 
     func markKeyboardVisible() {
@@ -419,29 +537,82 @@ final class KeyboardController {
     func stopObservingSharedState() {
         eventObservationTask?.cancel()
         eventObservationTask = nil
+        presentationReconciliationTask?.cancel()
+        presentationReconciliationTask = nil
         commandAcknowledgementTask?.cancel()
         commandAcknowledgementTask = nil
     }
 
+    private func startActivePresentationReconciliation() {
+        presentationReconciliationTask?.cancel()
+        presentationReconciliationTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: Self.activeReconciliationInterval)
+                } catch {
+                    return
+                }
+                guard let self, self.isPresentationEligible else { continue }
+                self.renewPresentationLease()
+                if self.hasActivePresentationWork {
+                    self.refreshActivePresentationState()
+                }
+            }
+        }
+    }
+
+    private func renewPresentationLease() {
+        guard isPresentationEligible else {
+            hasPresentationLease = false
+            return
+        }
+        hasPresentationLease = (try? store.acquireKeyboardPresentationLease(
+            ownerID: presentationOwnerID
+        )) == true
+    }
+
+    private func ensurePresentationAuthority() -> Bool {
+        guard isPresentationEligible else { return false }
+        renewPresentationLease()
+        return hasPresentationLease
+    }
+
+    private var hasActivePresentationWork: Bool {
+        activeRequestID != nil
+            || recoveryRequestID != nil
+            || latestHandoffState.map {
+                ![.idle, .inserted, .failed, .cancelled].contains($0.phase)
+            } == true
+    }
+
     private func refreshLatestDictation() {
         do {
-            let runtimeStatus = try store.keyboardRuntimeStatus()
+            let snapshot = try store.keyboardPresentationSnapshot(
+                preferredRequestID: activeRequestID
+            )
+            let runtimeStatus = snapshot.runtimeStatus
             latestRuntimeStatus = runtimeStatus
-            apply(runtimeStatus: runtimeStatus)
-            let status = try store.status()
+            let status = snapshot.status
 
-            let handoffState = try store.keyboardHandoffState()
+            let handoffState = snapshot.handoffState
             latestHandoffState = handoffState
             apply(handoffState: handoffState)
-            apply(liveTranscript: try store.keyboardLiveTranscript())
 
             let statusBelongsToAppVoiceNote = applyAppVoiceNoteOwnership(status: status)
             if !statusBelongsToAppVoiceNote,
-               (handoffState.requestID == nil
-                || [.idle, .failed, .cancelled, .inserted].contains(handoffState.phase)) {
+               (handoffState.requestID == nil || handoffState.phase == .idle) {
                 apply(status: status)
             }
+            apply(runtimeStatus: runtimeStatus)
+            apply(liveTranscript: snapshot.liveTranscript)
             if isBlockedByAppVoiceNote {
+                return
+            }
+
+            if let activeRequestID,
+               snapshot.targetRequestID == activeRequestID,
+               let activeResult = snapshot.result {
+                insertCompletedResult(activeResult)
                 return
             }
 
@@ -455,11 +626,6 @@ final class KeyboardController {
             }
 
             hasLatestDictation = true
-            if let activeRequestID, let activeResult = try store.result(for: activeRequestID) {
-                insertCompletedResult(activeResult)
-                return
-            }
-
             if latestResultID != result.id {
                 latestResultID = result.id
                 if activeRequestID == nil, !isBlockedByAppVoiceNote {
@@ -470,6 +636,43 @@ final class KeyboardController {
                       statusText != "Inserted" {
                 statusText = "Latest ready"
             }
+        } catch {
+            apply(runtimeStatus: latestRuntimeStatus)
+            statusText = "Waiting for Full Access"
+        }
+    }
+
+    /// Lightweight reconciliation used while a request is active. It deliberately
+    /// avoids loading the complete history, which may contain thousands of notes.
+    /// Request ownership is established before applying the meter row so the first
+    /// post-resume level cannot be discarded during cold rehydration.
+    private func refreshActivePresentationState() {
+        do {
+            let snapshot = try store.keyboardPresentationSnapshot(
+                preferredRequestID: activeRequestID
+            )
+            let runtimeStatus = snapshot.runtimeStatus
+            let status = snapshot.status
+            let handoffState = snapshot.handoffState
+
+            latestRuntimeStatus = runtimeStatus
+            latestHandoffState = handoffState
+            apply(handoffState: handoffState)
+
+            let statusBelongsToAppVoiceNote = applyAppVoiceNoteOwnership(status: status)
+            if !statusBelongsToAppVoiceNote,
+               (handoffState.requestID == nil || handoffState.phase == .idle) {
+                apply(status: status)
+            }
+            apply(runtimeStatus: runtimeStatus)
+            apply(liveTranscript: snapshot.liveTranscript)
+
+            guard !isBlockedByAppVoiceNote,
+                  let requestID = activeRequestID,
+                  snapshot.targetRequestID == requestID,
+                  let result = snapshot.result
+            else { return }
+            insertCompletedResult(result)
         } catch {
             apply(runtimeStatus: latestRuntimeStatus)
             statusText = "Waiting for Full Access"
@@ -494,12 +697,26 @@ final class KeyboardController {
         }
     }
 
-    private func apply(handoffState: KeyboardHandoffState) {
+    private func apply(
+        handoffState: KeyboardHandoffState,
+        evaluatesRecovery: Bool = true
+    ) {
+        reconcilePendingManualInsertion(with: handoffState)
         guard let requestID = handoffState.requestID else { return }
 
         if ![.startRequested, .stopRequested, .cancelRequested].contains(handoffState.phase) {
             commandAcknowledgementTask?.cancel()
             commandAcknowledgementTask = nil
+        }
+
+        if activeRequestID != requestID {
+            // The single durable handoff row is the cross-process authority.
+            // After suspension the extension may still remember an older local
+            // request; replace it before applying terminal state, meter, or result.
+            activeRequestID = requestID
+            recoveryRequestID = nil
+            liveTranscript = ""
+            inputLevel = 0
         }
 
         if cancelledRequestIDs.contains(requestID) {
@@ -516,29 +733,14 @@ final class KeyboardController {
             return
         }
 
-        let resumablePhases: [KeyboardHandoffPhase] = [
-            .startRequested,
-            .startAcknowledged,
-            .recordingStarted,
-            .stopRequested,
-            .cancelRequested,
-            .stopAcknowledged,
-            .audioSaved,
-            .transcribingStarted,
-            .resultReady,
-            .recoveryRequested
-        ]
-        if activeRequestID == nil, resumablePhases.contains(handoffState.phase) {
-            activeRequestID = requestID
-        }
-
-        guard activeRequestID == requestID else { return }
-
-        if markHandoffForRecoveryIfStale(handoffState) {
+        if evaluatesRecovery, markHandoffForRecoveryIfStale(handoffState) {
             return
         }
 
         recoveryRequestID = handoffState.phase == .recoveryRequested ? requestID : nil
+        if handoffState.phase != .recordingStarted {
+            isCaptureRecovering = false
+        }
 
         switch handoffState.phase {
         case .idle:
@@ -579,7 +781,7 @@ final class KeyboardController {
             inputLevel = 0
             statusText = handoffState.message ?? "Inserting"
         case .inserted:
-            dictationPhase = .finished
+            dictationPhase = .idle
             activeRequestID = nil
             liveTranscript = ""
             inputLevel = 0
@@ -612,25 +814,71 @@ final class KeyboardController {
 
     private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
         let now = Date()
-        let hasFreshRecordingLevel = runtimeStatus.map {
-            $0.phase == .recording
+        let isFresh = runtimeStatus.map {
+            now.timeIntervalSince($0.updatedAt) >= 0
+                && now.timeIntervalSince($0.updatedAt) < Self.runtimeFreshnessInterval
+        } ?? false
+        let runtimeMatchesActiveRequest = runtimeStatus.map {
+            isFresh
+                && $0.isActive
                 && $0.activeRequestID == activeRequestID
-                && now.timeIntervalSince($0.updatedAt) < 2
+        } ?? false
+        let blocksRecordingRuntime = activeRequestID.map {
+            handoffBlocksRecordingRuntime(requestID: $0)
+        } ?? false
+        let isWaitingForControlAcknowledgement = latestHandoffState.map {
+            [.stopRequested, .cancelRequested].contains($0.phase)
+        } == true
+        let hasFreshRecordingLevel = runtimeStatus.map {
+            runtimeMatchesActiveRequest
+                && $0.phase == .recording
+                && !$0.isRecoveringCapture
+                && !blocksRecordingRuntime
         } ?? false
         inputLevel = hasFreshRecordingLevel ? (runtimeStatus?.inputLevel ?? 0) : 0
-        canUseRuntimeStart = runtimeStatus?.canAcceptStartCommand == true
+        canUseRuntimeStart = isFresh && runtimeStatus?.canAcceptStartCommand == true
+        isCaptureRecovering = dictationPhase == .recording
+            && !isWaitingForControlAcknowledgement
+            && (!runtimeMatchesActiveRequest || runtimeStatus?.isRecoveringCapture == true)
 
-        guard activeRequestID == nil, canUseRuntimeStart else { return }
-        guard let runtimeRequestID = runtimeStatus?.activeRequestID,
-              !cancelledRequestIDs.contains(runtimeRequestID)
-        else {
+        guard isFresh,
+              let runtimeStatus,
+              let runtimeRequestID = runtimeStatus.activeRequestID,
+              runtimeRequestID == activeRequestID,
+              !cancelledRequestIDs.contains(runtimeRequestID),
+              [.recording, .transcribing].contains(runtimeStatus.phase)
+        else { return }
+
+        if runtimeStatus.phase == .recording, blocksRecordingRuntime {
+            isCaptureRecovering = false
+            inputLevel = 0
             return
         }
 
-        activeRequestID = runtimeRequestID
-        if runtimeStatus?.phase == .idle {
-            statusText = runtimeStatus?.message ?? "Session ready"
+        recoveryRequestID = nil
+        dictationPhase = runtimeStatus.phase
+        if runtimeStatus.phase == .transcribing {
+            isCaptureRecovering = false
+            inputLevel = 0
         }
+        if !isWaitingForControlAcknowledgement {
+            statusText = runtimeStatus.message ?? runtimeStatus.phase.rawValue.capitalized
+        }
+    }
+
+    private func handoffBlocksRecordingRuntime(requestID: UUID) -> Bool {
+        guard let latestHandoffState,
+              latestHandoffState.requestID == requestID
+        else { return false }
+        return [
+            .stopAcknowledged,
+            .audioSaved,
+            .transcribingStarted,
+            .resultReady,
+            .inserted,
+            .failed,
+            .cancelled,
+        ].contains(latestHandoffState.phase)
     }
 
     private func apply(status: DictationStatus) {
@@ -681,12 +929,14 @@ final class KeyboardController {
         case .transcribing:
             recoveryRequestID = nil
             dictationPhase = .transcribing
+            isCaptureRecovering = false
             statusText = status.message ?? "Transcribing"
         case .failed:
             recoveryRequestID = nil
             dictationPhase = .failed
             activeRequestID = nil
             liveTranscript = ""
+            isCaptureRecovering = false
             statusText = status.message ?? "Voice note failed"
         case .finished:
             recoveryRequestID = nil
@@ -697,6 +947,7 @@ final class KeyboardController {
             dictationPhase = .idle
             activeRequestID = nil
             liveTranscript = ""
+            isCaptureRecovering = false
             statusText = hasLatestDictation ? "Latest ready" : "Ready"
         }
     }
@@ -768,6 +1019,11 @@ final class KeyboardController {
 
         guard age > threshold else { return false }
 
+        if hasDurableActiveSession(requestID: requestID) {
+            recoveryRequestID = nil
+            return false
+        }
+
         recoveryRequestID = requestID
         launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
         dictationPhase = .failed
@@ -780,6 +1036,15 @@ final class KeyboardController {
     private func markHandoffForRecoveryIfStale(_ state: KeyboardHandoffState) -> Bool {
         guard let requestID = state.requestID else { return false }
 
+        // A stale cross-process heartbeat is not evidence that recording died.
+        // Persisted session phase is the container-owned authority; keep Stop and
+        // Cancel available while transport catches up instead of mutating the
+        // durable handoff to recoveryRequested from the extension.
+        if hasDurableActiveSession(requestID: requestID) {
+            recoveryRequestID = nil
+            return false
+        }
+
         let action = handoffRecoveryPolicy.action(
             for: state,
             latestRuntimeStatus: latestRuntimeStatus,
@@ -791,15 +1056,21 @@ final class KeyboardController {
             return false
 
         case let .retry(retryAction, retrying):
-            try? store.saveCommand(.init(requestID: requestID, action: retryAction))
-            try? store.saveKeyboardHandoffState(retrying)
+            guard (try? store.saveKeyboardHandoffState(retrying)) == true else {
+                reconcileRejectedHandoffTransition()
+                return true
+            }
             latestHandoffState = retrying
+            _ = try? store.saveCommand(.init(requestID: requestID, action: retryAction))
             dictationPhase = retrying.phase.dictationPhase
             statusText = retrying.message ?? "Retrying"
             return true
 
         case let .recover(recovery):
-            try? store.saveKeyboardHandoffState(recovery)
+            guard (try? store.saveKeyboardHandoffState(recovery)) == true else {
+                reconcileRejectedHandoffTransition()
+                return true
+            }
             latestHandoffState = recovery
             recoveryRequestID = requestID
             launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
@@ -812,10 +1083,98 @@ final class KeyboardController {
     }
 
     private func insertCompletedResult(_ result: DictationResult) {
-        guard !insertedRequestIDs.contains(result.requestID) else { return }
         guard !cancelledRequestIDs.contains(result.requestID) else { return }
+        guard ensurePresentationAuthority() else { return }
+        attemptResultInsertion(result, allowsAbandonedClaimRecovery: false)
+    }
+
+    private func insertRecoveredResultAfterUserConfirmation() {
+        guard let result = pendingManualInsertionResult else { return }
+        guard ensurePresentationAuthority() else {
+            statusText = "Switch back to Muesli Keyboard to insert"
+            return
+        }
+        attemptResultInsertion(result, allowsAbandonedClaimRecovery: true)
+    }
+
+    private func attemptResultInsertion(
+        _ result: DictationResult,
+        allowsAbandonedClaimRecovery: Bool
+    ) {
+        let claim = KeyboardResultInsertionClaim(
+            id: UUID(),
+            requestID: result.requestID,
+            ownerID: presentationOwnerID,
+            claimedAt: .now
+        )
+        let outcome: KeyboardResultInsertionClaimOutcome
+        do {
+            outcome = try store.claimKeyboardResultInsertion(
+                claim: claim,
+                allowsAbandonedClaimRecovery: allowsAbandonedClaimRecovery
+            )
+        } catch {
+            statusText = "Waiting to insert"
+            return
+        }
+
+        switch outcome {
+        case .acquired:
+            performClaimedResultInsertion(result, claim: claim)
+        case .busy:
+            statusText = "Finishing insertion"
+        case .recoveryRequired:
+            if pendingManualInsertionResult?.requestID != result.requestID {
+                manualInsertionAwaitingConfirmation = false
+            }
+            pendingManualInsertionResult = result
+            dictationPhase = .finished
+            inputLevel = 0
+            statusText = "Tap to insert recovered text"
+        case .unavailable:
+            statusText = "Waiting for result"
+        }
+    }
+
+    private func performClaimedResultInsertion(
+        _ result: DictationResult,
+        claim: KeyboardResultInsertionClaim
+    ) {
+        guard ensurePresentationAuthority(),
+              (try? store.validateKeyboardResultInsertionClaim(claim)) == true
+        else {
+            // The controller lost its visible text proxy or presentation lease
+            // after claiming. Preserve the claim and require explicit recovery;
+            // never send text through a stale keyboard instance.
+            pendingManualInsertionResult = result
+            manualInsertionAwaitingConfirmation = false
+            dictationPhase = .finished
+            statusText = "Insertion paused; verify the text is missing"
+            return
+        }
         insertText(result.text)
         insertedRequestIDs.insert(result.requestID)
+        let inserted = makeLocalHandoffState(
+            requestID: result.requestID,
+            phase: .inserted,
+            message: "Inserted"
+        )
+        guard (try? store.finalizeKeyboardResultInsertion(
+            claim: claim,
+            handoffState: inserted
+        )) == true else {
+            // The proxy side effect cannot participate in SQLite's transaction.
+            // Keep the durable claim so a future instance never auto-inserts a
+            // possible duplicate; recovery becomes an explicit user decision.
+            pendingManualInsertionResult = result
+            dictationPhase = .finished
+            statusText = "Inserted; tap only if text is missing"
+            return
+        }
+
+        latestHandoffState = inserted
+        pendingManualInsertionResult = nil
+        manualInsertionAwaitingConfirmation = false
         latestResultID = result.id
         hasLatestDictation = true
         activeRequestID = nil
@@ -824,18 +1183,69 @@ final class KeyboardController {
         recoveryRequestID = nil
         launchURL = nil
         dictationPhase = .idle
+        isCaptureRecovering = false
         statusText = "Latest ready"
-        try? store.clearPendingRequest()
-        try? store.clearPendingCommand()
         try? store.clearKeyboardLiveTranscript()
-        try? store.saveKeyboardHandoffState(.init(
-            requestID: result.requestID,
-            phase: .inserted,
-            message: "Inserted"
-        ))
-        try? store.saveStatus(.idle)
         prepareLaunchRequestIfNeeded()
+    }
 
+    private func reconcilePendingManualInsertion(with handoffState: KeyboardHandoffState) {
+        guard let pendingResult = pendingManualInsertionResult else { return }
+        let pickupStillExists = (try? store.result(for: pendingResult.requestID)) != nil
+        guard handoffState.phase == .resultReady,
+              handoffState.requestID == pendingResult.requestID,
+              pickupStillExists
+        else {
+            pendingManualInsertionResult = nil
+            manualInsertionAwaitingConfirmation = false
+            return
+        }
+    }
+
+    private func makeLocalHandoffState(
+        requestID: UUID,
+        phase: KeyboardHandoffPhase,
+        message: String?,
+        createdAt: Date? = nil
+    ) -> KeyboardHandoffState {
+        let current = latestHandoffState ?? (try? store.keyboardHandoffState())
+        if let current, current.requestID == requestID {
+            return current.advanced(to: phase, message: message)
+        }
+        return KeyboardHandoffState(
+            requestID: requestID,
+            phase: phase,
+            message: message,
+            createdAt: createdAt ?? .now
+        )
+    }
+
+    @discardableResult
+    private func saveLocalHandoffState(_ state: KeyboardHandoffState) throws -> Bool {
+        let didSave = try store.saveKeyboardHandoffState(state)
+        if didSave {
+            latestHandoffState = state
+        }
+        return didSave
+    }
+
+    /// A rejected write means another process advanced the durable row first.
+    /// Adopt that projection instead of continuing to mutate the UI from the
+    /// stale state that lost the compare-and-set race.
+    private func reconcileRejectedHandoffTransition() {
+        guard let persisted = try? store.keyboardHandoffState() else { return }
+        latestHandoffState = persisted
+        // Avoid re-entering stale-recovery policy while resolving a rejected
+        // transition. The persisted phase itself is authoritative here.
+        apply(handoffState: persisted, evaluatesRecovery: false)
+    }
+
+    private func hasDurableActiveSession(requestID: UUID) -> Bool {
+        guard let session = try? store.recordingSession(requestID: requestID),
+              session.isKeyboardOwnedVoiceNote
+        else { return false }
+        return [.recording, .interrupted, .transcriptionQueued, .transcribing]
+            .contains(session.phase)
     }
 
     private func awaitCommandAcknowledgement(
@@ -856,6 +1266,30 @@ final class KeyboardController {
             self.refreshLatestDictation()
             guard self.isAwaitingAcknowledgement(requestID: requestID, phase: requestedPhase) else { return }
 
+            if let session = try? self.store.recordingSession(requestID: requestID),
+               session.isKeyboardOwnedVoiceNote,
+               [.recording, .interrupted, .transcriptionQueued, .transcribing].contains(session.phase)
+            {
+                self.recoveryRequestID = nil
+                self.activeRequestID = requestID
+                switch session.phase {
+                case .recording, .interrupted:
+                    self.dictationPhase = .recording
+                    self.isCaptureRecovering = session.phase == .interrupted
+                case .transcriptionQueued, .transcribing:
+                    self.dictationPhase = .transcribing
+                    self.isCaptureRecovering = false
+                    self.inputLevel = 0
+                default:
+                    break
+                }
+                // The command is durable; re-notify the container and let the
+                // periodic reconciliation observe its authoritative progress.
+                // A slow acknowledgement must not be converted into failure.
+                eventBus.post(.commandChanged)
+                return
+            }
+
             let urlAction: String
             let message: String
             switch action {
@@ -869,15 +1303,28 @@ final class KeyboardController {
                 urlAction = MuesliAppConstants.cancelAction
                 message = "Open Muesli to cancel"
             }
-            let recovery = KeyboardHandoffState(
-                requestID: requestID,
-                phase: .recoveryRequested,
-                message: message,
-                recoveryAttemptCount: 1,
-                recoveryAction: action
-            )
-            try? self.store.saveKeyboardHandoffState(recovery)
-            self.latestHandoffState = recovery
+            let current = self.latestHandoffState ?? (try? self.store.keyboardHandoffState())
+            let recovery: KeyboardHandoffState
+            if let current, current.requestID == requestID {
+                recovery = current.advanced(
+                    to: .recoveryRequested,
+                    message: message,
+                    recoveryAttemptCount: max(current.recoveryAttemptCount, 1),
+                    recoveryAction: action
+                )
+            } else {
+                recovery = KeyboardHandoffState(
+                    requestID: requestID,
+                    phase: .recoveryRequested,
+                    message: message,
+                    recoveryAttemptCount: 1,
+                    recoveryAction: action
+                )
+            }
+            guard (try? self.saveLocalHandoffState(recovery)) == true else {
+                self.reconcileRejectedHandoffTransition()
+                return
+            }
             self.canUseRuntimeStart = false
             self.recoveryRequestID = requestID
             self.activeRequestID = nil
@@ -925,7 +1372,7 @@ final class KeyboardController {
     }
 }
 
-enum KeyboardPrimaryButtonRole {
+enum KeyboardPrimaryButtonRole: Equatable {
     case blocked
     case openMuesliRecovery
     case waitingForMuesli
@@ -933,5 +1380,6 @@ enum KeyboardPrimaryButtonRole {
     case stop
     case transcribing
     case inserted
+    case manualInsert
     case record
 }

@@ -519,6 +519,226 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertNil(try store.pendingCommand())
     }
 
+    func testLegacyPendingCommandHasStableIdentityAndCanBeCASCleared() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        _ = try store.status() // Initialize the SQLite schema.
+
+        let legacy = LegacyKeyboardCommandPayload(
+            requestID: UUID(),
+            action: .stop,
+            createdAt: Date(timeIntervalSinceReferenceDate: 12_345.625)
+        )
+        let payload = try JSONEncoder().encode(legacy)
+        let database = try openSQLiteDatabase(in: directory)
+        try sqliteInsertBlob(
+            "INSERT OR REPLACE INTO key_values (key, payload, updated_at) VALUES (?, ?, ?)",
+            database,
+            values: [
+                .text("pending_command"),
+                .blob(payload),
+                .double(Date().timeIntervalSince1970)
+            ]
+        )
+        sqlite3_close(database)
+
+        let first = try XCTUnwrap(store.pendingCommand())
+        let secondStore = SharedStore(containerURL: directory)
+        let second = try XCTUnwrap(secondStore.pendingCommand())
+        XCTAssertEqual(first.id, second.id)
+        XCTAssertEqual(first.requestID, legacy.requestID)
+        XCTAssertTrue(try secondStore.clearPendingCommand(id: first.id))
+        XCTAssertNil(try store.pendingCommand())
+    }
+
+    func testRapidStartThenStopPersistsTerminalDesiredIntentAtomically() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let request = DictationRequest(createdAt: Date(timeIntervalSince1970: 100))
+        let start = DictationCommand(
+            requestID: request.id,
+            action: .start,
+            createdAt: Date(timeIntervalSince1970: 101)
+        )
+        let starting = KeyboardHandoffState(
+            requestID: request.id,
+            phase: .startRequested,
+            createdAt: request.createdAt,
+            updatedAt: start.createdAt
+        )
+        XCTAssertTrue(try store.submitKeyboardIntent(
+            request: request,
+            command: start,
+            handoffState: starting
+        ))
+
+        let stop = DictationCommand(
+            requestID: request.id,
+            action: .stop,
+            createdAt: Date(timeIntervalSince1970: 102)
+        )
+        let stopping = starting.advanced(
+            to: .stopRequested,
+            message: "Stopping",
+            updatedAt: stop.createdAt
+        )
+        XCTAssertTrue(try store.submitKeyboardIntent(
+            request: nil,
+            command: stop,
+            handoffState: stopping
+        ))
+        XCTAssertEqual(try store.pendingCommand(), stop)
+        XCTAssertEqual(try store.pendingRequest(), request)
+        XCTAssertEqual(try store.keyboardHandoffState(), stopping)
+
+        let staleStartRetry = DictationCommand(
+            requestID: request.id,
+            action: .start,
+            createdAt: Date(timeIntervalSince1970: 103)
+        )
+        XCTAssertFalse(try store.saveCommand(staleStartRetry))
+        XCTAssertEqual(try store.pendingCommand(), stop)
+
+        let terminal = stopping.advanced(
+            to: .cancelled,
+            message: "Stopped before recording began",
+            updatedAt: Date(timeIntervalSince1970: 104)
+        )
+        XCTAssertTrue(try store.resolveKeyboardIntent(
+            commandID: stop.id,
+            requestID: request.id,
+            handoffState: terminal,
+            clearsPendingRequest: true
+        ))
+        XCTAssertNil(try store.pendingCommand())
+        XCTAssertNil(try store.pendingRequest())
+        XCTAssertEqual(try store.keyboardHandoffState(), terminal)
+    }
+
+    func testResultInsertionClaimRequiresPresentationLeaseAndFinalizesAtomically() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let result = DictationResult(
+            requestID: requestID,
+            text: "Claimed once",
+            engineIdentifier: "test"
+        )
+        let ready = KeyboardHandoffState(requestID: requestID, phase: .resultReady)
+        try store.saveResult(result)
+        XCTAssertTrue(try store.saveKeyboardHandoffState(ready))
+
+        let ownerID = UUID()
+        XCTAssertTrue(try store.acquireKeyboardPresentationLease(ownerID: ownerID))
+        let claim = KeyboardResultInsertionClaim(
+            id: UUID(),
+            requestID: requestID,
+            ownerID: ownerID,
+            claimedAt: .now
+        )
+        XCTAssertEqual(
+            try store.claimKeyboardResultInsertion(claim: claim),
+            .acquired
+        )
+        XCTAssertEqual(
+            try store.claimKeyboardResultInsertion(claim: .init(
+                id: UUID(),
+                requestID: requestID,
+                ownerID: ownerID,
+                claimedAt: .now
+            )),
+            .busy
+        )
+
+        let inserted = ready.advanced(to: .inserted, message: "Inserted")
+        XCTAssertTrue(try store.finalizeKeyboardResultInsertion(
+            claim: claim,
+            handoffState: inserted
+        ))
+        XCTAssertNil(try store.result(for: requestID))
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .inserted)
+    }
+
+    func testAbandonedResultClaimRequiresExplicitRecovery() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        try store.saveResult(.init(
+            requestID: requestID,
+            text: "Recover explicitly",
+            engineIdentifier: "test"
+        ))
+        XCTAssertTrue(try store.saveKeyboardHandoffState(.init(
+            requestID: requestID,
+            phase: .resultReady
+        )))
+
+        let firstOwner = UUID()
+        let startedAt = Date(timeIntervalSince1970: 100)
+        XCTAssertTrue(try store.acquireKeyboardPresentationLease(
+            ownerID: firstOwner,
+            now: startedAt
+        ))
+        XCTAssertEqual(try store.claimKeyboardResultInsertion(
+            claim: .init(
+                id: UUID(),
+                requestID: requestID,
+                ownerID: firstOwner,
+                claimedAt: startedAt
+            ),
+            now: startedAt
+        ), .acquired)
+
+        let recoveryTime = Date(timeIntervalSince1970: 140)
+        let recoveryOwner = UUID()
+        XCTAssertTrue(try store.acquireKeyboardPresentationLease(
+            ownerID: recoveryOwner,
+            now: recoveryTime
+        ))
+        let recoveryClaim = KeyboardResultInsertionClaim(
+            id: UUID(),
+            requestID: requestID,
+            ownerID: recoveryOwner,
+            claimedAt: recoveryTime
+        )
+        XCTAssertEqual(try store.claimKeyboardResultInsertion(
+            claim: recoveryClaim,
+            now: recoveryTime
+        ), .recoveryRequired)
+        XCTAssertEqual(try store.claimKeyboardResultInsertion(
+            claim: recoveryClaim,
+            now: recoveryTime,
+            allowsAbandonedClaimRecovery: true
+        ), .acquired)
+    }
+
+    func testConditionalPendingRequestClearPreservesNewerRequest() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let completedRequest = DictationRequest(
+            id: UUID(),
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+        let newerRequest = DictationRequest(
+            id: UUID(),
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        try store.saveRequest(completedRequest)
+        try store.saveRequest(newerRequest)
+
+        XCTAssertFalse(try store.clearPendingRequest(id: completedRequest.id))
+        XCTAssertEqual(try store.pendingRequest(), newerRequest)
+        XCTAssertTrue(try store.clearPendingRequest(id: newerRequest.id))
+        XCTAssertNil(try store.pendingRequest())
+    }
+
     func testKeyboardRuntimeStatusRoundTripsAndClears() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
@@ -563,6 +783,123 @@ final class SharedStoreTests: XCTestCase {
         try store.clearKeyboardLiveTranscript()
 
         XCTAssertNil(try store.keyboardLiveTranscript())
+    }
+
+    func testKeyboardPresentationSnapshotReadsSharedStateAndPrefersRequestedResult() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let preferredRequestID = UUID()
+        let handoffRequestID = UUID()
+        let statusRequestID = UUID()
+        let runtimeRequestID = UUID()
+        let preferredResult = DictationResult(
+            requestID: preferredRequestID,
+            text: "preferred result",
+            engineIdentifier: "test"
+        )
+        let handoffResult = DictationResult(
+            requestID: handoffRequestID,
+            text: "handoff result",
+            engineIdentifier: "test"
+        )
+        let runtimeStatus = KeyboardRuntimeStatus(
+            isActive: true,
+            activeRequestID: runtimeRequestID,
+            phase: .recording,
+            message: "Listening",
+            inputLevel: 0.4
+        )
+        let status = DictationStatus(
+            requestID: statusRequestID,
+            phase: .transcribing,
+            message: "Transcribing"
+        )
+        let handoff = KeyboardHandoffState(
+            requestID: handoffRequestID,
+            phase: .startRequested,
+            message: "Starting"
+        )
+        let transcript = KeyboardLiveTranscript(
+            requestID: handoffRequestID,
+            text: "live words"
+        )
+
+        try store.saveResult(preferredResult)
+        try store.saveResult(handoffResult)
+        try store.saveStatus(status)
+        try store.saveKeyboardRuntimeStatus(runtimeStatus)
+        try store.saveKeyboardHandoffState(handoff)
+        try store.saveKeyboardLiveTranscript(transcript)
+
+        let preferredSnapshot = try store.keyboardPresentationSnapshot(
+            preferredRequestID: preferredRequestID
+        )
+        XCTAssertEqual(preferredSnapshot.runtimeStatus, runtimeStatus)
+        XCTAssertEqual(preferredSnapshot.status, status)
+        XCTAssertEqual(preferredSnapshot.handoffState, handoff)
+        XCTAssertEqual(preferredSnapshot.liveTranscript, transcript)
+        XCTAssertEqual(preferredSnapshot.targetRequestID, preferredRequestID)
+        XCTAssertEqual(preferredSnapshot.result, preferredResult)
+
+        let inferredSnapshot = try store.keyboardPresentationSnapshot()
+        XCTAssertEqual(inferredSnapshot.targetRequestID, handoffRequestID)
+        XCTAssertEqual(inferredSnapshot.result, handoffResult)
+    }
+
+    func testKeyboardPresentationSnapshotFallsBackFromStatusToRuntimeRequest() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let statusRequestID = UUID()
+        let runtimeRequestID = UUID()
+        let statusResult = DictationResult(
+            requestID: statusRequestID,
+            text: "status result",
+            engineIdentifier: "test"
+        )
+        let runtimeResult = DictationResult(
+            requestID: runtimeRequestID,
+            text: "runtime result",
+            engineIdentifier: "test"
+        )
+        let runtimeStatus = KeyboardRuntimeStatus(
+            isActive: true,
+            activeRequestID: runtimeRequestID,
+            phase: .recording
+        )
+
+        try store.saveResult(statusResult)
+        try store.saveResult(runtimeResult)
+        try store.saveKeyboardRuntimeStatus(runtimeStatus)
+        try store.saveStatus(.init(requestID: statusRequestID, phase: .finished))
+
+        let statusSnapshot = try store.keyboardPresentationSnapshot()
+        XCTAssertEqual(statusSnapshot.handoffState, .idle)
+        XCTAssertEqual(statusSnapshot.targetRequestID, statusRequestID)
+        XCTAssertEqual(statusSnapshot.result, statusResult)
+
+        try store.saveStatus(.idle)
+
+        let runtimeSnapshot = try store.keyboardPresentationSnapshot()
+        XCTAssertEqual(runtimeSnapshot.targetRequestID, runtimeRequestID)
+        XCTAssertEqual(runtimeSnapshot.result, runtimeResult)
+    }
+
+    func testKeyboardPresentationSnapshotReturnsIdleDefaultsWhenStoreIsEmpty() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let snapshot = try SharedStore(containerURL: directory).keyboardPresentationSnapshot()
+
+        XCTAssertNil(snapshot.runtimeStatus)
+        XCTAssertEqual(snapshot.status, .idle)
+        XCTAssertEqual(snapshot.handoffState, .idle)
+        XCTAssertNil(snapshot.liveTranscript)
+        XCTAssertNil(snapshot.targetRequestID)
+        XCTAssertNil(snapshot.result)
     }
 
     func testSavingPendingRequestDoesNotOverwriteStatus() throws {
@@ -769,6 +1106,298 @@ final class SharedStoreTests: XCTestCase {
             }
         )
         XCTAssertEqual(transitioned?.phase, .transcriptionQueued)
+    }
+
+    func testVoiceNoteTransitionCompareAndSetRequiresExpectedPhaseAndNonMeetingKind() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let voiceNote = RecordingSession(kind: .keyboardDictation, phase: .recording)
+        let meeting = RecordingSession(kind: .meeting, phase: .recording)
+        try store.saveSession(voiceNote)
+        try store.saveSession(meeting)
+
+        XCTAssertNil(try store.transitionVoiceNoteSession(
+            id: voiceNote.id,
+            expectedPhases: [.interrupted],
+            update: { $0.phase = .transcriptionQueued }
+        ))
+        XCTAssertEqual(try store.recordingSession(id: voiceNote.id)?.phase, .recording)
+
+        XCTAssertNil(try store.transitionVoiceNoteSession(
+            id: meeting.id,
+            expectedPhases: [.recording],
+            update: { $0.phase = .transcriptionQueued }
+        ))
+        XCTAssertEqual(try store.recordingSession(id: meeting.id)?.phase, .recording)
+
+        let transitioned = try store.transitionVoiceNoteSession(
+            id: voiceNote.id,
+            expectedPhases: [.recording],
+            update: {
+                $0.audioFileName = "durable.wav"
+                $0.phase = .transcriptionQueued
+            }
+        )
+        XCTAssertEqual(transitioned?.audioFileName, "durable.wav")
+        XCTAssertEqual(transitioned?.phase, .transcriptionQueued)
+        XCTAssertEqual(try store.recordingSession(id: voiceNote.id), transitioned)
+    }
+
+    func testLateDraftWriteCannotRegressCompletedVoiceNoteSession() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let completed = RecordingSession(
+            kind: .keyboardDictation,
+            phase: .completed,
+            source: "keyboard"
+        )
+        try store.saveSession(completed)
+
+        let staleDraftWrite = try store.transitionVoiceNoteSession(
+            id: completed.id,
+            expectedPhases: [.recording, .interrupted],
+            update: { session in
+                session.phase = .transcribing
+                session.draftTranscriptText = "Late realtime callback"
+            }
+        )
+
+        XCTAssertNil(staleDraftWrite)
+        let persisted = try XCTUnwrap(try store.recordingSession(id: completed.id))
+        XCTAssertEqual(persisted.phase, .completed)
+        XCTAssertNil(persisted.draftTranscriptText)
+        XCTAssertNil(persisted.draftTranscriptUpdatedAt)
+    }
+
+    func testCompleteVoiceNoteSessionAtomicallyPersistsTranscriptSessionResultAndStatus() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        var current = RecordingSession(
+            requestID: requestID,
+            kind: .keyboardDictation,
+            phase: .transcribing,
+            audioFileName: "protected.wav",
+            keepsAudioRecording: true,
+            source: "keyboard",
+            scratchpadText: "Keep this concurrently edited note"
+        )
+        current.cloudRecordName = "voice-note-cloud-record"
+        try store.saveSession(current)
+        let persistedBeforeCompletion = try XCTUnwrap(try store.recordingSession(id: current.id))
+
+        let transcript = Transcript(
+            sessionID: current.id,
+            text: "Recovered words",
+            engineIdentifier: "test-engine"
+        )
+        var completed = current
+        completed.phase = .completed
+        completed.transcriptID = transcript.id
+        completed.engineIdentifier = transcript.engineIdentifier
+        completed.audioFileName = "stale-caller.wav"
+        completed.keepsAudioRecording = false
+        completed.scratchpadText = "stale caller value"
+        let result = DictationResult(
+            requestID: requestID,
+            sessionID: current.id,
+            text: transcript.text,
+            engineIdentifier: transcript.engineIdentifier,
+            source: "keyboard"
+        )
+
+        XCTAssertTrue(try store.completeVoiceNoteSession(
+            completed,
+            transcript: transcript,
+            result: result
+        ))
+
+        let persistedSession = try XCTUnwrap(try store.recordingSession(id: current.id))
+        XCTAssertEqual(persistedSession.phase, .completed)
+        XCTAssertEqual(persistedSession.transcriptID, transcript.id)
+        XCTAssertEqual(persistedSession.cloudRecordName, persistedBeforeCompletion.cloudRecordName)
+        XCTAssertEqual(persistedSession.scratchpadText, persistedBeforeCompletion.scratchpadText)
+        XCTAssertEqual(persistedSession.audioFileName, persistedBeforeCompletion.audioFileName)
+        XCTAssertTrue(persistedSession.keepsAudioRecording)
+        XCTAssertEqual(try store.transcript(for: current.id), transcript)
+        XCTAssertEqual(try store.result(for: requestID), result)
+        XCTAssertTrue(try store.resultsHistory().contains(result))
+        let status = try XCTUnwrap(try store.status())
+        XCTAssertEqual(status.requestID, requestID)
+        XCTAssertEqual(status.phase, .finished)
+    }
+
+    func testKeyboardCompletionHandoffCannotRegressAfterInsertion() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        var session = RecordingSession(
+            requestID: requestID,
+            kind: .keyboardDictation,
+            phase: .transcribing,
+            source: "keyboard"
+        )
+        try store.saveSession(session)
+        let currentHandoff = KeyboardHandoffState(
+            requestID: requestID,
+            phase: .transcribingStarted,
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        XCTAssertTrue(try store.saveKeyboardHandoffState(currentHandoff))
+
+        let transcript = Transcript(
+            sessionID: session.id,
+            text: "Lock-safe result",
+            engineIdentifier: "test-engine"
+        )
+        session.phase = .completed
+        session.transcriptID = transcript.id
+        let result = DictationResult(
+            requestID: requestID,
+            sessionID: session.id,
+            text: transcript.text,
+            engineIdentifier: transcript.engineIdentifier,
+            source: "keyboard"
+        )
+        let resultReady = currentHandoff.advanced(
+            to: .resultReady,
+            message: "Ready to insert",
+            updatedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertTrue(try store.completeVoiceNoteSession(
+            session,
+            transcript: transcript,
+            result: result,
+            keyboardHandoffState: resultReady
+        ))
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .resultReady)
+
+        let inserted = resultReady.advanced(
+            to: .inserted,
+            message: "Inserted",
+            updatedAt: Date(timeIntervalSince1970: 300)
+        )
+        XCTAssertTrue(try store.saveKeyboardHandoffState(inserted))
+
+        let lateResultReady = resultReady.advanced(
+            to: .resultReady,
+            message: "Late container write",
+            updatedAt: Date(timeIntervalSince1970: 400)
+        )
+        XCTAssertFalse(try store.saveKeyboardHandoffState(lateResultReady))
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .inserted)
+    }
+
+    func testCompleteVoiceNoteSessionRejectsStalePhaseWithoutPartialWrites() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let current = RecordingSession(
+            requestID: requestID,
+            kind: .quickDictation,
+            phase: .transcriptionQueued
+        )
+        try store.saveSession(current)
+        let persistedBeforeAttempt = try XCTUnwrap(try store.recordingSession(id: current.id))
+        let transcript = Transcript(
+            sessionID: current.id,
+            text: "Must not leak through a stale completion",
+            engineIdentifier: "test-engine"
+        )
+        var completed = current
+        completed.phase = .completed
+        completed.transcriptID = transcript.id
+        let result = DictationResult(
+            requestID: requestID,
+            sessionID: current.id,
+            text: transcript.text,
+            engineIdentifier: transcript.engineIdentifier
+        )
+
+        XCTAssertFalse(try store.completeVoiceNoteSession(
+            completed,
+            transcript: transcript,
+            result: result,
+            expectedPhase: .transcribing
+        ))
+        XCTAssertEqual(try store.recordingSession(id: current.id), persistedBeforeAttempt)
+        XCTAssertNil(try store.transcript(for: current.id))
+        XCTAssertNil(try store.result(for: requestID))
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+    }
+
+    func testCompleteVoiceNoteSessionRollsBackEveryWriteWhenLateHistoryInsertFails() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let current = RecordingSession(
+            requestID: requestID,
+            kind: .keyboardDictation,
+            phase: .transcribing,
+            audioFileName: "protected.wav",
+            source: "keyboard",
+            scratchpadText: "Preserve this note"
+        )
+        try store.saveSession(current)
+        let statusBeforeAttempt = DictationStatus(
+            requestID: requestID,
+            phase: .transcribing,
+            message: "Transcribing"
+        )
+        try store.saveStatus(statusBeforeAttempt)
+        let persistedStatusBeforeAttempt = try store.status()
+
+        do {
+            let database = try openSQLiteDatabase(in: directory)
+            defer { sqlite3_close(database) }
+            try sqliteExec(
+                """
+                CREATE TRIGGER fail_voice_note_result_history_insert
+                BEFORE INSERT ON result_history
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected result history failure');
+                END;
+                """,
+                database
+            )
+        }
+
+        let persistedBeforeAttempt = try XCTUnwrap(try store.recordingSession(id: current.id))
+        let transcript = Transcript(
+            sessionID: current.id,
+            text: "Must roll back",
+            engineIdentifier: "test-engine"
+        )
+        var completed = current
+        completed.phase = .completed
+        completed.transcriptID = transcript.id
+        completed.engineIdentifier = transcript.engineIdentifier
+        let result = DictationResult(
+            requestID: requestID,
+            sessionID: current.id,
+            text: transcript.text,
+            engineIdentifier: transcript.engineIdentifier,
+            source: "keyboard"
+        )
+
+        XCTAssertThrowsError(try store.completeVoiceNoteSession(
+            completed,
+            transcript: transcript,
+            result: result
+        ))
+
+        XCTAssertEqual(try store.recordingSession(id: current.id), persistedBeforeAttempt)
+        XCTAssertNil(try store.transcript(for: current.id))
+        XCTAssertNil(try store.result(for: requestID))
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+        XCTAssertEqual(try store.status(), persistedStatusBeforeAttempt)
     }
 
     func testMeetingDraftTranscriptPersistsWithoutChangingRecordingLifecycle() throws {
@@ -1622,6 +2251,14 @@ private enum SQLiteValue {
     case double(Double)
     case int(Int)
     case blob(Data)
+}
+
+/// Mirrors the pre-command-ID payload so the migration test exercises the
+/// decoder that has to synthesize a stable compare-and-set identity.
+private struct LegacyKeyboardCommandPayload: Encodable {
+    let requestID: UUID
+    let action: DictationCommandAction
+    let createdAt: Date
 }
 
 private enum SQLiteTestError: Error {

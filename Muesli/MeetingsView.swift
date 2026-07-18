@@ -2383,6 +2383,8 @@ private extension RecordingSessionPhase {
         switch self {
         case .recording:
             "Recording"
+        case .interrupted:
+            "Interrupted"
         case .transcriptionQueued:
             "Queued"
         case .transcribing:
@@ -2400,6 +2402,8 @@ private extension RecordingSessionPhase {
         switch self {
         case .recording:
             "Live"
+        case .interrupted:
+            "Interrupted"
         case .transcriptionQueued:
             "Saved"
         case .transcribing:
@@ -2417,6 +2421,8 @@ private extension RecordingSessionPhase {
         switch self {
         case .recording:
             "Live"
+        case .interrupted:
+            "Interrupted"
         case .transcriptionQueued:
             "Saved"
         case .transcribing:
@@ -2434,6 +2440,8 @@ private extension RecordingSessionPhase {
         switch self {
         case .recording:
             "In progress."
+        case .interrupted:
+            "Recording was interrupted; captured audio is being recovered."
         case .transcriptionQueued:
             "Audio is saved locally and ready for delayed transcription."
         case .transcribing:
@@ -2451,6 +2459,8 @@ private extension RecordingSessionPhase {
         switch self {
         case .recording:
             "mic.fill"
+        case .interrupted:
+            "waveform.badge.exclamationmark"
         case .transcriptionQueued:
             "clock"
         case .transcribing:
@@ -2468,6 +2478,8 @@ private extension RecordingSessionPhase {
         switch self {
         case .recording:
             MuesliTheme.recording
+        case .interrupted:
+            MuesliTheme.transcribing
         case .failed, .cancelled:
             MuesliTheme.destructive
         case .transcriptionQueued, .transcribing:

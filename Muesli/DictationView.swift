@@ -583,7 +583,7 @@ struct DictationView: View {
                                 // recorder would fail the work in flight.
                                 canDelete: !coordinator.isCapturingVoiceNote(sessionID: session.id),
                                 action: { coordinator.openLongVoiceNote(session) },
-                                onDelete: { coordinator.deleteRecoverableVoiceNote(session) }
+                                onDelete: { Task { await coordinator.deleteRecoverableVoiceNote(session) } }
                             )
                         case .completed(let result, let session):
                             let hasRetainedAudio = session?.keepsAudioRecording == true
@@ -602,7 +602,7 @@ struct DictationView: View {
                                     )
                                 } : nil,
                                 onCopy: { coordinator.copyToClipboard(result) },
-                                onDelete: { coordinator.deleteDictation(result) }
+                                onDelete: { Task { await coordinator.deleteDictation(result) } }
                             )
                         }
                     }

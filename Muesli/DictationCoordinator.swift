@@ -2025,23 +2025,29 @@ final class DictationCoordinator {
     /// Throws if the session row itself survives. That row is what the timeline
     /// is built from, so leaving it behind means the voice note reappears on
     /// the next history reload after the user was told it was deleted.
-    private func discardVoiceNoteSession(_ session: RecordingSession) throws {
-        // Derived artifacts are best-effort: the audio file is usually already
-        // gone, which is what makes a row read "Audio unavailable".
+    private func discardVoiceNoteSession(_ session: RecordingSession) async throws {
+        // Every artifact is propagated. Deleting a voice note is a privacy
+        // claim, so reporting success while audio survives on disk is worse
+        // than reporting failure. SharedStore.deleteAudioFile already no-ops
+        // when the file is absent, so a missing recording -- the usual case for
+        // an "Audio unavailable" row -- is not an error here.
         if let audioFileName = session.audioFileName {
-            try? store.deleteAudioFile(fileName: audioFileName)
+            try store.deleteAudioFile(fileName: audioFileName)
         }
-        try? store.deleteTranscript(for: session.id)
+        try store.deleteTranscript(for: session.id)
         removeCachedTranscript(for: session.id)
 
-        try store.deleteRecordingSession(id: session.id)
-
-        recordingSessions.removeAll { $0.id == session.id }
+        // Awaited rather than fired into a Task, so the caller cannot report a
+        // completed deletion while checkpoint audio is still being removed.
         if session.longFormThresholdSeconds != nil {
-            Task {
-                try? await voiceNoteCheckpointStore.delete(sessionID: session.id)
-            }
+            try await voiceNoteCheckpointStore.delete(sessionID: session.id)
         }
+
+        // Last: the row is what the timeline is built from, so it is only
+        // removed once everything derived from it is gone. If an earlier step
+        // throws, the session stays visible and can be retried.
+        try store.deleteRecordingSession(id: session.id)
+        recordingSessions.removeAll { $0.id == session.id }
     }
 
     /// A session that never produced a transcript -- shown in the timeline as
@@ -2049,7 +2055,7 @@ final class DictationCoordinator {
     /// way to clear them, because every existing delete path is keyed on a
     /// DictationResult that this session does not have.
     @discardableResult
-    func deleteRecoverableVoiceNote(_ session: RecordingSession) -> Bool {
+    func deleteRecoverableVoiceNote(_ session: RecordingSession) async -> Bool {
         // The timeline lists .recording, .transcriptionQueued and .transcribing
         // as recoverable, so a capture that is genuinely still running can
         // appear here. Deleting its artifacts underneath a live recorder or
@@ -2062,7 +2068,7 @@ final class DictationCoordinator {
         }
 
         do {
-            try discardVoiceNoteSession(session)
+            try await discardVoiceNoteSession(session)
         } catch {
             clipboardStatusText = "Delete failed"
             clearClipboardStatusSoon()
@@ -2082,10 +2088,10 @@ final class DictationCoordinator {
         return true
     }
 
-    func deleteDictation(_ result: DictationResult) {
+    func deleteDictation(_ result: DictationResult) async {
         do {
             if let session = recordingSession(for: result) {
-                try discardVoiceNoteSession(session)
+                try await discardVoiceNoteSession(session)
             }
             try store.deleteResult(result)
             dictationHistory.removeAll { $0.id == result.id || $0.requestID == result.requestID }

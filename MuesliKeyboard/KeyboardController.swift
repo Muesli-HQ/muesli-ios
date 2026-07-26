@@ -434,6 +434,15 @@ final class KeyboardController {
     }
 
     func stopObservingSharedState() {
+        // The waveform renders live microphone input. Off screen there is none,
+        // so holding the last level is wrong -- and the controller outlives a
+        // dismissal, so that stale level gets baked into the launch snapshot
+        // and replayed for a moment on the way back in. Settle it now; the
+        // refresh in prepareInitialPresentationState repopulates it from the
+        // app's published status if a recording is still running.
+        inputLevel = 0
+        liveTranscript = ""
+
         KeyboardDiagnosticsLog.record("keyboard.disappeared", [
             "localPhase": dictationPhase.rawValue,
             "active": activeRequestID?.uuidString.prefix(8).lowercased() ?? "none"

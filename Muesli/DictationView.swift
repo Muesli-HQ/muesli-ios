@@ -576,9 +576,11 @@ struct DictationView: View {
                     ForEach(timeline) { item in
                         switch item {
                         case .recoverable(let session):
-                            RecoverableVoiceNoteRow(session: session) {
-                                coordinator.openLongVoiceNote(session)
-                            }
+                            RecoverableVoiceNoteRow(
+                                session: session,
+                                action: { coordinator.openLongVoiceNote(session) },
+                                onDelete: { coordinator.deleteRecoverableVoiceNote(session) }
+                            )
                         case .completed(let result, let session):
                             let hasRetainedAudio = session?.keepsAudioRecording == true
                                 && session.flatMap { coordinator.audioFileURL(for: $0) } != nil
@@ -926,6 +928,14 @@ private struct DictationHomeStatTile: View {
 private struct RecoverableVoiceNoteRow: View {
     let session: RecordingSession
     let action: () -> Void
+    let onDelete: () -> Void
+    @State private var isConfirmingDelete = false
+
+    private var deleteMessage: String {
+        session.audioFileName == nil
+            ? "The audio for this voice note is gone, so it cannot be transcribed. This removes it from local history."
+            : "This removes the voice note, and its audio, from local history."
+    }
 
     var body: some View {
         Button(action: action) {
@@ -969,6 +979,22 @@ private struct RecoverableVoiceNoteRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint(session.audioFileName == nil ? "Opens recovery details" : "Opens retry actions")
+        .contextMenu {
+            Button("Delete Voice Note", systemImage: "trash", role: .destructive) {
+                isConfirmingDelete = true
+            }
+        }
+        .accessibilityAction(named: "Delete voice note") { isConfirmingDelete = true }
+        .confirmationDialog(
+            "Delete this voice note?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Voice Note", role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(deleteMessage)
+        }
     }
 }
 

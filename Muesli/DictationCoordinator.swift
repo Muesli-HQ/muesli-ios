@@ -2010,21 +2010,47 @@ final class DictationCoordinator {
         clearClipboardStatusSoon()
     }
 
+    /// Removes a capture session and everything derived from it: its audio,
+    /// transcript, cached transcript, and any long-form checkpoints. Shared by
+    /// the completed and unrecoverable delete paths so a partial session is
+    /// cleaned up as thoroughly as a finished one.
+    private func discardVoiceNoteSession(_ session: RecordingSession) {
+        if let audioFileName = session.audioFileName {
+            try? store.deleteAudioFile(fileName: audioFileName)
+        }
+        try? store.deleteTranscript(for: session.id)
+        removeCachedTranscript(for: session.id)
+        try? store.deleteRecordingSession(id: session.id)
+        recordingSessions.removeAll { $0.id == session.id }
+        if session.longFormThresholdSeconds != nil {
+            Task {
+                try? await voiceNoteCheckpointStore.delete(sessionID: session.id)
+            }
+        }
+    }
+
+    /// A session that never produced a transcript -- shown in the timeline as
+    /// "Audio unavailable" or "Needs transcription". These accumulate with no
+    /// way to clear them, because every existing delete path is keyed on a
+    /// DictationResult that this session does not have.
+    func deleteRecoverableVoiceNote(_ session: RecordingSession) {
+        discardVoiceNoteSession(session)
+        clipboardStatusText = "Deleted"
+        AppTelemetry.signal(
+            "voice_note_deleted",
+            parameters: [
+                "state": session.audioFileName == nil ? "audio_unavailable" : "needs_transcription",
+                "kind": session.kind.title
+            ]
+        )
+        clearClipboardStatusSoon()
+        scheduleICloudSyncAfterLocalChange(reason: "voice_note_deleted")
+    }
+
     func deleteDictation(_ result: DictationResult) {
         do {
             if let session = recordingSession(for: result) {
-                if let audioFileName = session.audioFileName {
-                    try? store.deleteAudioFile(fileName: audioFileName)
-                }
-                try? store.deleteTranscript(for: session.id)
-                removeCachedTranscript(for: session.id)
-                try? store.deleteRecordingSession(id: session.id)
-                recordingSessions.removeAll { $0.id == session.id }
-                if session.longFormThresholdSeconds != nil {
-                    Task {
-                        try? await voiceNoteCheckpointStore.delete(sessionID: session.id)
-                    }
-                }
+                discardVoiceNoteSession(session)
             }
             try store.deleteResult(result)
             dictationHistory.removeAll { $0.id == result.id || $0.requestID == result.requestID }

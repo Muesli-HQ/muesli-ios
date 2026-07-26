@@ -39,4 +39,28 @@ jobs:
             -project MuesliiOS.xcodeproj \
             -scheme Muesli \
             -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -enableCodeCoverage YES \
+            -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO
+
+      # Reported, not gated. A floor is only meaningful once there is a
+      # baseline worth holding, and gating on a number nobody chose tends to
+      # produce tests written to move the number. Pass --fail-under-watched to
+      # scripts/coverage-summary.py once the watched files have settled.
+      - name: Report code coverage
+        if: always()
+        run: |
+          if [ ! -d TestResults.xcresult ]; then
+            echo "No result bundle produced; skipping coverage report."
+            exit 0
+          fi
+          xcrun xccov view --report --json TestResults.xcresult > coverage.json
+          python3 scripts/coverage-summary.py coverage.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults.xcresult
+          retention-days: 7

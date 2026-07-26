@@ -90,6 +90,16 @@ targets:
     sources:
       - path: Tests/MuesliTests
       - path: Shared
+      # Compiled in so the keyboard extension is unit-testable at all. Without
+      # this, nothing in MuesliKeyboard/ has any coverage and every keyboard
+      # regression can only be caught on a device.
+      - path: MuesliKeyboard
+        excludes:
+          # UIInputViewController host: needs a real keyboard extension context.
+          - "KeyboardViewController.swift"
+          - "Info.plist"
+          - "PrivacyInfo.xcprivacy"
+          - "MuesliKeyboard.entitlements"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.tests
@@ -121,6 +131,10 @@ schemes:
       config: Debug
     test:
       config: Debug
+      gatherCoverageData: true
+      coverageTargets:
+        - MuesliTests
+        - Muesli
       targets:
         - MuesliTests
         - MuesliUITests

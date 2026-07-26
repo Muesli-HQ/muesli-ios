@@ -25,6 +25,7 @@ final class KeyboardController {
     /// overwrites before `apply(handoffState:)` runs -- comparing against it
     /// there always says "unchanged".
     private var lastRecordedHandoff: (requestID: UUID, phase: KeyboardHandoffPhase)?
+    private var lastLevelFreshness: Bool?
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -652,6 +653,18 @@ final class KeyboardController {
                 && $0.activeRequestID == activeRequestID
                 && now.timeIntervalSince($0.updatedAt) < 2
         } ?? false
+        // A recording whose levels have gone stale collapses every waveform bar
+        // to zero, so the strip looks empty while the pill still says
+        // "Listening". Record the transition, not every sample.
+        if runtimeStatus?.phase == .recording, hasFreshRecordingLevel != lastLevelFreshness {
+            lastLevelFreshness = hasFreshRecordingLevel
+            KeyboardDiagnosticsLog.record("level.freshness", [
+                "fresh": hasFreshRecordingLevel ? "yes" : "no",
+                "age": runtimeStatus.map { String(format: "%.1fs", now.timeIntervalSince($0.updatedAt)) } ?? "none",
+                "appPhase": runtimeStatus?.phase.rawValue ?? "none",
+                "matchesActive": runtimeStatus?.activeRequestID == activeRequestID ? "yes" : "no"
+            ])
+        }
         inputLevel = hasFreshRecordingLevel ? (runtimeStatus?.inputLevel ?? 0) : 0
         canUseRuntimeStart = runtimeStatus?.canAcceptStartCommand == true
 

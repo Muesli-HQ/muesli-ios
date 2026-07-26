@@ -6,12 +6,25 @@ actor MuesliLiveActivityController {
     private var endedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
 
     func start(session: RecordingSession, requestID: UUID?, phase: String, detail: String) async {
-        guard !endedSessionIDs.contains(session.id) else { return }
+        guard !endedSessionIDs.contains(session.id) else {
+            KeyboardDiagnosticsLog.record("liveActivity.skipped", [
+                "kind": session.kind.title, "reason": "sessionAlreadyEnded"
+            ])
+            return
+        }
         guard MuesliPreferences.liveActivitiesEnabled(for: session.kind) else {
+            KeyboardDiagnosticsLog.record("liveActivity.skipped", [
+                "kind": session.kind.title, "reason": "disabledInSettings"
+            ])
             await endActivities(for: session.kind, phase: "Off", detail: "Live Activities disabled")
             return
         }
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            KeyboardDiagnosticsLog.record("liveActivity.skipped", [
+                "kind": session.kind.title, "reason": "disabledBySystem"
+            ])
+            return
+        }
 
         await endInactiveActivities()
         guard !endedSessionIDs.contains(session.id) else { return }
@@ -34,7 +47,15 @@ actor MuesliLiveActivityController {
 
         do {
             activity = try Activity.request(attributes: attributes, content: content, pushType: nil)
+            KeyboardDiagnosticsLog.record("liveActivity.started", ["kind": session.kind.title])
         } catch {
+            // iOS refuses Activity.request from a backgrounded app. A keyboard
+            // dictation starts while the host app is in front, so this is the
+            // expected failure if that restriction applies.
+            KeyboardDiagnosticsLog.record("liveActivity.failed", [
+                "kind": session.kind.title,
+                "error": String(describing: error)
+            ])
             await AppTelemetry.failure(
                 "live_activity_failed",
                 domain: .liveActivity,

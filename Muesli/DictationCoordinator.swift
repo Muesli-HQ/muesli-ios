@@ -2025,29 +2025,60 @@ final class DictationCoordinator {
     /// Throws if the session row itself survives. That row is what the timeline
     /// is built from, so leaving it behind means the voice note reappears on
     /// the next history reload after the user was told it was deleted.
+    /// Deletes a session and everything derived from it.
+    ///
+    /// There is no transaction spanning the filesystem and SQLite, so a later
+    /// step can fail after an earlier one has already destroyed something. What
+    /// is guaranteed instead is that the session row never describes data that
+    /// no longer exists: after each irreversible step the row is rewritten to
+    /// reflect what actually remains, before anything else is allowed to fail.
+    ///
+    /// A partial failure therefore leaves a session that is honest about itself
+    /// -- an "Audio unavailable" row, which the timeline already models and the
+    /// user can delete again -- rather than one still advertising a recording
+    /// that has been erased.
+    ///
+    /// Order matters: audio goes first. Deleting a voice note is a privacy
+    /// claim, so the recording is the one artifact that must not survive a
+    /// half-completed delete.
     private func discardVoiceNoteSession(_ session: RecordingSession) async throws {
-        // Every artifact is propagated. Deleting a voice note is a privacy
-        // claim, so reporting success while audio survives on disk is worse
-        // than reporting failure. SharedStore.deleteAudioFile already no-ops
-        // when the file is absent, so a missing recording -- the usual case for
-        // an "Audio unavailable" row -- is not an error here.
-        if let audioFileName = session.audioFileName {
+        var remaining = session
+
+        // SharedStore.deleteAudioFile no-ops when the file is absent, so a
+        // missing recording -- the usual case for a row that already reads
+        // "Audio unavailable" -- is not an error here.
+        if let audioFileName = remaining.audioFileName {
             try store.deleteAudioFile(fileName: audioFileName)
+            remaining.audioFileName = nil
+            remaining.hasDurableAudioCheckpoint = false
+            remaining.protectedAudioUntilTranscriptCompletes = false
+            try? store.saveSession(remaining)
+            replaceCachedRecordingSession(remaining)
         }
+
         try store.deleteTranscript(for: session.id)
         removeCachedTranscript(for: session.id)
+        if remaining.transcriptID != nil {
+            remaining.transcriptID = nil
+            try? store.saveSession(remaining)
+            replaceCachedRecordingSession(remaining)
+        }
 
-        // Awaited rather than fired into a Task, so the caller cannot report a
-        // completed deletion while checkpoint audio is still being removed.
+        // Awaited rather than fired into a detached Task, so the caller cannot
+        // report a completed deletion while checkpoint audio is still on disk.
         if session.longFormThresholdSeconds != nil {
             try await voiceNoteCheckpointStore.delete(sessionID: session.id)
         }
 
-        // Last: the row is what the timeline is built from, so it is only
-        // removed once everything derived from it is gone. If an earlier step
-        // throws, the session stays visible and can be retried.
+        // Last: the row is what the timeline is built from, so it is removed
+        // only once everything derived from it is gone.
         try store.deleteRecordingSession(id: session.id)
         recordingSessions.removeAll { $0.id == session.id }
+    }
+
+    private func replaceCachedRecordingSession(_ session: RecordingSession) {
+        guard let index = recordingSessions.firstIndex(where: { $0.id == session.id }) else { return }
+        recordingSessions[index] = session
     }
 
     /// A session that never produced a transcript -- shown in the timeline as

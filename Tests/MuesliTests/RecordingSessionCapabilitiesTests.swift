@@ -18,12 +18,13 @@ final class RecordingSessionCapabilitiesTests: XCTestCase {
         XCTAssertEqual(RecordingSessionKind.allCases.count, 3)
     }
 
-    /// A meeting runs unattended for a long time, so stopping it from the Lock
-    /// Screen matters. A quick dictation is over in seconds with the app open.
-    func testOnlyMeetingsCarryAStopControlToday() {
+    /// Captures that run with Muesli's own UI off screen need a stop control on
+    /// the Live Activity, because it is the only one the user can reach. A
+    /// quick dictation has the app's recorder in front of it already.
+    func testCapturesWithNoOnScreenStopOfferOneOnTheLiveActivity() {
         XCTAssertTrue(RecordingSessionKind.meeting.liveActivityOffersStopControl)
+        XCTAssertTrue(RecordingSessionKind.keyboardDictation.liveActivityOffersStopControl)
         XCTAssertFalse(RecordingSessionKind.quickDictation.liveActivityOffersStopControl)
-        XCTAssertFalse(RecordingSessionKind.keyboardDictation.liveActivityOffersStopControl)
     }
 
     /// A Live Activity describes a recording in progress. No kind may show one

@@ -467,7 +467,7 @@ final class DictationCoordinator {
         }
         startSharedEventObservation()
         MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
-            self?.stopMeetingRecordingFromLiveActivity(sessionID: sessionID) ?? .unavailable
+            self?.stopCaptureFromLiveActivity(sessionID: sessionID) ?? .unavailable
         }
 
         refreshAudioInputRoute()
@@ -4484,6 +4484,28 @@ final class DictationCoordinator {
         AppTelemetry.signal("meeting_recording_recovered_for_transcription")
         transcribeSession(queued)
         return true
+    }
+
+    /// The Live Activity stop control is shared by every capture kind -- the
+    /// intent carries only a session ID and knows nothing about what it is
+    /// stopping. Routes to whichever capture owns that session.
+    func stopCaptureFromLiveActivity(sessionID: UUID) -> MeetingLiveActivityStopResult {
+        if canStopMeetingCapture(sessionID: sessionID) {
+            return stopMeetingRecordingFromLiveActivity(sessionID: sessionID)
+        }
+
+        guard let activeSession, activeSession.id == sessionID, isRecording else {
+            // The recording already ended, or belongs to a session this
+            // process no longer owns. The activity is stale either way.
+            return .alreadyHandled
+        }
+
+        stopRecording()
+        AppTelemetry.signal(
+            "capture_stopped_from_live_activity",
+            parameters: ["session_kind": activeSession.kind.title]
+        )
+        return .accepted
     }
 
     func stopMeetingRecordingFromLiveActivity(sessionID: UUID) -> MeetingLiveActivityStopResult {

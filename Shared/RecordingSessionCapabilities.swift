@@ -38,9 +38,14 @@ extension RecordingSessionKind {
     /// capture -- see `StopMeetingRecordingIntent`.
     var liveActivityOffersStopControl: Bool {
         switch self {
-        case .meeting:
+        case .meeting, .keyboardDictation:
+            // Both run with Muesli's own UI off screen -- a meeting because it
+            // is unattended, a keyboard dictation because the host app is in
+            // front. The Live Activity is the only stop control the user has.
             true
-        case .quickDictation, .keyboardDictation:
+        case .quickDictation:
+            // Started from Muesli's own recorder, which is on screen with a
+            // stop button already.
             false
         }
     }

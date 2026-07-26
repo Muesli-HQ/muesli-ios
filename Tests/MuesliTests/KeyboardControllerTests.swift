@@ -91,18 +91,24 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertEqual(controller.inputLevel, 0)
     }
 
-    /// A level published for a different recording is not this one's input.
-    func testLevelsFromAnotherRequestAreIgnoredOnceAdopted() throws {
+    /// The waveform follows whatever the app is recording, without checking
+    /// that the level names the request this keyboard adopted.
+    ///
+    /// That match used to be required. It was not protecting anything: a
+    /// recording the keyboard does not own blocks the keyboard and hides the
+    /// waveform card entirely, so there is no path where a foreign level is
+    /// drawn. What it did do was blank the waveform every time iOS rebuilt the
+    /// keyboard, because a rebuilt one has adopted no request yet.
+    func testTheWaveformFollowsWhateverTheAppIsRecording() throws {
         try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.62))
         try store.saveKeyboardHandoffState(handoff(.recordingStarted))
         controller.prepareInitialPresentationState()
         XCTAssertEqual(controller.inputLevel, 0.62, accuracy: 0.001)
 
-        // Same keyboard, now a different session is recording.
         try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.9, request: UUID()))
         controller.prepareInitialPresentationState()
 
-        XCTAssertEqual(controller.inputLevel, 0)
+        XCTAssertEqual(controller.inputLevel, 0.9, accuracy: 0.001)
     }
 
     /// The controller outlives a dismissal, so a retained level was replayed

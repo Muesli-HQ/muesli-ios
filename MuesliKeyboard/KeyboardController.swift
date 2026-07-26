@@ -657,16 +657,24 @@ final class KeyboardController {
 
     private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
         let now = Date()
-        // The keyboard is destroyed and rebuilt constantly -- locking the
-        // screen is enough -- and comes back with no adopted request until the
-        // handoff record is read again. Requiring a match discarded levels that
-        // were milliseconds old, collapsing every bar to zero, so the strip
-        // read as empty while the pill still said "Listening". An unadopted
-        // keyboard trusts whichever request the app says it is recording.
+        // The waveform draws live microphone input. It needs two facts and no
+        // bookkeeping: the app is recording, and a level arrived recently.
+        //
+        // This used to also require the level to name the request this keyboard
+        // had adopted. That match was added when the waveform was first switched
+        // on, not in response to any bug, and it caused one: iOS destroys and
+        // rebuilds the keyboard constantly, and a rebuilt one has adopted
+        // nothing, so levels milliseconds old were thrown away and every bar
+        // collapsed to zero while the pill still said "Listening".
+        //
+        // It is not what stops the keyboard rendering an in-app voice note's
+        // audio either. A recording the keyboard does not own blocks it
+        // outright and hides the waveform card -- see applyAppVoiceNoteOwnership.
+        //
+        // The freshness rule stays: when levels stop arriving the bars settle
+        // rather than freezing on the last sample.
         let hasFreshRecordingLevel = runtimeStatus.map {
-            $0.phase == .recording
-                && (activeRequestID == nil || $0.activeRequestID == activeRequestID)
-                && now.timeIntervalSince($0.updatedAt) < 2
+            $0.phase == .recording && now.timeIntervalSince($0.updatedAt) < 2
         } ?? false
         // A recording whose levels have gone stale collapses every waveform bar
         // to zero, so the strip looks empty while the pill still says

@@ -578,6 +578,10 @@ struct DictationView: View {
                         case .recoverable(let session):
                             RecoverableVoiceNoteRow(
                                 session: session,
+                                // A capture that is actually running still
+                                // appears here; deleting it underneath the
+                                // recorder would fail the work in flight.
+                                canDelete: !coordinator.isCapturingVoiceNote(sessionID: session.id),
                                 action: { coordinator.openLongVoiceNote(session) },
                                 onDelete: { coordinator.deleteRecoverableVoiceNote(session) }
                             )
@@ -927,6 +931,7 @@ private struct DictationHomeStatTile: View {
 
 private struct RecoverableVoiceNoteRow: View {
     let session: RecordingSession
+    let canDelete: Bool
     let action: () -> Void
     let onDelete: () -> Void
     @State private var isConfirmingDelete = false
@@ -980,11 +985,15 @@ private struct RecoverableVoiceNoteRow: View {
         .buttonStyle(.plain)
         .accessibilityHint(session.audioFileName == nil ? "Opens recovery details" : "Opens retry actions")
         .contextMenu {
-            Button("Delete Voice Note", systemImage: "trash", role: .destructive) {
-                isConfirmingDelete = true
+            if canDelete {
+                Button("Delete Voice Note", systemImage: "trash", role: .destructive) {
+                    isConfirmingDelete = true
+                }
             }
         }
-        .accessibilityAction(named: "Delete voice note") { isConfirmingDelete = true }
+        .accessibilityAction(named: "Delete voice note") {
+            if canDelete { isConfirmingDelete = true }
+        }
         .confirmationDialog(
             "Delete this voice note?",
             isPresented: $isConfirmingDelete,

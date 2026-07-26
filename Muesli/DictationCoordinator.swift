@@ -2010,17 +2010,32 @@ final class DictationCoordinator {
         clearClipboardStatusSoon()
     }
 
+    /// Whether this process is currently capturing or transcribing the given
+    /// session. A session can sit in .recording forever after a crash without
+    /// anything actually running, so the persisted phase cannot answer this.
+    func isCapturingVoiceNote(sessionID: UUID) -> Bool {
+        activeSession?.id == sessionID
+    }
+
     /// Removes a capture session and everything derived from it: its audio,
     /// transcript, cached transcript, and any long-form checkpoints. Shared by
     /// the completed and unrecoverable delete paths so a partial session is
     /// cleaned up as thoroughly as a finished one.
-    private func discardVoiceNoteSession(_ session: RecordingSession) {
+    ///
+    /// Throws if the session row itself survives. That row is what the timeline
+    /// is built from, so leaving it behind means the voice note reappears on
+    /// the next history reload after the user was told it was deleted.
+    private func discardVoiceNoteSession(_ session: RecordingSession) throws {
+        // Derived artifacts are best-effort: the audio file is usually already
+        // gone, which is what makes a row read "Audio unavailable".
         if let audioFileName = session.audioFileName {
             try? store.deleteAudioFile(fileName: audioFileName)
         }
         try? store.deleteTranscript(for: session.id)
         removeCachedTranscript(for: session.id)
-        try? store.deleteRecordingSession(id: session.id)
+
+        try store.deleteRecordingSession(id: session.id)
+
         recordingSessions.removeAll { $0.id == session.id }
         if session.longFormThresholdSeconds != nil {
             Task {
@@ -2033,8 +2048,27 @@ final class DictationCoordinator {
     /// "Audio unavailable" or "Needs transcription". These accumulate with no
     /// way to clear them, because every existing delete path is keyed on a
     /// DictationResult that this session does not have.
-    func deleteRecoverableVoiceNote(_ session: RecordingSession) {
-        discardVoiceNoteSession(session)
+    @discardableResult
+    func deleteRecoverableVoiceNote(_ session: RecordingSession) -> Bool {
+        // The timeline lists .recording, .transcriptionQueued and .transcribing
+        // as recoverable, so a capture that is genuinely still running can
+        // appear here. Deleting its artifacts underneath a live recorder or
+        // transcription task would fail that work, or let it re-save the row
+        // and resurrect a session the user was told had been deleted.
+        guard !isCapturingVoiceNote(sessionID: session.id) else {
+            clipboardStatusText = "Stop the recording first"
+            clearClipboardStatusSoon()
+            return false
+        }
+
+        do {
+            try discardVoiceNoteSession(session)
+        } catch {
+            clipboardStatusText = "Delete failed"
+            clearClipboardStatusSoon()
+            return false
+        }
+
         clipboardStatusText = "Deleted"
         AppTelemetry.signal(
             "voice_note_deleted",
@@ -2045,12 +2079,13 @@ final class DictationCoordinator {
         )
         clearClipboardStatusSoon()
         scheduleICloudSyncAfterLocalChange(reason: "voice_note_deleted")
+        return true
     }
 
     func deleteDictation(_ result: DictationResult) {
         do {
             if let session = recordingSession(for: result) {
-                discardVoiceNoteSession(session)
+                try discardVoiceNoteSession(session)
             }
             try store.deleteResult(result)
             dictationHistory.removeAll { $0.id == result.id || $0.requestID == result.requestID }

@@ -24,7 +24,8 @@ actor MuesliLiveActivityController {
         let attributes = MuesliLiveActivityAttributes(
             sessionID: session.id.uuidString,
             requestID: requestID?.uuidString,
-            kind: session.kind.title
+            kind: session.kind.title,
+            offersStopControl: session.kind.liveActivityOffersStopControl
         )
         let content = ActivityContent(
             state: contentState(phase: phase, detail: detail, session: session),

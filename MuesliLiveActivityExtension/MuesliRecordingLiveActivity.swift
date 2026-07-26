@@ -8,7 +8,7 @@ struct MuesliRecordingLiveActivity: Widget {
             LockScreenLiveActivityView(
                 state: context.state,
                 sessionID: context.attributes.sessionID,
-                showsStopControl: context.attributes.isMeeting
+                showsStopControl: context.attributes.showsStopControl
             )
                 .activityBackgroundTint(.black)
                 .activitySystemActionForegroundColor(.white)
@@ -34,7 +34,7 @@ struct MuesliRecordingLiveActivity: Widget {
                         Text(context.state.startedAt, style: .timer)
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        if context.attributes.isMeeting {
+                        if context.attributes.showsStopControl {
                             StopMeetingButton(
                                 sessionID: context.attributes.sessionID,
                                 size: 34

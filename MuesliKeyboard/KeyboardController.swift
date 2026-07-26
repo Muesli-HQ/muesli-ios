@@ -21,6 +21,10 @@ final class KeyboardController {
     private var insertedRequestIDs = Set<UUID>()
     private var cancelledRequestIDs = Set<UUID>()
     private var isBlockedByAppVoiceNote = false
+    /// Tracked separately from `latestHandoffState`, which `refreshLatestDictation`
+    /// overwrites before `apply(handoffState:)` runs -- comparing against it
+    /// there always says "unchanged".
+    private var lastRecordedHandoff: (requestID: UUID, phase: KeyboardHandoffPhase)?
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -516,8 +520,9 @@ final class KeyboardController {
         // The handoff record is written by both processes with no ordering
         // guarantee, so record what arrived and what we were already showing.
         // A phase that moves backwards is visible here and nowhere else.
-        if latestHandoffState?.phase != handoffState.phase
-            || latestHandoffState?.requestID != handoffState.requestID {
+        if lastRecordedHandoff?.phase != handoffState.phase
+            || lastRecordedHandoff?.requestID != requestID {
+            lastRecordedHandoff = (requestID, handoffState.phase)
             KeyboardDiagnosticsLog.record("handoff.observed", [
                 "phase": handoffState.phase.rawValue,
                 "request": requestID.uuidString.prefix(8).lowercased(),

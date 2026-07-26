@@ -648,9 +648,15 @@ final class KeyboardController {
 
     private func apply(runtimeStatus: KeyboardRuntimeStatus?) {
         let now = Date()
+        // The keyboard is destroyed and rebuilt constantly -- locking the
+        // screen is enough -- and comes back with no adopted request until the
+        // handoff record is read again. Requiring a match discarded levels that
+        // were milliseconds old, collapsing every bar to zero, so the strip
+        // read as empty while the pill still said "Listening". An unadopted
+        // keyboard trusts whichever request the app says it is recording.
         let hasFreshRecordingLevel = runtimeStatus.map {
             $0.phase == .recording
-                && $0.activeRequestID == activeRequestID
+                && (activeRequestID == nil || $0.activeRequestID == activeRequestID)
                 && now.timeIntervalSince($0.updatedAt) < 2
         } ?? false
         // A recording whose levels have gone stale collapses every waveform bar

@@ -2010,11 +2010,22 @@ final class DictationCoordinator {
         clearClipboardStatusSoon()
     }
 
-    /// Whether this process is currently capturing or transcribing the given
-    /// session. A session can sit in .recording forever after a crash without
-    /// anything actually running, so the persisted phase cannot answer this.
+    /// Whether this process still has work in flight for the given session.
+    ///
+    /// The persisted phase cannot answer this: a session can sit in .recording
+    /// forever after a crash with nothing running, and those are exactly the
+    /// rows worth deleting.
+    ///
+    /// `activeSession` alone cannot answer it either. It is cleared at a dozen
+    /// points while transcription continues, so a voice note can be queued or
+    /// mid-transcription with no active session reference. Deleting its
+    /// artifacts then fails that work, or lets it save the session again and
+    /// resurrect a note the UI reported as deleted. The voice-note lifecycle
+    /// tracks that window, so it is the authority here.
     func isCapturingVoiceNote(sessionID: UUID) -> Bool {
-        activeSession?.id == sessionID
+        if activeSession?.id == sessionID { return true }
+        return voiceNoteLifecycleState.activeSessionID == sessionID
+            && voiceNoteLifecycleState.isWorkActive
     }
 
     /// Removes a capture session and everything derived from it: its audio,

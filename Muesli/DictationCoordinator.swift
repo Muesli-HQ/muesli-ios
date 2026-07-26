@@ -2052,16 +2052,14 @@ final class DictationCoordinator {
             remaining.audioFileName = nil
             remaining.hasDurableAudioCheckpoint = false
             remaining.protectedAudioUntilTranscriptCompletes = false
-            try? store.saveSession(remaining)
-            replaceCachedRecordingSession(remaining)
+            try reconcile(remaining, afterDeleting: session)
         }
 
         try store.deleteTranscript(for: session.id)
         removeCachedTranscript(for: session.id)
         if remaining.transcriptID != nil {
             remaining.transcriptID = nil
-            try? store.saveSession(remaining)
-            replaceCachedRecordingSession(remaining)
+            try reconcile(remaining, afterDeleting: session)
         }
 
         // Awaited rather than fired into a detached Task, so the caller cannot
@@ -2076,9 +2074,27 @@ final class DictationCoordinator {
         recordingSessions.removeAll { $0.id == session.id }
     }
 
-    private func replaceCachedRecordingSession(_ session: RecordingSession) {
-        guard let index = recordingSessions.firstIndex(where: { $0.id == session.id }) else { return }
-        recordingSessions[index] = session
+    /// Persists what is left of a session after an irreversible step.
+    ///
+    /// This write is what makes the guarantee above hold, so it cannot be
+    /// best-effort. If the row cannot be corrected it must not survive --
+    /// leaving it would advertise a recording that has already been erased --
+    /// so removal is attempted as the stronger fallback. Only a store that
+    /// can neither update nor delete reaches the throw, and at that point
+    /// nothing this method could do would help.
+    private func reconcile(
+        _ remaining: RecordingSession,
+        afterDeleting session: RecordingSession
+    ) throws {
+        do {
+            try store.saveSession(remaining)
+            if let index = recordingSessions.firstIndex(where: { $0.id == remaining.id }) {
+                recordingSessions[index] = remaining
+            }
+        } catch {
+            try store.deleteRecordingSession(id: session.id)
+            recordingSessions.removeAll { $0.id == session.id }
+        }
     }
 
     /// A session that never produced a transcript -- shown in the timeline as

@@ -48,15 +48,13 @@ extension RecordingSessionKind {
     /// Whether the Live Activity exists only for as long as audio is actually
     /// being captured.
     ///
-    /// Keyboard dictation currently binds its Live Activity to the keyboard
-    /// *session* being armed rather than to capture, which is why it can
-    /// outlive the recording it describes.
+    /// True for every kind. Keyboard dictation previously bound its Live
+    /// Activity to keep-mic-on being armed, so a bar appeared when the keyboard
+    /// merely became ready and stayed up with nothing recording.
     var liveActivityFollowsCaptureLifetime: Bool {
         switch self {
-        case .quickDictation, .meeting:
+        case .quickDictation, .meeting, .keyboardDictation:
             true
-        case .keyboardDictation:
-            false
         }
     }
 }

@@ -26,13 +26,16 @@ final class RecordingSessionCapabilitiesTests: XCTestCase {
         XCTAssertFalse(RecordingSessionKind.keyboardDictation.liveActivityOffersStopControl)
     }
 
-    /// Pins the defect: the keyboard's Live Activity is bound to the keyboard
-    /// session being armed rather than to capture, so it can outlive the
-    /// recording it describes.
-    func testKeyboardLiveActivityIsNotYetBoundToCapture() {
-        XCTAssertFalse(RecordingSessionKind.keyboardDictation.liveActivityFollowsCaptureLifetime)
-        XCTAssertTrue(RecordingSessionKind.quickDictation.liveActivityFollowsCaptureLifetime)
-        XCTAssertTrue(RecordingSessionKind.meeting.liveActivityFollowsCaptureLifetime)
+    /// A Live Activity describes a recording in progress. No kind may show one
+    /// for merely being ready to record -- which is what keyboard dictation did
+    /// while keep-mic-on was armed.
+    func testNoKindShowsALiveActivityWithoutCapture() {
+        for kind in RecordingSessionKind.allCases {
+            XCTAssertTrue(
+                kind.liveActivityFollowsCaptureLifetime,
+                "\(kind.title) can show a Live Activity with nothing recording"
+            )
+        }
     }
 
     func testLongFormTreatmentStillAppliesToKeyboardDictation() {

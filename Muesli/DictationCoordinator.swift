@@ -187,7 +187,6 @@ final class DictationCoordinator {
 
     private var activeRequest: DictationRequest?
     private var activeSession: RecordingSession?
-    private var keyboardSessionActivitySession: RecordingSession?
     private var keyboardSessionState = KeyboardSessionState()
     private var stopKeyboardSessionAfterCurrentRequest = false
     var isKeyboardHandoffActive: Bool { keyboardSessionState.isKeyboardHandoffActive }
@@ -862,19 +861,12 @@ final class DictationCoordinator {
         let durabilityDetail = session.hasDurableAudioCheckpoint
             ? "Audio protected locally"
             : "Securing audio"
-        if session.kind == .keyboardDictation {
-            refreshKeyboardSessionLiveActivity(
+        Task {
+            await liveActivityController.update(
                 phase: "Long voice note",
-                detail: durabilityDetail
+                detail: durabilityDetail,
+                session: session
             )
-        } else {
-            Task {
-                await liveActivityController.update(
-                    phase: "Long voice note",
-                    detail: durabilityDetail,
-                    session: session
-                )
-            }
         }
         return session
     }
@@ -2678,7 +2670,7 @@ final class DictationCoordinator {
                 )
                 return
             }
-            guard isKeyboardSessionArmed || keyboardSessionActivitySession != nil || keyboardSessionKeeper.isRunning else {
+            guard isKeyboardSessionArmed || keyboardSessionKeeper.isRunning else {
                 keyboardSessionRetryTask?.cancel()
                 keyboardSessionRetryTask = nil
                 keyboardSessionRetryAttempt = 0
@@ -2725,19 +2717,6 @@ final class DictationCoordinator {
             keyboardSessionRetryAttempt = 0
             prewarmModelIfNeeded(reason: "keyboard_session")
             transitionKeyboardSession(.startSucceeded)
-            let session = RecordingSession(
-                kind: .keyboardDictation,
-                title: "Keyboard Session",
-                startedAt: .now,
-                phase: .recording
-            )
-            keyboardSessionActivitySession = session
-            await liveActivityController.start(
-                session: session,
-                requestID: nil,
-                phase: "Ready",
-                detail: "Keyboard voice note session active"
-            )
             saveKeyboardRuntimeStatus(
                 isActive: true,
                 activeRequestID: nil,
@@ -2810,17 +2789,6 @@ final class DictationCoordinator {
             message: reason.message
         )
 
-        if let session = keyboardSessionActivitySession {
-            Task {
-                await liveActivityController.end(
-                    phase: "Ended",
-                    detail: reason.message,
-                    session: session,
-                    dismissal: .immediate
-                )
-            }
-        }
-        keyboardSessionActivitySession = nil
         AppTelemetry.signal("keyboard_session_stopped", parameters: ["reason": reason.message])
     }
 
@@ -2829,29 +2797,6 @@ final class DictationCoordinator {
             return false
         }
         return true
-    }
-
-    private func refreshKeyboardSessionLiveActivity(phase: String, detail: String) {
-        guard isKeyboardSessionArmed || keyboardSessionActivitySession != nil else { return }
-
-        if keyboardSessionActivitySession == nil {
-            keyboardSessionActivitySession = RecordingSession(
-                kind: .keyboardDictation,
-                title: "Keyboard Session",
-                startedAt: .now,
-                phase: .recording
-            )
-        }
-
-        guard let session = keyboardSessionActivitySession else { return }
-        Task {
-            await liveActivityController.start(
-                session: session,
-                requestID: nil,
-                phase: phase,
-                detail: detail
-            )
-        }
     }
 
     private func setUsesPersistentKeyboardSession(_ usesKeyboardSession: Bool, for requestID: UUID) {
@@ -3575,19 +3520,12 @@ final class DictationCoordinator {
                     await processPendingKeyboardCommand()
                 }
                 Task {
-                    if usesPersistentKeyboardSession {
-                        refreshKeyboardSessionLiveActivity(
-                            phase: "Listening",
-                            detail: "Keyboard voice note active"
-                        )
-                    } else {
-                        await liveActivityController.start(
-                            session: session,
-                            requestID: request.id,
-                            phase: "Listening",
-                            detail: "Recording voice note"
-                        )
-                    }
+                    await liveActivityController.start(
+                        session: session,
+                        requestID: request.id,
+                        phase: "Listening",
+                        detail: "Recording voice note"
+                    )
                 }
             } catch {
                 session.phase = .failed
@@ -3897,18 +3835,11 @@ final class DictationCoordinator {
             try? store.saveSession(session)
             activeSession = session
             Task {
-                if usesPersistentKeyboardSession {
-                    refreshKeyboardSessionLiveActivity(
-                        phase: "Transcribing",
-                        detail: "Preparing text for the keyboard"
-                    )
-                } else {
-                    await liveActivityController.update(
-                        phase: "Transcribing",
-                        detail: "Preparing text for the keyboard",
-                        session: session
-                    )
-                }
+                await liveActivityController.update(
+                    phase: "Transcribing",
+                    detail: "Preparing text for the keyboard",
+                    session: session
+                )
             }
         }
 
@@ -4156,12 +4087,7 @@ final class DictationCoordinator {
                 statusText = "Ready"
                 liveDictationTranscript = ""
                 realtimeDictationCommittedText = ""
-                if startedFromKeyboard, usesPersistentKeyboardSession, !completedDeferredStop {
-                    refreshKeyboardSessionLiveActivity(
-                        phase: "Ready",
-                        detail: "Keyboard voice note session active"
-                    )
-                } else if let completedSession = try? store.recordingSession(requestID: request.id) {
+                if let completedSession = try? store.recordingSession(requestID: request.id) {
                     Task {
                         await liveActivityController.end(
                             phase: "Completed",
@@ -4229,12 +4155,6 @@ final class DictationCoordinator {
                         phase: .failed,
                         message: error.localizedDescription,
                         supportsBackgroundStart: canStartKeyboardRequestsInBackground
-                    )
-                }
-                if usesPersistentKeyboardSession, !completedDeferredStop {
-                    refreshKeyboardSessionLiveActivity(
-                        phase: "Ready",
-                        detail: "Keyboard voice note failed. Session active"
                     )
                 }
                 transitionKeyboardSession(.requestFinished)
@@ -5679,14 +5599,6 @@ final class DictationCoordinator {
                     supportsBackgroundStart: true
                 )
             }
-            if let session = keyboardSessionActivitySession {
-                await liveActivityController.start(
-                    session: session,
-                    requestID: nil,
-                    phase: "Ready",
-                    detail: "Keyboard voice note session active"
-                )
-            }
             return true
         } catch {
             let isRecoverable = isRecoverableKeyboardSessionError(error)
@@ -5970,12 +5882,7 @@ final class DictationCoordinator {
             if let index = recordingSessions.firstIndex(where: { $0.id == session.id }) {
                 recordingSessions[index] = session
             }
-            if usesPersistentKeyboardSession {
-                refreshKeyboardSessionLiveActivity(
-                    phase: "Ready",
-                    detail: "Keyboard voice note session active"
-                )
-            } else {
+            do {
                 Task {
                     await liveActivityController.end(
                         phase: "Cancelled",

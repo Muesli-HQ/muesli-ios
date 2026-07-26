@@ -4,6 +4,8 @@ struct AboutSettingsContent: View {
     private let sourceURL = URL(string: "https://github.com/Muesli-HQ/muesli-ios")!
     private let libraries = OpenSourceLibrary.all
 
+    @State private var copiedDiagnostics = false
+
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
     }
@@ -21,6 +23,29 @@ struct AboutSettingsContent: View {
                     AboutValueRow(icon: "lock.shield", title: "Processing", value: "On device")
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     AboutValueRow(icon: "externaldrive", title: "App data", value: "Local SQLite")
+                    Divider().overlay(MuesliTheme.surfaceBorder)
+                    Button {
+                        // Keyboard state transitions only -- phases, short
+                        // request IDs, timings. Never dictated text.
+                        UIPasteboard.general.string = KeyboardDiagnosticsLog.exportText()
+                        copiedDiagnostics = true
+                    } label: {
+                        HStack(spacing: MuesliTheme.spacing12) {
+                            Image(systemName: "stethoscope")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(MuesliTheme.accent)
+                                .frame(width: 22)
+                            Text("Copy keyboard diagnostics")
+                                .font(MuesliTheme.headline())
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                            Spacer()
+                            Text(copiedDiagnostics ? "Copied" : "Last \(KeyboardDiagnosticsLog.entryLimit)")
+                                .font(MuesliTheme.callout())
+                                .foregroundStyle(MuesliTheme.accent)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     Link(destination: sourceURL) {
                         HStack(spacing: MuesliTheme.spacing12) {

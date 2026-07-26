@@ -241,6 +241,13 @@ final class KeyboardController {
         }
 
         MuesliHaptics.dictationStart()
+        KeyboardDiagnosticsLog.record("intent.start", [
+            "canUseRuntimeStart": canUseRuntimeStart ? "yes" : "no",
+            "appPhase": latestRuntimeStatus?.phase.rawValue ?? "unknown",
+            "appSeenAt": latestRuntimeStatus.map {
+                String(format: "%.1fs", Date.now.timeIntervalSince($0.updatedAt))
+            } ?? "never"
+        ])
         let request = preparedRequest ?? DictationRequest()
         preparedRequest = nil
         recoveryRequestID = nil
@@ -288,6 +295,10 @@ final class KeyboardController {
         }
 
         MuesliHaptics.dictationStop()
+        KeyboardDiagnosticsLog.record("intent.stop", [
+            "request": String(activeRequestID.uuidString.prefix(8).lowercased()),
+            "localPhase": dictationPhase.rawValue
+        ])
         do {
             try store.saveKeyboardHandoffState(.init(
                 requestID: activeRequestID,
@@ -386,6 +397,7 @@ final class KeyboardController {
     }
 
     func startObservingSharedState() {
+        KeyboardDiagnosticsLog.record("keyboard.appeared")
         markKeyboardVisible()
         eventObservationTask?.cancel()
         let events = eventBus.events()
@@ -417,6 +429,10 @@ final class KeyboardController {
     }
 
     func stopObservingSharedState() {
+        KeyboardDiagnosticsLog.record("keyboard.disappeared", [
+            "localPhase": dictationPhase.rawValue,
+            "active": activeRequestID?.uuidString.prefix(8).lowercased() ?? "none"
+        ])
         eventObservationTask?.cancel()
         eventObservationTask = nil
         commandAcknowledgementTask?.cancel()
@@ -496,6 +512,20 @@ final class KeyboardController {
 
     private func apply(handoffState: KeyboardHandoffState) {
         guard let requestID = handoffState.requestID else { return }
+
+        // The handoff record is written by both processes with no ordering
+        // guarantee, so record what arrived and what we were already showing.
+        // A phase that moves backwards is visible here and nowhere else.
+        if latestHandoffState?.phase != handoffState.phase
+            || latestHandoffState?.requestID != handoffState.requestID {
+            KeyboardDiagnosticsLog.record("handoff.observed", [
+                "phase": handoffState.phase.rawValue,
+                "request": requestID.uuidString.prefix(8).lowercased(),
+                "localPhase": dictationPhase.rawValue,
+                "active": activeRequestID?.uuidString.prefix(8).lowercased() ?? "none",
+                "inserted": insertedRequestIDs.contains(requestID) ? "yes" : "no"
+            ])
+        }
 
         if ![.startRequested, .stopRequested, .cancelRequested].contains(handoffState.phase) {
             commandAcknowledgementTask?.cancel()
@@ -812,8 +842,35 @@ final class KeyboardController {
     }
 
     private func insertCompletedResult(_ result: DictationResult) {
-        guard !insertedRequestIDs.contains(result.requestID) else { return }
-        guard !cancelledRequestIDs.contains(result.requestID) else { return }
+        let shortID = result.requestID.uuidString.prefix(8).lowercased()
+
+        // These two guards correctly prevent a double insertion, but they
+        // return without reconciling dictationPhase or activeRequestID. If the
+        // keyboard is stranded mid-session, this is the line it is stranded on
+        // -- and until now it was completely silent.
+        guard !insertedRequestIDs.contains(result.requestID) else {
+            KeyboardDiagnosticsLog.record("insert.skipped", [
+                "reason": "alreadyInserted",
+                "request": String(shortID),
+                "localPhase": dictationPhase.rawValue,
+                "active": activeRequestID?.uuidString.prefix(8).lowercased() ?? "none"
+            ])
+            return
+        }
+        guard !cancelledRequestIDs.contains(result.requestID) else {
+            KeyboardDiagnosticsLog.record("insert.skipped", [
+                "reason": "cancelled",
+                "request": String(shortID),
+                "localPhase": dictationPhase.rawValue
+            ])
+            return
+        }
+
+        // Character count only -- never the text itself.
+        KeyboardDiagnosticsLog.record("insert.performed", [
+            "request": String(shortID),
+            "characters": String(result.text.count)
+        ])
         insertText(result.text)
         insertedRequestIDs.insert(result.requestID)
         latestResultID = result.id
@@ -849,12 +906,28 @@ final class KeyboardController {
             guard !Task.isCancelled, let self else { return }
             self.refreshLatestDictation()
             guard self.isAwaitingAcknowledgement(requestID: requestID, phase: requestedPhase) else { return }
+            // The app consumes a command without posting any notification, so
+            // the only way to detect a missed intent is to re-post and wait.
+            KeyboardDiagnosticsLog.record("ack.retry", [
+                "action": action.rawValue,
+                "request": String(requestID.uuidString.prefix(8).lowercased()),
+                "waited": "750ms"
+            ])
             eventBus.post(.commandChanged)
 
             try? await Task.sleep(for: .milliseconds(1_250))
             guard !Task.isCancelled else { return }
             self.refreshLatestDictation()
             guard self.isAwaitingAcknowledgement(requestID: requestID, phase: requestedPhase) else { return }
+
+            // Two sleeps elapsed with no state change: the app never serviced
+            // this intent. Usually it is not running.
+            KeyboardDiagnosticsLog.record("ack.timedOut", [
+                "action": action.rawValue,
+                "request": String(requestID.uuidString.prefix(8).lowercased()),
+                "waited": "2000ms",
+                "escalation": "recoveryRequested"
+            ])
 
             let urlAction: String
             let message: String

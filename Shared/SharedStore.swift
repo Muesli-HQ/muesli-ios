@@ -382,10 +382,24 @@ struct SharedStore: Sendable {
     /// has actually happened, so a cleanup is only built if it is needed.
     func audioFileAudit() throws -> (onDisk: Int, owned: Int, orphaned: Int) {
         let directory = try recordingsDirectoryURL()
-        let names = try FileManager.default
-            .contentsOfDirectory(atPath: directory.path)
-            .filter { !$0.hasPrefix(".") }
-        let onDisk = Set(names)
+        // Files only, and only audio. The recordings folder also holds the
+        // VoiceNoteCheckpoints directory, which matches no session's
+        // audioFileName and was being counted as an orphan.
+        let audioExtensions: Set<String> = ["wav", "caf", "m4a"]
+        let onDisk = Set(
+            try FileManager.default
+                .contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )
+                .filter { url in
+                    let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory
+                    return isDirectory != true
+                        && audioExtensions.contains(url.pathExtension.lowercased())
+                }
+                .map(\.lastPathComponent)
+        )
         let claimed = Set(try recordingSessions().compactMap(\.audioFileName))
         let owned = onDisk.intersection(claimed)
         return (onDisk.count, owned.count, onDisk.subtracting(claimed).count)

@@ -5563,7 +5563,9 @@ final class DictationCoordinator {
               let audioFileName = session.audioFileName
         else { return }
 
-        try? store.deleteAudioFile(fileName: audioFileName)
+        // As above: keep the reference if the file survived, so the recording
+        // stays owned by its session rather than becoming an orphan.
+        guard (try? store.deleteAudioFile(fileName: audioFileName)) != nil else { return }
         session.audioFileName = nil
     }
 
@@ -5579,7 +5581,10 @@ final class DictationCoordinator {
 
     private func discardAudio(for session: inout RecordingSession) {
         guard let audioFileName = session.audioFileName else { return }
-        try? store.deleteAudioFile(fileName: audioFileName)
+        // The reference is only cleared once the file is actually gone.
+        // Clearing it after a failed delete is what strands a recording on
+        // disk with nothing pointing at it.
+        guard (try? store.deleteAudioFile(fileName: audioFileName)) != nil else { return }
         session.audioFileName = nil
         session.keepsAudioRecording = false
     }

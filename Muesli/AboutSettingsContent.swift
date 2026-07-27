@@ -39,6 +39,12 @@ struct AboutSettingsContent: View {
                         // request IDs, timings. Never dictated text.
                         UIPasteboard.general.string = diagnosticsReport()
                         copiedDiagnostics = true
+                        // Confirm the copy, then go back to showing the size of
+                        // the buffer. Latching on "Copied" hid that permanently.
+                        Task {
+                            try? await Task.sleep(for: .seconds(2))
+                            copiedDiagnostics = false
+                        }
                     } label: {
                         HStack(spacing: MuesliTheme.spacing12) {
                             Image(systemName: "stethoscope")

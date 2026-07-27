@@ -576,9 +576,15 @@ struct DictationView: View {
                     ForEach(timeline) { item in
                         switch item {
                         case .recoverable(let session):
-                            RecoverableVoiceNoteRow(session: session) {
-                                coordinator.openLongVoiceNote(session)
-                            }
+                            RecoverableVoiceNoteRow(
+                                session: session,
+                                // A capture that is actually running still
+                                // appears here; deleting it underneath the
+                                // recorder would fail the work in flight.
+                                canDelete: !coordinator.isCapturingVoiceNote(sessionID: session.id),
+                                action: { coordinator.openLongVoiceNote(session) },
+                                onDelete: { Task { await coordinator.deleteRecoverableVoiceNote(session) } }
+                            )
                         case .completed(let result, let session):
                             let hasRetainedAudio = session?.keepsAudioRecording == true
                                 && session.flatMap { coordinator.audioFileURL(for: $0) } != nil
@@ -596,7 +602,7 @@ struct DictationView: View {
                                     )
                                 } : nil,
                                 onCopy: { coordinator.copyToClipboard(result) },
-                                onDelete: { coordinator.deleteDictation(result) }
+                                onDelete: { Task { await coordinator.deleteDictation(result) } }
                             )
                         }
                     }
@@ -925,7 +931,16 @@ private struct DictationHomeStatTile: View {
 
 private struct RecoverableVoiceNoteRow: View {
     let session: RecordingSession
+    let canDelete: Bool
     let action: () -> Void
+    let onDelete: () -> Void
+    @State private var isConfirmingDelete = false
+
+    private var deleteMessage: String {
+        session.audioFileName == nil
+            ? "The audio for this voice note is gone, so it cannot be transcribed. This removes it from local history."
+            : "This removes the voice note, and its audio, from local history."
+    }
 
     var body: some View {
         Button(action: action) {
@@ -969,6 +984,26 @@ private struct RecoverableVoiceNoteRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint(session.audioFileName == nil ? "Opens recovery details" : "Opens retry actions")
+        .contextMenu {
+            if canDelete {
+                Button("Delete Voice Note", systemImage: "trash", role: .destructive) {
+                    isConfirmingDelete = true
+                }
+            }
+        }
+        .accessibilityAction(named: "Delete voice note") {
+            if canDelete { isConfirmingDelete = true }
+        }
+        .confirmationDialog(
+            "Delete this voice note?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Voice Note", role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(deleteMessage)
+        }
     }
 }
 

@@ -167,7 +167,7 @@ final class DictationCoordinator {
         label: "com.phequals7.muesli.keyboard-runtime-status",
         qos: .utility
     )
-    private var keyboardSessionLiveActivityRequestIDs = Set<UUID>()
+    private var persistentKeyboardSessionRequestIDs = Set<UUID>()
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
     private var pendingICloudSyncReason: String?
@@ -187,7 +187,6 @@ final class DictationCoordinator {
 
     private var activeRequest: DictationRequest?
     private var activeSession: RecordingSession?
-    private var keyboardSessionActivitySession: RecordingSession?
     private var keyboardSessionState = KeyboardSessionState()
     private var stopKeyboardSessionAfterCurrentRequest = false
     var isKeyboardHandoffActive: Bool { keyboardSessionState.isKeyboardHandoffActive }
@@ -468,7 +467,7 @@ final class DictationCoordinator {
         }
         startSharedEventObservation()
         MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
-            self?.stopMeetingRecordingFromLiveActivity(sessionID: sessionID) ?? .unavailable
+            self?.stopCaptureFromLiveActivity(sessionID: sessionID) ?? .unavailable
         }
 
         refreshAudioInputRoute()
@@ -862,19 +861,12 @@ final class DictationCoordinator {
         let durabilityDetail = session.hasDurableAudioCheckpoint
             ? "Audio protected locally"
             : "Securing audio"
-        if session.kind == .keyboardDictation {
-            refreshKeyboardSessionLiveActivity(
+        Task {
+            await liveActivityController.update(
                 phase: "Long voice note",
-                detail: durabilityDetail
+                detail: durabilityDetail,
+                session: session
             )
-        } else {
-            Task {
-                await liveActivityController.update(
-                    phase: "Long voice note",
-                    detail: durabilityDetail,
-                    session: session
-                )
-            }
         }
         return session
     }
@@ -2018,23 +2010,152 @@ final class DictationCoordinator {
         clearClipboardStatusSoon()
     }
 
-    func deleteDictation(_ result: DictationResult) {
+    /// Whether this process still has work in flight for the given session.
+    ///
+    /// The persisted phase cannot answer this: a session can sit in .recording
+    /// forever after a crash with nothing running, and those are exactly the
+    /// rows worth deleting.
+    ///
+    /// `activeSession` alone cannot answer it either. It is cleared at a dozen
+    /// points while transcription continues, so a voice note can be queued or
+    /// mid-transcription with no active session reference. Deleting its
+    /// artifacts then fails that work, or lets it save the session again and
+    /// resurrect a note the UI reported as deleted. The voice-note lifecycle
+    /// tracks that window, so it is the authority here.
+    func isCapturingVoiceNote(sessionID: UUID) -> Bool {
+        if activeSession?.id == sessionID { return true }
+        return voiceNoteLifecycleState.activeSessionID == sessionID
+            && voiceNoteLifecycleState.isWorkActive
+    }
+
+    /// Removes a capture session and everything derived from it: its audio,
+    /// transcript, cached transcript, and any long-form checkpoints. Shared by
+    /// the completed and unrecoverable delete paths so a partial session is
+    /// cleaned up as thoroughly as a finished one.
+    ///
+    /// Throws if the session row itself survives. That row is what the timeline
+    /// is built from, so leaving it behind means the voice note reappears on
+    /// the next history reload after the user was told it was deleted.
+    /// Deletes a session and everything derived from it.
+    ///
+    /// There is no transaction spanning the filesystem and SQLite, so a later
+    /// step can fail after an earlier one has already destroyed something. What
+    /// is guaranteed instead is that the session row never describes data that
+    /// no longer exists: after each irreversible step the row is rewritten to
+    /// reflect what actually remains, before anything else is allowed to fail.
+    ///
+    /// A partial failure therefore leaves a session that is honest about itself
+    /// -- an "Audio unavailable" row, which the timeline already models and the
+    /// user can delete again -- rather than one still advertising a recording
+    /// that has been erased.
+    ///
+    /// Order matters: audio goes first. Deleting a voice note is a privacy
+    /// claim, so the recording is the one artifact that must not survive a
+    /// half-completed delete.
+    private func discardVoiceNoteSession(_ session: RecordingSession) async throws {
+        var remaining = session
+
+        // SharedStore.deleteAudioFile no-ops when the file is absent, so a
+        // missing recording -- the usual case for a row that already reads
+        // "Audio unavailable" -- is not an error here.
+        if let audioFileName = remaining.audioFileName {
+            try store.deleteAudioFile(fileName: audioFileName)
+            remaining.audioFileName = nil
+            remaining.hasDurableAudioCheckpoint = false
+            remaining.protectedAudioUntilTranscriptCompletes = false
+            try reconcile(remaining, afterDeleting: session)
+        }
+
+        try store.deleteTranscript(for: session.id)
+        removeCachedTranscript(for: session.id)
+        if remaining.transcriptID != nil {
+            remaining.transcriptID = nil
+            try reconcile(remaining, afterDeleting: session)
+        }
+
+        // Awaited rather than fired into a detached Task, so the caller cannot
+        // report a completed deletion while checkpoint audio is still on disk.
+        if session.longFormThresholdSeconds != nil {
+            try await voiceNoteCheckpointStore.delete(sessionID: session.id)
+        }
+
+        // Last: the row is what the timeline is built from, so it is removed
+        // only once everything derived from it is gone.
+        try store.deleteRecordingSession(id: session.id)
+        recordingSessions.removeAll { $0.id == session.id }
+    }
+
+    /// Persists what is left of a session after an irreversible step.
+    ///
+    /// This write is what makes the guarantee above hold, so it cannot be
+    /// best-effort. If the row cannot be corrected it must not survive --
+    /// leaving it would advertise a recording that has already been erased --
+    /// so removal is attempted as the stronger fallback. Only a store that
+    /// can neither update nor delete reaches the throw, and at that point
+    /// nothing this method could do would help.
+    private func reconcile(
+        _ remaining: RecordingSession,
+        afterDeleting session: RecordingSession
+    ) throws {
         do {
-            if let session = recordingSession(for: result) {
-                if let audioFileName = session.audioFileName {
-                    try? store.deleteAudioFile(fileName: audioFileName)
-                }
-                try? store.deleteTranscript(for: session.id)
-                removeCachedTranscript(for: session.id)
-                try? store.deleteRecordingSession(id: session.id)
-                recordingSessions.removeAll { $0.id == session.id }
-                if session.longFormThresholdSeconds != nil {
-                    Task {
-                        try? await voiceNoteCheckpointStore.delete(sessionID: session.id)
-                    }
-                }
+            try store.saveSession(remaining)
+            if let index = recordingSessions.firstIndex(where: { $0.id == remaining.id }) {
+                recordingSessions[index] = remaining
             }
+        } catch {
+            try store.deleteRecordingSession(id: session.id)
+            recordingSessions.removeAll { $0.id == session.id }
+        }
+    }
+
+    /// A session that never produced a transcript -- shown in the timeline as
+    /// "Audio unavailable" or "Needs transcription". These accumulate with no
+    /// way to clear them, because every existing delete path is keyed on a
+    /// DictationResult that this session does not have.
+    @discardableResult
+    func deleteRecoverableVoiceNote(_ session: RecordingSession) async -> Bool {
+        // The timeline lists .recording, .transcriptionQueued and .transcribing
+        // as recoverable, so a capture that is genuinely still running can
+        // appear here. Deleting its artifacts underneath a live recorder or
+        // transcription task would fail that work, or let it re-save the row
+        // and resurrect a session the user was told had been deleted.
+        guard !isCapturingVoiceNote(sessionID: session.id) else {
+            clipboardStatusText = "Stop the recording first"
+            clearClipboardStatusSoon()
+            return false
+        }
+
+        do {
+            try await discardVoiceNoteSession(session)
+        } catch {
+            clipboardStatusText = "Delete failed"
+            clearClipboardStatusSoon()
+            return false
+        }
+
+        clipboardStatusText = "Deleted"
+        AppTelemetry.signal(
+            "voice_note_deleted",
+            parameters: [
+                "state": session.audioFileName == nil ? "audio_unavailable" : "needs_transcription",
+                "kind": session.kind.title
+            ]
+        )
+        clearClipboardStatusSoon()
+        scheduleICloudSyncAfterLocalChange(reason: "voice_note_deleted")
+        return true
+    }
+
+    func deleteDictation(_ result: DictationResult) async {
+        do {
+            // The result is what history renders, so it goes first. If it
+            // fails, nothing has been destroyed and the note is still whole and
+            // retryable. Doing it last meant a failure here left a note in
+            // history pointing at a session that had already been torn down.
             try store.deleteResult(result)
+            if let session = recordingSession(for: result) {
+                try await discardVoiceNoteSession(session)
+            }
             dictationHistory.removeAll { $0.id == result.id || $0.requestID == result.requestID }
             if lastTranscript == result.text {
                 lastTranscript = dictationHistory.first?.text ?? ""
@@ -2678,7 +2799,7 @@ final class DictationCoordinator {
                 )
                 return
             }
-            guard isKeyboardSessionArmed || keyboardSessionActivitySession != nil || keyboardSessionKeeper.isRunning else {
+            guard isKeyboardSessionArmed || keyboardSessionKeeper.isRunning else {
                 keyboardSessionRetryTask?.cancel()
                 keyboardSessionRetryTask = nil
                 keyboardSessionRetryAttempt = 0
@@ -2725,19 +2846,6 @@ final class DictationCoordinator {
             keyboardSessionRetryAttempt = 0
             prewarmModelIfNeeded(reason: "keyboard_session")
             transitionKeyboardSession(.startSucceeded)
-            let session = RecordingSession(
-                kind: .keyboardDictation,
-                title: "Keyboard Session",
-                startedAt: .now,
-                phase: .recording
-            )
-            keyboardSessionActivitySession = session
-            await liveActivityController.start(
-                session: session,
-                requestID: nil,
-                phase: "Ready",
-                detail: "Keyboard voice note session active"
-            )
             saveKeyboardRuntimeStatus(
                 isActive: true,
                 activeRequestID: nil,
@@ -2772,7 +2880,7 @@ final class DictationCoordinator {
     }
 
     private var shouldDeferKeyboardSessionStop: Bool {
-        if isRecording, let requestID = activeRequest?.id, usesKeyboardSessionLiveActivity(for: requestID) {
+        if isRecording, let requestID = activeRequest?.id, usesPersistentKeyboardSession(for: requestID) {
             return true
         }
         return isKeyboardHandoffActive && activeRequest != nil
@@ -2810,17 +2918,6 @@ final class DictationCoordinator {
             message: reason.message
         )
 
-        if let session = keyboardSessionActivitySession {
-            Task {
-                await liveActivityController.end(
-                    phase: "Ended",
-                    detail: reason.message,
-                    session: session,
-                    dismissal: .immediate
-                )
-            }
-        }
-        keyboardSessionActivitySession = nil
         AppTelemetry.signal("keyboard_session_stopped", parameters: ["reason": reason.message])
     }
 
@@ -2831,43 +2928,20 @@ final class DictationCoordinator {
         return true
     }
 
-    private func refreshKeyboardSessionLiveActivity(phase: String, detail: String) {
-        guard isKeyboardSessionArmed || keyboardSessionActivitySession != nil else { return }
-
-        if keyboardSessionActivitySession == nil {
-            keyboardSessionActivitySession = RecordingSession(
-                kind: .keyboardDictation,
-                title: "Keyboard Session",
-                startedAt: .now,
-                phase: .recording
-            )
-        }
-
-        guard let session = keyboardSessionActivitySession else { return }
-        Task {
-            await liveActivityController.start(
-                session: session,
-                requestID: nil,
-                phase: phase,
-                detail: detail
-            )
-        }
-    }
-
-    private func setUsesKeyboardSessionLiveActivity(_ usesKeyboardSession: Bool, for requestID: UUID) {
+    private func setUsesPersistentKeyboardSession(_ usesKeyboardSession: Bool, for requestID: UUID) {
         if usesKeyboardSession {
-            keyboardSessionLiveActivityRequestIDs.insert(requestID)
+            persistentKeyboardSessionRequestIDs.insert(requestID)
         } else {
-            keyboardSessionLiveActivityRequestIDs.remove(requestID)
+            persistentKeyboardSessionRequestIDs.remove(requestID)
         }
     }
 
-    private func usesKeyboardSessionLiveActivity(for requestID: UUID) -> Bool {
-        keyboardSessionLiveActivityRequestIDs.contains(requestID)
+    private func usesPersistentKeyboardSession(for requestID: UUID) -> Bool {
+        persistentKeyboardSessionRequestIDs.contains(requestID)
     }
 
-    private func clearKeyboardSessionLiveActivityRoute(for requestID: UUID) {
-        keyboardSessionLiveActivityRequestIDs.remove(requestID)
+    private func clearPersistentKeyboardSessionRoute(for requestID: UUID) {
+        persistentKeyboardSessionRequestIDs.remove(requestID)
     }
 
     func transcript(for session: RecordingSession) -> Transcript? {
@@ -3463,8 +3537,8 @@ final class DictationCoordinator {
             return
         }
         activeRequest = request
-        let usesKeyboardSessionLiveActivity = source == "keyboard" && isKeyboardSessionArmed
-        setUsesKeyboardSessionLiveActivity(usesKeyboardSessionLiveActivity, for: request.id)
+        let usesPersistentKeyboardSession = source == "keyboard" && isKeyboardSessionArmed
+        setUsesPersistentKeyboardSession(usesPersistentKeyboardSession, for: request.id)
         liveDictationTranscript = ""
         realtimeDictationCommittedText = ""
         clearKeyboardLiveTranscript()
@@ -3492,13 +3566,13 @@ final class DictationCoordinator {
                 session.startedAt = .now
                 try store.saveSession(session)
                 try await recorder.requestPermission()
-                if !usesKeyboardSessionLiveActivity, keyboardSessionKeeper.isRunning {
+                if !usesPersistentKeyboardSession, keyboardSessionKeeper.isRunning {
                     keyboardSessionKeeper.stop(deactivateSession: true)
                     transitionKeyboardSession(.requestFinished)
                     try? store.clearKeyboardRuntimeStatus()
                     try? await Task.sleep(for: .milliseconds(150))
                 }
-                if usesKeyboardSessionLiveActivity {
+                if usesPersistentKeyboardSession {
                     if !keyboardSessionKeeper.canAcceptStartCommand {
                         if !keyboardSessionKeeper.isRunning {
                             try await keyboardSessionKeeper.start()
@@ -3542,7 +3616,7 @@ final class DictationCoordinator {
                 ) else {
                     throw VoiceNoteCaptureFailure.invalidLifecycleTransition
                 }
-                if source == "keyboard", !usesKeyboardSessionLiveActivity {
+                if source == "keyboard", !usesPersistentKeyboardSession {
                     transitionKeyboardSession(.recordingStarted(request.id))
                 }
                 startRecordingTimer(startedAt: session.startedAt ?? .now)
@@ -3575,19 +3649,12 @@ final class DictationCoordinator {
                     await processPendingKeyboardCommand()
                 }
                 Task {
-                    if usesKeyboardSessionLiveActivity {
-                        refreshKeyboardSessionLiveActivity(
-                            phase: "Listening",
-                            detail: "Keyboard voice note active"
-                        )
-                    } else {
-                        await liveActivityController.start(
-                            session: session,
-                            requestID: request.id,
-                            phase: "Listening",
-                            detail: "Recording voice note"
-                        )
-                    }
+                    await liveActivityController.start(
+                        session: session,
+                        requestID: request.id,
+                        phase: "Listening",
+                        detail: "Recording voice note"
+                    )
                 }
             } catch {
                 session.phase = .failed
@@ -3604,9 +3671,9 @@ final class DictationCoordinator {
                 stopRecordingTimer()
                 statusText = error.localizedDescription
                 clearKeyboardLiveTranscript()
-                clearKeyboardSessionLiveActivityRoute(for: request.id)
+                clearPersistentKeyboardSessionRoute(for: request.id)
                 stopMetering()
-                if usesKeyboardSessionLiveActivity {
+                if usesPersistentKeyboardSession {
                     keyboardSessionKeeper.cancelSegment()
                 }
                 let completedDeferredStop = completeDeferredKeyboardSessionStopIfNeeded()
@@ -3847,7 +3914,7 @@ final class DictationCoordinator {
             session = promotedSession
         }
 
-        let usesKeyboardSessionLiveActivity = usesKeyboardSessionLiveActivity(for: request.id)
+        let usesPersistentKeyboardSession = usesPersistentKeyboardSession(for: request.id)
         let lifecycleRunnerID: UUID?
         if let session {
             guard let runner = voiceNoteLifecycleRunner,
@@ -3897,18 +3964,11 @@ final class DictationCoordinator {
             try? store.saveSession(session)
             activeSession = session
             Task {
-                if usesKeyboardSessionLiveActivity {
-                    refreshKeyboardSessionLiveActivity(
-                        phase: "Transcribing",
-                        detail: "Preparing text for the keyboard"
-                    )
-                } else {
-                    await liveActivityController.update(
-                        phase: "Transcribing",
-                        detail: "Preparing text for the keyboard",
-                        session: session
-                    )
-                }
+                await liveActivityController.update(
+                    phase: "Transcribing",
+                    detail: "Preparing text for the keyboard",
+                    session: session
+                )
             }
         }
 
@@ -3927,7 +3987,7 @@ final class DictationCoordinator {
                 var finalWriterFailure: CheckpointingAudioWriterFailure?
                 var realtimeText = ""
 
-                if usesKeyboardSessionLiveActivity {
+                if usesPersistentKeyboardSession {
                     let segment = try keyboardSessionKeeper.finishSegment()
                     audioURL = segment.audioURL
                     finalCheckpoint = segment.finalCheckpoint
@@ -4073,7 +4133,7 @@ final class DictationCoordinator {
                             supportsBackgroundStart: canStartKeyboardRequestsInBackground
                         )
                     }
-                    clearKeyboardSessionLiveActivityRoute(for: request.id)
+                    clearPersistentKeyboardSessionRoute(for: request.id)
                     try? store.clearPendingRequest()
                     try? store.saveStatus(.idle)
                     return
@@ -4135,7 +4195,7 @@ final class DictationCoordinator {
                 if let sessionID = completedSession?.id {
                     finishVoiceNoteLifecycle(sessionID: sessionID)
                 }
-                if usesKeyboardSessionLiveActivity {
+                if usesPersistentKeyboardSession {
                     keyboardSessionKeeper.cancelSegment()
                 }
                 let completedDeferredStop = completeDeferredKeyboardSessionStopIfNeeded()
@@ -4156,12 +4216,7 @@ final class DictationCoordinator {
                 statusText = "Ready"
                 liveDictationTranscript = ""
                 realtimeDictationCommittedText = ""
-                if startedFromKeyboard, usesKeyboardSessionLiveActivity, !completedDeferredStop {
-                    refreshKeyboardSessionLiveActivity(
-                        phase: "Ready",
-                        detail: "Keyboard voice note session active"
-                    )
-                } else if let completedSession = try? store.recordingSession(requestID: request.id) {
+                if let completedSession = try? store.recordingSession(requestID: request.id) {
                     Task {
                         await liveActivityController.end(
                             phase: "Completed",
@@ -4171,7 +4226,7 @@ final class DictationCoordinator {
                         )
                     }
                 }
-                clearKeyboardSessionLiveActivityRoute(for: request.id)
+                clearPersistentKeyboardSessionRoute(for: request.id)
                 AppTelemetry.signal(
                     "dictation_completed",
                     parameters: [
@@ -4224,17 +4279,11 @@ final class DictationCoordinator {
                 let completedDeferredStop = completeDeferredKeyboardSessionStopIfNeeded()
                 if !completedDeferredStop {
                     saveKeyboardRuntimeStatus(
-                        isActive: isKeyboardHandoffActive || usesKeyboardSessionLiveActivity || canStartKeyboardRequestsInBackground,
+                        isActive: isKeyboardHandoffActive || usesPersistentKeyboardSession || canStartKeyboardRequestsInBackground,
                         activeRequestID: nil,
                         phase: .failed,
                         message: error.localizedDescription,
                         supportsBackgroundStart: canStartKeyboardRequestsInBackground
-                    )
-                }
-                if usesKeyboardSessionLiveActivity, !completedDeferredStop {
-                    refreshKeyboardSessionLiveActivity(
-                        phase: "Ready",
-                        detail: "Keyboard voice note failed. Session active"
                     )
                 }
                 transitionKeyboardSession(.requestFinished)
@@ -4242,7 +4291,7 @@ final class DictationCoordinator {
                     resumeKeyboardSessionKeeperIfNeeded()
                     publishKeyboardSessionReadyIfAvailable()
                 }
-                clearKeyboardSessionLiveActivityRoute(for: request.id)
+                clearPersistentKeyboardSessionRoute(for: request.id)
                 realtimeDictationRecorder?.cancel()
                 realtimeDictationRecorder = nil
                 realtimeDictationBufferPipe?.finish()
@@ -4564,6 +4613,28 @@ final class DictationCoordinator {
         AppTelemetry.signal("meeting_recording_recovered_for_transcription")
         transcribeSession(queued)
         return true
+    }
+
+    /// The Live Activity stop control is shared by every capture kind -- the
+    /// intent carries only a session ID and knows nothing about what it is
+    /// stopping. Routes to whichever capture owns that session.
+    func stopCaptureFromLiveActivity(sessionID: UUID) -> MeetingLiveActivityStopResult {
+        if canStopMeetingCapture(sessionID: sessionID) {
+            return stopMeetingRecordingFromLiveActivity(sessionID: sessionID)
+        }
+
+        guard let activeSession, activeSession.id == sessionID, isRecording else {
+            // The recording already ended, or belongs to a session this
+            // process no longer owns. The activity is stale either way.
+            return .alreadyHandled
+        }
+
+        stopRecording()
+        AppTelemetry.signal(
+            "capture_stopped_from_live_activity",
+            parameters: ["session_kind": activeSession.kind.title]
+        )
+        return .accepted
     }
 
     func stopMeetingRecordingFromLiveActivity(sessionID: UUID) -> MeetingLiveActivityStopResult {
@@ -5492,7 +5563,9 @@ final class DictationCoordinator {
               let audioFileName = session.audioFileName
         else { return }
 
-        try? store.deleteAudioFile(fileName: audioFileName)
+        // As above: keep the reference if the file survived, so the recording
+        // stays owned by its session rather than becoming an orphan.
+        guard (try? store.deleteAudioFile(fileName: audioFileName)) != nil else { return }
         session.audioFileName = nil
     }
 
@@ -5508,7 +5581,10 @@ final class DictationCoordinator {
 
     private func discardAudio(for session: inout RecordingSession) {
         guard let audioFileName = session.audioFileName else { return }
-        try? store.deleteAudioFile(fileName: audioFileName)
+        // The reference is only cleared once the file is actually gone.
+        // Clearing it after a failed delete is what strands a recording on
+        // disk with nothing pointing at it.
+        guard (try? store.deleteAudioFile(fileName: audioFileName)) != nil else { return }
         session.audioFileName = nil
         session.keepsAudioRecording = false
     }
@@ -5677,14 +5753,6 @@ final class DictationCoordinator {
                     phase: .idle,
                     message: "Keyboard session ready",
                     supportsBackgroundStart: true
-                )
-            }
-            if let session = keyboardSessionActivitySession {
-                await liveActivityController.start(
-                    session: session,
-                    requestID: nil,
-                    phase: "Ready",
-                    detail: "Keyboard voice note session active"
                 )
             }
             return true
@@ -5926,7 +5994,7 @@ final class DictationCoordinator {
             if let pendingRequest = try? store.pendingRequest(), pendingRequest.id == requestID {
                 try? store.clearPendingRequest()
             }
-            clearKeyboardSessionLiveActivityRoute(for: requestID)
+            clearPersistentKeyboardSessionRoute(for: requestID)
             if activeRequest == nil {
                 try? store.saveStatus(.idle)
                 saveKeyboardRuntimeStatus(
@@ -5946,10 +6014,10 @@ final class DictationCoordinator {
             guard isRecording else { return }
         }
         isRecording = false
-        let usesKeyboardSessionLiveActivity = usesKeyboardSessionLiveActivity(for: requestID)
+        let usesPersistentKeyboardSession = usesPersistentKeyboardSession(for: requestID)
         stopMetering()
         stopRecordingTimer()
-        if usesKeyboardSessionLiveActivity {
+        if usesPersistentKeyboardSession {
             keyboardSessionKeeper.cancelSegment()
         } else {
             _ = try? recorder.stop()
@@ -5970,12 +6038,7 @@ final class DictationCoordinator {
             if let index = recordingSessions.firstIndex(where: { $0.id == session.id }) {
                 recordingSessions[index] = session
             }
-            if usesKeyboardSessionLiveActivity {
-                refreshKeyboardSessionLiveActivity(
-                    phase: "Ready",
-                    detail: "Keyboard voice note session active"
-                )
-            } else {
+            do {
                 Task {
                     await liveActivityController.end(
                         phase: "Cancelled",
@@ -5985,7 +6048,7 @@ final class DictationCoordinator {
                 }
             }
         }
-        clearKeyboardSessionLiveActivityRoute(for: requestID)
+        clearPersistentKeyboardSessionRoute(for: requestID)
         activeRequest = nil
         activeSession = nil
         if completeDeferredKeyboardSessionStopIfNeeded() {

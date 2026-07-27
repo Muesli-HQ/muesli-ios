@@ -8,7 +8,8 @@ struct MuesliRecordingLiveActivity: Widget {
             LockScreenLiveActivityView(
                 state: context.state,
                 sessionID: context.attributes.sessionID,
-                showsStopControl: context.attributes.isMeeting
+                kind: context.attributes.kind,
+                showsStopControl: context.attributes.showsStopControl
             )
                 .activityBackgroundTint(.black)
                 .activitySystemActionForegroundColor(.white)
@@ -34,9 +35,10 @@ struct MuesliRecordingLiveActivity: Widget {
                         Text(context.state.startedAt, style: .timer)
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        if context.attributes.isMeeting {
+                        if context.attributes.showsStopControl {
                             StopMeetingButton(
                                 sessionID: context.attributes.sessionID,
+                                kind: context.attributes.kind,
                                 size: 34
                             )
                         }
@@ -71,6 +73,7 @@ struct MuesliRecordingLiveActivity: Widget {
 private struct LockScreenLiveActivityView: View {
     let state: MuesliLiveActivityAttributes.ContentState
     let sessionID: String
+    let kind: String
     let showsStopControl: Bool
 
     var body: some View {
@@ -95,7 +98,7 @@ private struct LockScreenLiveActivityView: View {
                 .foregroundStyle(.white.opacity(0.72))
 
             if showsStopControl {
-                StopMeetingButton(sessionID: sessionID, size: 46)
+                StopMeetingButton(sessionID: sessionID, kind: kind, size: 46)
             }
         }
         .padding()
@@ -104,6 +107,9 @@ private struct LockScreenLiveActivityView: View {
 
 private struct StopMeetingButton: View {
     let sessionID: String
+    /// The control is shared by every capture kind, so the spoken label has to
+    /// name what is actually being stopped. It used to always say "meeting".
+    let kind: String
     let size: CGFloat
 
     var body: some View {
@@ -115,7 +121,7 @@ private struct StopMeetingButton: View {
                 .background(.red.opacity(0.88), in: Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Stop meeting recording")
+        .accessibilityLabel("Stop \(kind.lowercased()) recording")
     }
 }
 

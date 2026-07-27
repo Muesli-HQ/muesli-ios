@@ -6,6 +6,16 @@ struct AboutSettingsContent: View {
 
     @State private var copiedDiagnostics = false
 
+    /// The keyboard transition log, preceded by a count of audio files against
+    /// the notes that own them. Filenames are never included -- only totals.
+    private func diagnosticsReport() -> String {
+        var header = ""
+        if let audit = try? SharedStore().audioFileAudit() {
+            header = "audio: \(audit.onDisk) files, \(audit.owned) owned, \(audit.orphaned) orphaned\n\n"
+        }
+        return header + KeyboardDiagnosticsLog.exportText()
+    }
+
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
     }
@@ -27,7 +37,7 @@ struct AboutSettingsContent: View {
                     Button {
                         // Keyboard state transitions only -- phases, short
                         // request IDs, timings. Never dictated text.
-                        UIPasteboard.general.string = KeyboardDiagnosticsLog.exportText()
+                        UIPasteboard.general.string = diagnosticsReport()
                         copiedDiagnostics = true
                     } label: {
                         HStack(spacing: MuesliTheme.spacing12) {

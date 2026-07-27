@@ -374,6 +374,23 @@ struct SharedStore: Sendable {
         try SharedStoreDatabase(containerURL: containerURL(), encoder: encoder, decoder: decoder)
     }
 
+    /// Counts audio files on disk against the sessions that claim to own one.
+    ///
+    /// Deleting a voice note removes a file and a database row, and there is no
+    /// way to do both as one all-or-nothing operation. A failure between the
+    /// two leaves an audio file nothing points at. This reports whether that
+    /// has actually happened, so a cleanup is only built if it is needed.
+    func audioFileAudit() throws -> (onDisk: Int, owned: Int, orphaned: Int) {
+        let directory = try recordingsDirectoryURL()
+        let names = try FileManager.default
+            .contentsOfDirectory(atPath: directory.path)
+            .filter { !$0.hasPrefix(".") }
+        let onDisk = Set(names)
+        let claimed = Set(try recordingSessions().compactMap(\.audioFileName))
+        let owned = onDisk.intersection(claimed)
+        return (onDisk.count, owned.count, onDisk.subtracting(claimed).count)
+    }
+
     private func recordingsDirectoryURL() throws -> URL {
         let directory = try containerURL().appendingPathComponent("Recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -2148,10 +2148,14 @@ final class DictationCoordinator {
 
     func deleteDictation(_ result: DictationResult) async {
         do {
+            // The result is what history renders, so it goes first. If it
+            // fails, nothing has been destroyed and the note is still whole and
+            // retryable. Doing it last meant a failure here left a note in
+            // history pointing at a session that had already been torn down.
+            try store.deleteResult(result)
             if let session = recordingSession(for: result) {
                 try await discardVoiceNoteSession(session)
             }
-            try store.deleteResult(result)
             dictationHistory.removeAll { $0.id == result.id || $0.requestID == result.requestID }
             if lastTranscript == result.text {
                 lastTranscript = dictationHistory.first?.text ?? ""

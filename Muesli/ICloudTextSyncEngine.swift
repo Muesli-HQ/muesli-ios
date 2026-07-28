@@ -6,6 +6,25 @@ struct ICloudTextSyncResult: Equatable {
     let downloaded: Int
 }
 
+/// Counts records handed over by a CKQueryOperation. `recordMatchedBlock` runs
+/// off the calling thread, so the count is guarded.
+private final class DeliveredRecordCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return count == 0
+    }
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+}
+
 private struct ICloudTextZoneChangesPage {
     let records: [CKRecord]
     let serverChangeToken: CKServerChangeToken
@@ -185,17 +204,6 @@ enum MuesliBridgeDeviceIdentity {
     }
 }
 
-/// A query that delivered some records before failing.
-///
-/// Reports the underlying error's message verbatim so existing status text and
-/// telemetry are unchanged; it exists only so a caller can distinguish an empty
-/// result from an interrupted one.
-struct ICloudPartialQueryFailure: Error, LocalizedError {
-    let records: [CKRecord]
-    let underlying: Error
-
-    var errorDescription: String? { underlying.localizedDescription }
-}
 
 final class ICloudTextSyncEngine {
     static let containerIdentifier = "iCloud.com.mueslihq.muesli"
@@ -385,23 +393,24 @@ final class ICloudTextSyncEngine {
     private func fetchDefaultZoneTextRecords() async throws -> [CKRecord] {
         var records: [CKRecord] = []
         var cursor: CKQueryOperation.Cursor?
+        let delivered = DeliveredRecordCounter()
 
         // Tolerance applies to the opening query only. An unindexed or absent
         // legacy schema fails here, before any page is read, and means there is
         // nothing to migrate.
         do {
             let query = CKQuery(recordType: Schema.textRecordType, predicate: NSPredicate(value: true))
-            let firstPage = try await fetch(query: query)
+            let firstPage = try await fetch(query: query) {
+                delivered.increment()
+            }
             records.append(contentsOf: firstPage.records)
             cursor = firstPage.cursor
         } catch {
             // Records having arrived proves the type is queryable, so a
             // tolerated code after that is not "no legacy records" -- it is a
-            // real failure over a set that exists. Propagate it so the caller
-            // leaves the migration unfinished and retries.
-            if let partial = error as? ICloudPartialQueryFailure, !partial.records.isEmpty {
-                throw partial
-            }
+            // real failure over a set that exists. Propagate it unaltered so
+            // the caller retries and telemetry still sees a CloudKit error.
+            guard delivered.isEmpty else { throw error }
             guard Self.isMissingLegacyDefaultZoneRecords(error) else { throw error }
             return []
         }
@@ -429,9 +438,6 @@ final class ICloudTextSyncEngine {
     /// conditions. `invalidArguments` is the one that matters in practice: it
     /// is what a missing queryable index reports.
     static func isMissingLegacyDefaultZoneRecords(_ error: Error) -> Bool {
-        if let partial = error as? ICloudPartialQueryFailure {
-            return isMissingLegacyDefaultZoneRecords(partial.underlying)
-        }
         if let ckError = error as? CKError {
             if isIgnorableLegacyDefaultZoneCode(ckError.code) {
                 return true
@@ -532,12 +538,17 @@ final class ICloudTextSyncEngine {
 
     private func fetch(
         query: CKQuery,
-        zoneID: CKRecordZone.ID? = nil
+        zoneID: CKRecordZone.ID? = nil,
+        onRecordDelivered: (@Sendable () -> Void)? = nil
     ) async throws -> (records: [CKRecord], cursor: CKQueryOperation.Cursor?) {
         try await withCheckedThrowingContinuation { continuation in
             let operation = CKQueryOperation(query: query)
             operation.zoneID = zoneID
-            collect(operation: operation, continuation: continuation)
+            collect(
+                operation: operation,
+                continuation: continuation,
+                onRecordDelivered: onRecordDelivered
+            )
             database.add(operation)
         }
     }
@@ -552,7 +563,8 @@ final class ICloudTextSyncEngine {
 
     private func collect(
         operation: CKQueryOperation,
-        continuation: CheckedContinuation<(records: [CKRecord], cursor: CKQueryOperation.Cursor?), Error>
+        continuation: CheckedContinuation<(records: [CKRecord], cursor: CKQueryOperation.Cursor?), Error>,
+        onRecordDelivered: (@Sendable () -> Void)? = nil
     ) {
         let lock = NSLock()
         var records: [CKRecord] = []
@@ -561,6 +573,10 @@ final class ICloudTextSyncEngine {
                 lock.lock()
                 records.append(record)
                 lock.unlock()
+                // A query can deliver records and then fail, in which case the
+                // error carries no trace of them. Callers that need to tell an
+                // empty result from an interrupted one count them here.
+                onRecordDelivered?()
             }
         }
         operation.queryResultBlock = { result in
@@ -571,15 +587,7 @@ final class ICloudTextSyncEngine {
                 lock.unlock()
                 continuation.resume(returning: (pageRecords, cursor))
             case .failure(let error):
-                // A query can deliver records and then fail. Carry what arrived
-                // alongside the error so callers can tell "nothing was there"
-                // from "something was there and the read broke".
-                lock.lock()
-                let pageRecords = records
-                lock.unlock()
-                continuation.resume(
-                    throwing: ICloudPartialQueryFailure(records: pageRecords, underlying: error)
-                )
+                continuation.resume(throwing: error)
             }
         }
     }

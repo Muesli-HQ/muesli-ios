@@ -72,6 +72,28 @@ final class ICloudLegacyMigrationToleranceTests: XCTestCase {
         XCTAssertFalse(ICloudTextSyncEngine.isMissingLegacyDefaultZoneRecords(partial))
     }
 
+    /// A real failure batched alongside a missing-schema error is still a real
+    /// failure. Tolerating the batch because one item happened to be benign
+    /// would hide it.
+    func testAMixedPartialFailureIsNotTolerated() {
+        let partial = ckError(
+            .partialFailure,
+            userInfo: [CKPartialErrorsByItemIDKey: [
+                CKRecord.ID(recordName: "legacy"): ckError(.invalidArguments),
+                CKRecord.ID(recordName: "other"): ckError(.networkFailure)
+            ]]
+        )
+        XCTAssertFalse(ICloudTextSyncEngine.isMissingLegacyDefaultZoneRecords(partial))
+    }
+
+    func testAnEmptyPartialFailureIsNotTolerated() {
+        let partial = ckError(
+            .partialFailure,
+            userInfo: [CKPartialErrorsByItemIDKey: [CKRecord.ID: Error]()]
+        )
+        XCTAssertFalse(ICloudTextSyncEngine.isMissingLegacyDefaultZoneRecords(partial))
+    }
+
     /// Errors surfacing through URL loading or an operation wrapper arrive
     /// nested rather than as a top-level CKError.
     func testANestedUnderlyingErrorIsUnwrapped() {

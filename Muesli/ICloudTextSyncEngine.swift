@@ -371,9 +371,13 @@ final class ICloudTextSyncEngine {
     /// `isMissingLegacyDefaultZoneRecords`); iOS shipped the same migration
     /// without it, so a TestFlight user saw every sync fail with that message.
     private func fetchDefaultZoneTextRecords() async throws -> [CKRecord] {
+        // Accumulated outside the do/catch: a later page failing must not
+        // discard what earlier pages already returned. The migration marks
+        // itself complete afterwards, so anything dropped here is dropped for
+        // good.
+        var records: [CKRecord] = []
         do {
             let query = CKQuery(recordType: Schema.textRecordType, predicate: NSPredicate(value: true))
-            var records: [CKRecord] = []
             let firstPage = try await fetch(query: query)
             records.append(contentsOf: firstPage.records)
             var cursor = firstPage.cursor
@@ -385,7 +389,7 @@ final class ICloudTextSyncEngine {
             return records
         } catch {
             guard Self.isMissingLegacyDefaultZoneRecords(error) else { throw error }
-            return []
+            return records
         }
     }
 
@@ -400,8 +404,13 @@ final class ICloudTextSyncEngine {
             if isIgnorableLegacyDefaultZoneCode(ckError.code) {
                 return true
             }
+            // Every per-item error has to be tolerable. Matching on any one of
+            // them would swallow a real failure whenever it happened to be
+            // batched alongside a missing-schema error.
             if ckError.code == .partialFailure,
-               ckError.partialErrorsByItemID?.values.contains(where: isMissingLegacyDefaultZoneRecords) == true {
+               let partialErrors = ckError.partialErrorsByItemID,
+               !partialErrors.isEmpty,
+               partialErrors.values.allSatisfy(isMissingLegacyDefaultZoneRecords) {
                 return true
             }
         }

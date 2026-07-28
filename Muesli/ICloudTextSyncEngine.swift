@@ -6,6 +6,25 @@ struct ICloudTextSyncResult: Equatable {
     let downloaded: Int
 }
 
+/// Counts records handed over by a CKQueryOperation. `recordMatchedBlock` runs
+/// off the calling thread, so the count is guarded.
+private final class DeliveredRecordCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return count == 0
+    }
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+}
+
 private struct ICloudTextZoneChangesPage {
     let records: [CKRecord]
     let serverChangeToken: CKServerChangeToken
@@ -185,6 +204,7 @@ enum MuesliBridgeDeviceIdentity {
     }
 }
 
+
 final class ICloudTextSyncEngine {
     static let containerIdentifier = "iCloud.com.mueslihq.muesli"
 
@@ -310,7 +330,38 @@ final class ICloudTextSyncEngine {
     private func migrateDefaultZoneIfNeeded(store: SharedStore) async throws {
         guard !defaults.bool(forKey: Schema.migratedDefaultZoneKey) else { return }
 
-        let legacyDefaultZoneRecords = try await fetchDefaultZoneTextRecords()
+        // This migration is why a TestFlight user's sync failed on every pass,
+        // and it only fails against a container whose legacy schema is not
+        // queryable -- which no development build reproduces. Report what it
+        // actually did, so the fix can be confirmed from the field rather than
+        // inferred.
+        let legacyDefaultZoneRecords: [CKRecord]
+        do {
+            legacyDefaultZoneRecords = try await fetchDefaultZoneTextRecords()
+            let readCount = legacyDefaultZoneRecords.count
+            await MainActor.run {
+                AppTelemetry.signal(
+                    "icloud_legacy_migration_read",
+                    parameters: [
+                        "outcome": readCount == 0 ? "empty" : "records_found",
+                        "record_count": String(readCount)
+                    ]
+                )
+            }
+        } catch {
+            // Reached only for errors the tolerance deliberately does not
+            // cover, or an interrupted read of a set that does exist. Either
+            // way the migration stays unfinished and retries next sync.
+            await MainActor.run {
+                AppTelemetry.failure(
+                    "icloud_legacy_migration_failed",
+                    domain: .cloudSync,
+                    stage: "legacy_default_zone_read",
+                    error: error
+                )
+            }
+            throw error
+        }
         for record in legacyDefaultZoneRecords {
             guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
             try store.upsertSyncedTextRecord(syncRecord)
@@ -334,6 +385,13 @@ final class ICloudTextSyncEngine {
         }
 
         defaults.set(true, forKey: Schema.migratedDefaultZoneKey)
+        let importedCount = legacyDefaultZoneRecords.count
+        await MainActor.run {
+            AppTelemetry.signal(
+                "icloud_legacy_migration_completed",
+                parameters: ["imported": String(importedCount)]
+            )
+        }
     }
 
     private func fetchChangedTextRecords() async throws -> [CKRecord] {
@@ -353,18 +411,104 @@ final class ICloudTextSyncEngine {
         return records
     }
 
+    /// Reads text records left in the default zone by builds that predate
+    /// `MuesliSyncZone`.
+    ///
+    /// This is a query, and CloudKit queries require the record type to carry a
+    /// queryable index. That index is not guaranteed to exist -- notably in the
+    /// Production environment, where schema cannot be created by the app -- so
+    /// a container that has never been indexed answers with
+    /// "Type is not marked indexable: MuesliTextRecord".
+    ///
+    /// A container with no legacy records to migrate is indistinguishable from
+    /// one that cannot answer the question, and neither is a reason to fail:
+    /// steady-state sync uses `CKFetchRecordZoneChangesOperation` on the custom
+    /// zone, which needs no index. Treat those errors as "no legacy records".
+    ///
+    /// macOS has carried this tolerance since June (`MuesliICloudSyncEngine`,
+    /// `isMissingLegacyDefaultZoneRecords`); iOS shipped the same migration
+    /// without it, so a TestFlight user saw every sync fail with that message.
     private func fetchDefaultZoneTextRecords() async throws -> [CKRecord] {
-        let query = CKQuery(recordType: Schema.textRecordType, predicate: NSPredicate(value: true))
         var records: [CKRecord] = []
-        let firstPage = try await fetch(query: query)
-        records.append(contentsOf: firstPage.records)
-        var cursor = firstPage.cursor
+        var cursor: CKQueryOperation.Cursor?
+        let delivered = DeliveredRecordCounter()
+
+        // Tolerance applies to the opening query only. An unindexed or absent
+        // legacy schema fails here, before any page is read, and means there is
+        // nothing to migrate.
+        do {
+            let query = CKQuery(recordType: Schema.textRecordType, predicate: NSPredicate(value: true))
+            let firstPage = try await fetch(query: query) {
+                delivered.increment()
+            }
+            records.append(contentsOf: firstPage.records)
+            cursor = firstPage.cursor
+        } catch {
+            // Records having arrived proves the type is queryable, so a
+            // tolerated code after that is not "no legacy records" -- it is a
+            // real failure over a set that exists. Propagate it unaltered so
+            // the caller retries and telemetry still sees a CloudKit error.
+            guard delivered.isEmpty else { throw error }
+            guard Self.isMissingLegacyDefaultZoneRecords(error) else { throw error }
+            return []
+        }
+
+        // Past this point the type is demonstrably queryable, so the same error
+        // codes no longer mean "no legacy records" -- they mean a real failure
+        // partway through a set that does exist. Let it propagate: the caller
+        // leaves the migration flag unset and retries on the next sync, which
+        // is safe because importing is an idempotent upsert. Returning the
+        // pages read so far would instead mark the migration complete and
+        // strand every record after the failure.
         while let nextCursor = cursor {
             let page = try await fetch(cursor: nextCursor)
             records.append(contentsOf: page.records)
             cursor = page.cursor
         }
+
         return records
+    }
+
+    /// Whether an error means the legacy default-zone records cannot be read,
+    /// as opposed to a genuine sync failure.
+    ///
+    /// Mirrors the macOS classifier so the two platforms tolerate the same
+    /// conditions. `invalidArguments` is the one that matters in practice: it
+    /// is what a missing queryable index reports.
+    static func isMissingLegacyDefaultZoneRecords(_ error: Error) -> Bool {
+        if let ckError = error as? CKError {
+            if isIgnorableLegacyDefaultZoneCode(ckError.code) {
+                return true
+            }
+            // Every per-item error has to be tolerable. Matching on any one of
+            // them would swallow a real failure whenever it happened to be
+            // batched alongside a missing-schema error.
+            if ckError.code == .partialFailure,
+               let partialErrors = ckError.partialErrorsByItemID,
+               !partialErrors.isEmpty,
+               partialErrors.values.allSatisfy(isMissingLegacyDefaultZoneRecords) {
+                return true
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == CKError.errorDomain,
+           isIgnorableLegacyDefaultZoneCode(CKError.Code(rawValue: nsError.code)) {
+            return true
+        }
+        if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isMissingLegacyDefaultZoneRecords(underlyingError)
+        }
+        return false
+    }
+
+    static func isIgnorableLegacyDefaultZoneCode(_ code: CKError.Code?) -> Bool {
+        switch code {
+        case .unknownItem, .serverRejectedRequest, .invalidArguments, .zoneNotFound:
+            return true
+        default:
+            return false
+        }
     }
 
     private func fetchZoneChangesPage(previousServerChangeToken: CKServerChangeToken?) async throws -> ICloudTextZoneChangesPage {
@@ -432,12 +576,17 @@ final class ICloudTextSyncEngine {
 
     private func fetch(
         query: CKQuery,
-        zoneID: CKRecordZone.ID? = nil
+        zoneID: CKRecordZone.ID? = nil,
+        onRecordDelivered: (@Sendable () -> Void)? = nil
     ) async throws -> (records: [CKRecord], cursor: CKQueryOperation.Cursor?) {
         try await withCheckedThrowingContinuation { continuation in
             let operation = CKQueryOperation(query: query)
             operation.zoneID = zoneID
-            collect(operation: operation, continuation: continuation)
+            collect(
+                operation: operation,
+                continuation: continuation,
+                onRecordDelivered: onRecordDelivered
+            )
             database.add(operation)
         }
     }
@@ -452,7 +601,8 @@ final class ICloudTextSyncEngine {
 
     private func collect(
         operation: CKQueryOperation,
-        continuation: CheckedContinuation<(records: [CKRecord], cursor: CKQueryOperation.Cursor?), Error>
+        continuation: CheckedContinuation<(records: [CKRecord], cursor: CKQueryOperation.Cursor?), Error>,
+        onRecordDelivered: (@Sendable () -> Void)? = nil
     ) {
         let lock = NSLock()
         var records: [CKRecord] = []
@@ -461,6 +611,10 @@ final class ICloudTextSyncEngine {
                 lock.lock()
                 records.append(record)
                 lock.unlock()
+                // A query can deliver records and then fail, in which case the
+                // error carries no trace of them. Callers that need to tell an
+                // empty result from an interrupted one count them here.
+                onRecordDelivered?()
             }
         }
         operation.queryResultBlock = { result in

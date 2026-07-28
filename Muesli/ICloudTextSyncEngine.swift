@@ -330,7 +330,38 @@ final class ICloudTextSyncEngine {
     private func migrateDefaultZoneIfNeeded(store: SharedStore) async throws {
         guard !defaults.bool(forKey: Schema.migratedDefaultZoneKey) else { return }
 
-        let legacyDefaultZoneRecords = try await fetchDefaultZoneTextRecords()
+        // This migration is why a TestFlight user's sync failed on every pass,
+        // and it only fails against a container whose legacy schema is not
+        // queryable -- which no development build reproduces. Report what it
+        // actually did, so the fix can be confirmed from the field rather than
+        // inferred.
+        let legacyDefaultZoneRecords: [CKRecord]
+        do {
+            legacyDefaultZoneRecords = try await fetchDefaultZoneTextRecords()
+            let readCount = legacyDefaultZoneRecords.count
+            await MainActor.run {
+                AppTelemetry.signal(
+                    "icloud_legacy_migration_read",
+                    parameters: [
+                        "outcome": readCount == 0 ? "empty" : "records_found",
+                        "record_count": String(readCount)
+                    ]
+                )
+            }
+        } catch {
+            // Reached only for errors the tolerance deliberately does not
+            // cover, or an interrupted read of a set that does exist. Either
+            // way the migration stays unfinished and retries next sync.
+            await MainActor.run {
+                AppTelemetry.failure(
+                    "icloud_legacy_migration_failed",
+                    domain: .cloudSync,
+                    stage: "legacy_default_zone_read",
+                    error: error
+                )
+            }
+            throw error
+        }
         for record in legacyDefaultZoneRecords {
             guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
             try store.upsertSyncedTextRecord(syncRecord)
@@ -354,6 +385,13 @@ final class ICloudTextSyncEngine {
         }
 
         defaults.set(true, forKey: Schema.migratedDefaultZoneKey)
+        let importedCount = legacyDefaultZoneRecords.count
+        await MainActor.run {
+            AppTelemetry.signal(
+                "icloud_legacy_migration_completed",
+                parameters: ["imported": String(importedCount)]
+            )
+        }
     }
 
     private func fetchChangedTextRecords() async throws -> [CKRecord] {

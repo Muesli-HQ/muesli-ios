@@ -105,6 +105,24 @@ final class ICloudLegacyMigrationToleranceTests: XCTestCase {
         XCTAssertTrue(ICloudTextSyncEngine.isMissingLegacyDefaultZoneRecords(wrapper))
     }
 
+    /// The wrapper exists so an empty result can be told apart from an
+    /// interrupted one; classification must still see through it.
+    func testAPartialQueryFailureIsClassifiedByItsUnderlyingError() {
+        let tolerable = ICloudPartialQueryFailure(records: [], underlying: ckError(.invalidArguments))
+        XCTAssertTrue(ICloudTextSyncEngine.isMissingLegacyDefaultZoneRecords(tolerable))
+
+        let fatal = ICloudPartialQueryFailure(records: [], underlying: ckError(.networkFailure))
+        XCTAssertFalse(ICloudTextSyncEngine.isMissingLegacyDefaultZoneRecords(fatal))
+    }
+
+    /// Status text and telemetry read localizedDescription, so wrapping must
+    /// not change what the user is told.
+    func testAPartialQueryFailureReportsTheUnderlyingMessage() {
+        let underlying = ckError(.networkFailure)
+        let wrapped = ICloudPartialQueryFailure(records: [], underlying: underlying)
+        XCTAssertEqual(wrapped.localizedDescription, underlying.localizedDescription)
+    }
+
     func testAnUnrelatedErrorIsNotTolerated() {
         let unrelated = NSError(domain: NSPOSIXErrorDomain, code: 2)
         XCTAssertFalse(ICloudTextSyncEngine.isMissingLegacyDefaultZoneRecords(unrelated))

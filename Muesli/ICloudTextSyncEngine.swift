@@ -185,6 +185,18 @@ enum MuesliBridgeDeviceIdentity {
     }
 }
 
+/// A query that delivered some records before failing.
+///
+/// Reports the underlying error's message verbatim so existing status text and
+/// telemetry are unchanged; it exists only so a caller can distinguish an empty
+/// result from an interrupted one.
+struct ICloudPartialQueryFailure: Error, LocalizedError {
+    let records: [CKRecord]
+    let underlying: Error
+
+    var errorDescription: String? { underlying.localizedDescription }
+}
+
 final class ICloudTextSyncEngine {
     static let containerIdentifier = "iCloud.com.mueslihq.muesli"
 
@@ -383,6 +395,13 @@ final class ICloudTextSyncEngine {
             records.append(contentsOf: firstPage.records)
             cursor = firstPage.cursor
         } catch {
+            // Records having arrived proves the type is queryable, so a
+            // tolerated code after that is not "no legacy records" -- it is a
+            // real failure over a set that exists. Propagate it so the caller
+            // leaves the migration unfinished and retries.
+            if let partial = error as? ICloudPartialQueryFailure, !partial.records.isEmpty {
+                throw partial
+            }
             guard Self.isMissingLegacyDefaultZoneRecords(error) else { throw error }
             return []
         }
@@ -410,6 +429,9 @@ final class ICloudTextSyncEngine {
     /// conditions. `invalidArguments` is the one that matters in practice: it
     /// is what a missing queryable index reports.
     static func isMissingLegacyDefaultZoneRecords(_ error: Error) -> Bool {
+        if let partial = error as? ICloudPartialQueryFailure {
+            return isMissingLegacyDefaultZoneRecords(partial.underlying)
+        }
         if let ckError = error as? CKError {
             if isIgnorableLegacyDefaultZoneCode(ckError.code) {
                 return true
@@ -549,7 +571,15 @@ final class ICloudTextSyncEngine {
                 lock.unlock()
                 continuation.resume(returning: (pageRecords, cursor))
             case .failure(let error):
-                continuation.resume(throwing: error)
+                // A query can deliver records and then fail. Carry what arrived
+                // alongside the error so callers can tell "nothing was there"
+                // from "something was there and the read broke".
+                lock.lock()
+                let pageRecords = records
+                lock.unlock()
+                continuation.resume(
+                    throwing: ICloudPartialQueryFailure(records: pageRecords, underlying: error)
+                )
             }
         }
     }

@@ -353,18 +353,77 @@ final class ICloudTextSyncEngine {
         return records
     }
 
+    /// Reads text records left in the default zone by builds that predate
+    /// `MuesliSyncZone`.
+    ///
+    /// This is a query, and CloudKit queries require the record type to carry a
+    /// queryable index. That index is not guaranteed to exist -- notably in the
+    /// Production environment, where schema cannot be created by the app -- so
+    /// a container that has never been indexed answers with
+    /// "Type is not marked indexable: MuesliTextRecord".
+    ///
+    /// A container with no legacy records to migrate is indistinguishable from
+    /// one that cannot answer the question, and neither is a reason to fail:
+    /// steady-state sync uses `CKFetchRecordZoneChangesOperation` on the custom
+    /// zone, which needs no index. Treat those errors as "no legacy records".
+    ///
+    /// macOS has carried this tolerance since June (`MuesliICloudSyncEngine`,
+    /// `isMissingLegacyDefaultZoneRecords`); iOS shipped the same migration
+    /// without it, so a TestFlight user saw every sync fail with that message.
     private func fetchDefaultZoneTextRecords() async throws -> [CKRecord] {
-        let query = CKQuery(recordType: Schema.textRecordType, predicate: NSPredicate(value: true))
-        var records: [CKRecord] = []
-        let firstPage = try await fetch(query: query)
-        records.append(contentsOf: firstPage.records)
-        var cursor = firstPage.cursor
-        while let nextCursor = cursor {
-            let page = try await fetch(cursor: nextCursor)
-            records.append(contentsOf: page.records)
-            cursor = page.cursor
+        do {
+            let query = CKQuery(recordType: Schema.textRecordType, predicate: NSPredicate(value: true))
+            var records: [CKRecord] = []
+            let firstPage = try await fetch(query: query)
+            records.append(contentsOf: firstPage.records)
+            var cursor = firstPage.cursor
+            while let nextCursor = cursor {
+                let page = try await fetch(cursor: nextCursor)
+                records.append(contentsOf: page.records)
+                cursor = page.cursor
+            }
+            return records
+        } catch {
+            guard Self.isMissingLegacyDefaultZoneRecords(error) else { throw error }
+            return []
         }
-        return records
+    }
+
+    /// Whether an error means the legacy default-zone records cannot be read,
+    /// as opposed to a genuine sync failure.
+    ///
+    /// Mirrors the macOS classifier so the two platforms tolerate the same
+    /// conditions. `invalidArguments` is the one that matters in practice: it
+    /// is what a missing queryable index reports.
+    static func isMissingLegacyDefaultZoneRecords(_ error: Error) -> Bool {
+        if let ckError = error as? CKError {
+            if isIgnorableLegacyDefaultZoneCode(ckError.code) {
+                return true
+            }
+            if ckError.code == .partialFailure,
+               ckError.partialErrorsByItemID?.values.contains(where: isMissingLegacyDefaultZoneRecords) == true {
+                return true
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == CKError.errorDomain,
+           isIgnorableLegacyDefaultZoneCode(CKError.Code(rawValue: nsError.code)) {
+            return true
+        }
+        if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isMissingLegacyDefaultZoneRecords(underlyingError)
+        }
+        return false
+    }
+
+    static func isIgnorableLegacyDefaultZoneCode(_ code: CKError.Code?) -> Bool {
+        switch code {
+        case .unknownItem, .serverRejectedRequest, .invalidArguments, .zoneNotFound:
+            return true
+        default:
+            return false
+        }
     }
 
     private func fetchZoneChangesPage(previousServerChangeToken: CKServerChangeToken?) async throws -> ICloudTextZoneChangesPage {

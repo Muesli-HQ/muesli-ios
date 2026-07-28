@@ -371,26 +371,36 @@ final class ICloudTextSyncEngine {
     /// `isMissingLegacyDefaultZoneRecords`); iOS shipped the same migration
     /// without it, so a TestFlight user saw every sync fail with that message.
     private func fetchDefaultZoneTextRecords() async throws -> [CKRecord] {
-        // Accumulated outside the do/catch: a later page failing must not
-        // discard what earlier pages already returned. The migration marks
-        // itself complete afterwards, so anything dropped here is dropped for
-        // good.
         var records: [CKRecord] = []
+        var cursor: CKQueryOperation.Cursor?
+
+        // Tolerance applies to the opening query only. An unindexed or absent
+        // legacy schema fails here, before any page is read, and means there is
+        // nothing to migrate.
         do {
             let query = CKQuery(recordType: Schema.textRecordType, predicate: NSPredicate(value: true))
             let firstPage = try await fetch(query: query)
             records.append(contentsOf: firstPage.records)
-            var cursor = firstPage.cursor
-            while let nextCursor = cursor {
-                let page = try await fetch(cursor: nextCursor)
-                records.append(contentsOf: page.records)
-                cursor = page.cursor
-            }
-            return records
+            cursor = firstPage.cursor
         } catch {
             guard Self.isMissingLegacyDefaultZoneRecords(error) else { throw error }
-            return records
+            return []
         }
+
+        // Past this point the type is demonstrably queryable, so the same error
+        // codes no longer mean "no legacy records" -- they mean a real failure
+        // partway through a set that does exist. Let it propagate: the caller
+        // leaves the migration flag unset and retries on the next sync, which
+        // is safe because importing is an idempotent upsert. Returning the
+        // pages read so far would instead mark the migration complete and
+        // strand every record after the failure.
+        while let nextCursor = cursor {
+            let page = try await fetch(cursor: nextCursor)
+            records.append(contentsOf: page.records)
+            cursor = page.cursor
+        }
+
+        return records
     }
 
     /// Whether an error means the legacy default-zone records cannot be read,

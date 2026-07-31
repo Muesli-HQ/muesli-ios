@@ -38,12 +38,14 @@ protocol ICloudTextChangeTokenStore {
 }
 
 final class UserDefaultsICloudTextChangeTokenStore: ICloudTextChangeTokenStore {
+    static let defaultKey = "muesli.icloud.textRecords.MuesliSyncZone.serverChangeToken.v1"
+
     private let defaults: UserDefaults
     private let key: String
 
     init(
         defaults: UserDefaults = .standard,
-        key: String = "muesli.icloud.textRecords.MuesliSyncZone.serverChangeToken.v1"
+        key: String = UserDefaultsICloudTextChangeTokenStore.defaultKey
     ) {
         self.defaults = defaults
         self.key = key
@@ -81,9 +83,9 @@ struct MuesliBridgeDeviceSnapshot: Equatable {
 enum MuesliBridgeDeviceIdentity {
     private static let localDeviceIDKey = "muesli.sync.bridge.localDeviceID.v1"
     private static let localDeviceNameKey = "muesli.sync.bridge.localDeviceName.v1"
-    private static let remoteDeviceIDKey = "muesli.sync.bridge.remoteDeviceID.v1"
+    static let remoteDeviceIDKey = "muesli.sync.bridge.remoteDeviceID.v1"
     private static let remoteDeviceNameKey = "muesli.sync.bridge.remoteDeviceName.v1"
-    private static let remoteDevicePlatformKey = "muesli.sync.bridge.remoteDevicePlatform.v1"
+    static let remoteDevicePlatformKey = "muesli.sync.bridge.remoteDevicePlatform.v1"
     private static let remoteDeviceLastSeenAtKey = "muesli.sync.bridge.remoteDeviceLastSeenAt.v1"
     private static let lastRefreshKey = "muesli.sync.bridge.lastDeviceRefreshAttemptAt.v1"
     private static let lastRefreshFailureKey = "muesli.sync.bridge.lastDeviceRefreshFailureAt.v1"
@@ -248,24 +250,28 @@ final class ICloudTextSyncEngine {
         let defaults = UserDefaults.standard
         let migrated = defaults.bool(forKey: Schema.migratedDefaultZoneKey)
         let hasToken = defaults.data(
-            forKey: "muesli.icloud.textRecords.MuesliSyncZone.serverChangeToken.v1"
+            forKey: UserDefaultsICloudTextChangeTokenStore.defaultKey
         ) != nil
         let enabled = MuesliPreferences.iCloudSyncEnabled
 
-        let pending = (try? store.textRecordsNeedingSync(limit: 500))?.count
+        // Reported as "500+" at the cap: a diagnostic that silently floors the
+        // number hides exactly the backlog it exists to reveal.
+        let pendingCap = 500
+        let pendingFetched = (try? store.textRecordsNeedingSync(limit: pendingCap))?.count
+        let pending = pendingFetched.map { $0 >= pendingCap ? "\(pendingCap)+" : String($0) }
         let sessions = (try? store.recordingSessions())?.count
         let results = (try? store.resultsHistory())?.count
         // Presence and platform only. The stored device name is
         // ProcessInfo.hostName, which is routinely someone's real name, and
         // this text gets pasted into chats.
-        let hasRemoteDevice = defaults.string(forKey: "muesli.sync.bridge.remoteDeviceID.v1") != nil
-        let remotePlatform = defaults.string(forKey: "muesli.sync.bridge.remoteDevicePlatform.v1")
+        let hasRemoteDevice = defaults.string(forKey: MuesliBridgeDeviceIdentity.remoteDeviceIDKey) != nil
+        let remotePlatform = defaults.string(forKey: MuesliBridgeDeviceIdentity.remoteDevicePlatformKey)
 
         return [
             "sync: enabled=\(enabled)",
             "migrated=\(migrated)",
             "changeToken=\(hasToken ? "present" : "none")",
-            "pendingUpload=\(pending.map(String.init) ?? "?")",
+            "pendingUpload=\(pending ?? "?")",
             "localNotes=\(results.map(String.init) ?? "?")",
             "localSessions=\(sessions.map(String.init) ?? "?")",
             "linkedDevice=\(hasRemoteDevice ? (remotePlatform ?? "yes") : "none")"

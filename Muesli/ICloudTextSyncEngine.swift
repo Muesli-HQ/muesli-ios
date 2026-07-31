@@ -255,7 +255,10 @@ final class ICloudTextSyncEngine {
         let pending = (try? store.textRecordsNeedingSync(limit: 500))?.count
         let sessions = (try? store.recordingSessions())?.count
         let results = (try? store.resultsHistory())?.count
-        let remoteDevice = defaults.string(forKey: "muesli.sync.bridge.remoteDeviceName.v1")
+        // Presence and platform only. The stored device name is
+        // ProcessInfo.hostName, which is routinely someone's real name, and
+        // this text gets pasted into chats.
+        let hasRemoteDevice = defaults.string(forKey: "muesli.sync.bridge.remoteDeviceID.v1") != nil
         let remotePlatform = defaults.string(forKey: "muesli.sync.bridge.remoteDevicePlatform.v1")
 
         return [
@@ -265,7 +268,7 @@ final class ICloudTextSyncEngine {
             "pendingUpload=\(pending.map(String.init) ?? "?")",
             "localNotes=\(results.map(String.init) ?? "?")",
             "localSessions=\(sessions.map(String.init) ?? "?")",
-            "linkedDevice=\(remoteDevice ?? "none")\(remotePlatform.map { " (\($0))" } ?? "")"
+            "linkedDevice=\(hasRemoteDevice ? (remotePlatform ?? "yes") : "none")"
         ].joined(separator: " ")
     }
 

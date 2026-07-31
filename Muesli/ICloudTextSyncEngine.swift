@@ -38,12 +38,14 @@ protocol ICloudTextChangeTokenStore {
 }
 
 final class UserDefaultsICloudTextChangeTokenStore: ICloudTextChangeTokenStore {
+    static let defaultKey = "muesli.icloud.textRecords.MuesliSyncZone.serverChangeToken.v1"
+
     private let defaults: UserDefaults
     private let key: String
 
     init(
         defaults: UserDefaults = .standard,
-        key: String = "muesli.icloud.textRecords.MuesliSyncZone.serverChangeToken.v1"
+        key: String = UserDefaultsICloudTextChangeTokenStore.defaultKey
     ) {
         self.defaults = defaults
         self.key = key
@@ -81,9 +83,9 @@ struct MuesliBridgeDeviceSnapshot: Equatable {
 enum MuesliBridgeDeviceIdentity {
     private static let localDeviceIDKey = "muesli.sync.bridge.localDeviceID.v1"
     private static let localDeviceNameKey = "muesli.sync.bridge.localDeviceName.v1"
-    private static let remoteDeviceIDKey = "muesli.sync.bridge.remoteDeviceID.v1"
+    static let remoteDeviceIDKey = "muesli.sync.bridge.remoteDeviceID.v1"
     private static let remoteDeviceNameKey = "muesli.sync.bridge.remoteDeviceName.v1"
-    private static let remoteDevicePlatformKey = "muesli.sync.bridge.remoteDevicePlatform.v1"
+    static let remoteDevicePlatformKey = "muesli.sync.bridge.remoteDevicePlatform.v1"
     private static let remoteDeviceLastSeenAtKey = "muesli.sync.bridge.remoteDeviceLastSeenAt.v1"
     private static let lastRefreshKey = "muesli.sync.bridge.lastDeviceRefreshAttemptAt.v1"
     private static let lastRefreshFailureKey = "muesli.sync.bridge.lastDeviceRefreshFailureAt.v1"
@@ -234,6 +236,47 @@ final class ICloudTextSyncEngine {
         self.database = container.privateCloudDatabase
         self.changeTokenStore = changeTokenStore
         self.defaults = defaults
+    }
+
+    /// A one-line summary of why sync may not be moving anything.
+    ///
+    /// Sync reports "All text is up to date." whenever a pass downloads and
+    /// uploads nothing, which looks identical whether there was genuinely
+    /// nothing to do or the device is queued behind something invisible. These
+    /// are the values that tell those apart, and every one of them is currently
+    /// unobservable from the outside.
+    @MainActor
+    static func diagnosticsSummary(store: SharedStore = SharedStore()) -> String {
+        let defaults = UserDefaults.standard
+        let migrated = defaults.bool(forKey: Schema.migratedDefaultZoneKey)
+        let hasToken = defaults.data(
+            forKey: UserDefaultsICloudTextChangeTokenStore.defaultKey
+        ) != nil
+        let enabled = MuesliPreferences.iCloudSyncEnabled
+
+        // Counted in SQL rather than by fetching rows: this runs on the main
+        // actor, and a history of a few thousand notes would otherwise be
+        // decoded in full just to be counted. It also means the pending figure
+        // is exact rather than capped by a fetch limit.
+        let counts = try? store.syncRecordCounts()
+        let dirty = counts.map { "\($0.dirtyResults)/\($0.dirtySessions)" }
+        let sessions = counts.map(\.sessions)
+        let results = counts.map(\.results)
+        // Presence and platform only. The stored device name is
+        // ProcessInfo.hostName, which is routinely someone's real name, and
+        // this text gets pasted into chats.
+        let hasRemoteDevice = defaults.string(forKey: MuesliBridgeDeviceIdentity.remoteDeviceIDKey) != nil
+        let remotePlatform = defaults.string(forKey: MuesliBridgeDeviceIdentity.remoteDevicePlatformKey)
+
+        return [
+            "sync: enabled=\(enabled)",
+            "migrated=\(migrated)",
+            "changeToken=\(hasToken ? "present" : "none")",
+            "dirtyNotes/dirtySessions=\(dirty ?? "?")",
+            "localNotes=\(results.map(String.init) ?? "?")",
+            "localSessions=\(sessions.map(String.init) ?? "?")",
+            "linkedDevice=\(hasRemoteDevice ? (remotePlatform ?? "yes") : "none")"
+        ].joined(separator: " ")
     }
 
     func sync(

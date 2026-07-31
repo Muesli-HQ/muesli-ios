@@ -10,9 +10,11 @@ struct AboutSettingsContent: View {
     /// the notes that own them. Filenames are never included -- only totals.
     private func diagnosticsReport() -> String {
         var header = ""
-        if let audit = try? SharedStore().audioFileAudit() {
-            header = "audio: \(audit.onDisk) files, \(audit.owned) owned, \(audit.orphaned) orphaned\n\n"
+        let store = SharedStore()
+        if let audit = try? store.audioFileAudit() {
+            header += "audio: \(audit.onDisk) files, \(audit.owned) owned, \(audit.orphaned) orphaned\n"
         }
+        header += ICloudTextSyncEngine.diagnosticsSummary(store: store) + "\n\n"
         return header + KeyboardDiagnosticsLog.exportText()
     }
 

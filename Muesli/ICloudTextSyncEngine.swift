@@ -236,6 +236,39 @@ final class ICloudTextSyncEngine {
         self.defaults = defaults
     }
 
+    /// A one-line summary of why sync may not be moving anything.
+    ///
+    /// Sync reports "All text is up to date." whenever a pass downloads and
+    /// uploads nothing, which looks identical whether there was genuinely
+    /// nothing to do or the device is queued behind something invisible. These
+    /// are the values that tell those apart, and every one of them is currently
+    /// unobservable from the outside.
+    @MainActor
+    static func diagnosticsSummary(store: SharedStore = SharedStore()) -> String {
+        let defaults = UserDefaults.standard
+        let migrated = defaults.bool(forKey: Schema.migratedDefaultZoneKey)
+        let hasToken = defaults.data(
+            forKey: "muesli.icloud.textRecords.MuesliSyncZone.serverChangeToken.v1"
+        ) != nil
+        let enabled = MuesliPreferences.iCloudSyncEnabled
+
+        let pending = (try? store.textRecordsNeedingSync(limit: 500))?.count
+        let sessions = (try? store.recordingSessions())?.count
+        let results = (try? store.resultsHistory())?.count
+        let remoteDevice = defaults.string(forKey: "muesli.sync.bridge.remoteDeviceName.v1")
+        let remotePlatform = defaults.string(forKey: "muesli.sync.bridge.remoteDevicePlatform.v1")
+
+        return [
+            "sync: enabled=\(enabled)",
+            "migrated=\(migrated)",
+            "changeToken=\(hasToken ? "present" : "none")",
+            "pendingUpload=\(pending.map(String.init) ?? "?")",
+            "localNotes=\(results.map(String.init) ?? "?")",
+            "localSessions=\(sessions.map(String.init) ?? "?")",
+            "linkedDevice=\(remoteDevice ?? "none")\(remotePlatform.map { " (\($0))" } ?? "")"
+        ].joined(separator: " ")
+    }
+
     func sync(
         store: SharedStore = SharedStore(),
         forceBridgeDeviceRefresh: Bool = false

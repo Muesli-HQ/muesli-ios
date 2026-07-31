@@ -257,6 +257,11 @@ struct SharedStore: Sendable {
         try database().textRecordsNeedingSync(limit: limit)
     }
 
+    /// Row counts for diagnostics, without decoding any payloads.
+    func syncRecordCounts() throws -> (results: Int, sessions: Int, pendingUpload: Int) {
+        try database().syncRecordCounts()
+    }
+
     func textRecordsForSyncMigration(limit: Int = 5_000) throws -> [SyncTextRecord] {
         try database().textRecordsForSyncMigration(limit: limit)
     }
@@ -852,6 +857,29 @@ private struct SharedStoreDatabase {
                 }
                 try upsertValue(try encoder.encode(true), key: .customWordsInitialized, db: db)
             }
+        }
+    }
+
+    /// Counts only. The diagnostics summary runs on the main actor, and
+    /// decoding a full history there is exactly the kind of harm a diagnostic
+    /// must not do.
+    func syncRecordCounts() throws -> (results: Int, sessions: Int, pendingUpload: Int) {
+        try withDatabase { db in
+            func count(_ sql: String) throws -> Int {
+                try queryRows(sql, db: db) { _ in } read: { statement in
+                    Int(sqlite3_column_int64(statement, 0))
+                }.first ?? 0
+            }
+
+            let results = try count("SELECT COUNT(*) FROM result_history WHERE deleted_at IS NULL")
+            let sessions = try count("SELECT COUNT(*) FROM recording_sessions WHERE deleted_at IS NULL")
+            let pendingDictations = try count(
+                "SELECT COUNT(*) FROM result_history WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL"
+            )
+            let pendingSessions = try count(
+                "SELECT COUNT(*) FROM recording_sessions WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL"
+            )
+            return (results, sessions, pendingDictations + pendingSessions)
         }
     }
 

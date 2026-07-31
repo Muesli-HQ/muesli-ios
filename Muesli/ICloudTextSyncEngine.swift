@@ -254,13 +254,14 @@ final class ICloudTextSyncEngine {
         ) != nil
         let enabled = MuesliPreferences.iCloudSyncEnabled
 
-        // Reported as "500+" at the cap: a diagnostic that silently floors the
-        // number hides exactly the backlog it exists to reveal.
-        let pendingCap = 500
-        let pendingFetched = (try? store.textRecordsNeedingSync(limit: pendingCap))?.count
-        let pending = pendingFetched.map { $0 >= pendingCap ? "\(pendingCap)+" : String($0) }
-        let sessions = (try? store.recordingSessions())?.count
-        let results = (try? store.resultsHistory())?.count
+        // Counted in SQL rather than by fetching rows: this runs on the main
+        // actor, and a history of a few thousand notes would otherwise be
+        // decoded in full just to be counted. It also means the pending figure
+        // is exact rather than capped by a fetch limit.
+        let counts = try? store.syncRecordCounts()
+        let pending = counts.map { String($0.pendingUpload) }
+        let sessions = counts.map(\.sessions)
+        let results = counts.map(\.results)
         // Presence and platform only. The stored device name is
         // ProcessInfo.hostName, which is routinely someone's real name, and
         // this text gets pasted into chats.

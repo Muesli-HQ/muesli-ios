@@ -258,7 +258,13 @@ struct SharedStore: Sendable {
     }
 
     /// Row counts for diagnostics, without decoding any payloads.
-    func syncRecordCounts() throws -> (results: Int, sessions: Int, pendingUpload: Int) {
+    ///
+    /// The dirty counts are raw flag counts, not the uploader's queue.
+    /// `textRecordsNeedingSync` applies further rules -- kind, lifecycle state,
+    /// and dirty transcripts belonging to clean sessions -- so these answer
+    /// "is anything marked for upload at all", which is the question a
+    /// diagnostic needs, and deliberately not "how many will be sent".
+    func syncRecordCounts() throws -> (results: Int, sessions: Int, dirtyResults: Int, dirtySessions: Int) {
         try database().syncRecordCounts()
     }
 
@@ -863,7 +869,7 @@ private struct SharedStoreDatabase {
     /// Counts only. The diagnostics summary runs on the main actor, and
     /// decoding a full history there is exactly the kind of harm a diagnostic
     /// must not do.
-    func syncRecordCounts() throws -> (results: Int, sessions: Int, pendingUpload: Int) {
+    func syncRecordCounts() throws -> (results: Int, sessions: Int, dirtyResults: Int, dirtySessions: Int) {
         try withDatabase { db in
             func count(_ sql: String) throws -> Int {
                 try queryRows(sql, db: db) { _ in } read: { statement in
@@ -879,7 +885,7 @@ private struct SharedStoreDatabase {
             let pendingSessions = try count(
                 "SELECT COUNT(*) FROM recording_sessions WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL"
             )
-            return (results, sessions, pendingDictations + pendingSessions)
+            return (results, sessions, pendingDictations, pendingSessions)
         }
     }
 

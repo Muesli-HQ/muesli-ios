@@ -259,7 +259,7 @@ final class ICloudTextSyncEngine {
         // decoded in full just to be counted. It also means the pending figure
         // is exact rather than capped by a fetch limit.
         let counts = try? store.syncRecordCounts()
-        let pending = counts.map { String($0.pendingUpload) }
+        let dirty = counts.map { "\($0.dirtyResults)/\($0.dirtySessions)" }
         let sessions = counts.map(\.sessions)
         let results = counts.map(\.results)
         // Presence and platform only. The stored device name is
@@ -272,7 +272,7 @@ final class ICloudTextSyncEngine {
             "sync: enabled=\(enabled)",
             "migrated=\(migrated)",
             "changeToken=\(hasToken ? "present" : "none")",
-            "pendingUpload=\(pending ?? "?")",
+            "dirtyNotes/dirtySessions=\(dirty ?? "?")",
             "localNotes=\(results.map(String.init) ?? "?")",
             "localSessions=\(sessions.map(String.init) ?? "?")",
             "linkedDevice=\(hasRemoteDevice ? (remotePlatform ?? "yes") : "none")"

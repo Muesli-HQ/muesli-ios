@@ -297,11 +297,26 @@ final class ICloudTextSyncEngine {
 
         let dirtyRecords = try store.textRecordsNeedingSync()
         let savedRecords = try await save(records: dirtyRecords.map(Self.syncZoneCloudRecord(from:)))
+
+        // The kind comes from the record that was sent, not from the one
+        // CloudKit returns. Uploads use savePolicy .changedKeys, and the
+        // response is not guaranteed to carry every field: reading "kind" back
+        // off it could yield nil, which skipped the acknowledgement entirely.
+        // The row then stayed dirty and re-uploaded on every subsequent sync,
+        // forever, without surfacing an error -- sync appeared to succeed while
+        // never making progress.
+        let kindsByRecordName = Dictionary(
+            dirtyRecords.map { ($0.id, $0.kind) },
+            uniquingKeysWith: { first, _ in first }
+        )
         for savedRecord in savedRecords {
-            guard let kind = Self.kind(from: savedRecord) else { continue }
+            let recordName = savedRecord.recordID.recordName
+            guard let kind = kindsByRecordName[recordName] ?? Self.kind(from: savedRecord) else {
+                continue
+            }
             try store.markTextRecordSynced(
                 kind: kind,
-                recordName: savedRecord.recordID.recordName,
+                recordName: recordName,
                 changeTag: savedRecord.recordChangeTag
             )
         }

@@ -170,7 +170,15 @@ final class DictationCoordinator {
     private var persistentKeyboardSessionRequestIDs = Set<UUID>()
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncDebounceTask: Task<Void, Never>?
+    private var iCloudRemoteRefreshTask: Task<Void, Never>?
     private var pendingICloudSyncReason: String?
+    private var iCloudSyncGeneration = 0
+    @ObservationIgnored private lazy var iCloudSyncEngine = MuesliCKSyncEngine(
+        store: store,
+        onRemoteChanges: { @MainActor [weak self] in
+            self?.scheduleHistoryRefreshAfterRemoteChanges()
+        }
+    )
     private var onboardingModelReadyCueModel: LocalTranscriptionModel?
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
     private var meetingChunkTranscriptions: [MeetingChunkTranscription] = []
@@ -2686,13 +2694,14 @@ final class DictationCoordinator {
         }
         isICloudSyncInProgress = true
         iCloudSyncStatusText = "Syncing through private iCloud..."
+        let syncGeneration = iCloudSyncGeneration
         iCloudSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let result = try await ICloudTextSyncEngine().sync(
-                    store: self.store,
+                let result = try await self.iCloudSyncEngine.sync(
                     forceBridgeDeviceRefresh: self.shouldForceBridgeDeviceRefresh(for: reason)
                 )
+                guard syncGeneration == self.iCloudSyncGeneration else { return }
                 self.iCloudSyncTask = nil
                 self.isICloudSyncInProgress = false
                 let remoteDeviceName = MuesliBridgeDeviceIdentity.remoteDeviceDisplayName
@@ -2722,6 +2731,7 @@ final class DictationCoordinator {
                 }
                 self.runPendingICloudSyncIfNeeded()
             } catch {
+                guard syncGeneration == self.iCloudSyncGeneration else { return }
                 self.iCloudSyncTask = nil
                 self.isICloudSyncInProgress = false
                 self.iCloudSyncStatusText = "Sync failed: \(error.localizedDescription)"
@@ -2744,6 +2754,31 @@ final class DictationCoordinator {
                 }
                 self.runPendingICloudSyncIfNeeded()
             }
+        }
+    }
+
+    func disableICloudTextSync() {
+        iCloudSyncGeneration += 1
+        iCloudSyncDebounceTask?.cancel()
+        iCloudSyncDebounceTask = nil
+        iCloudRemoteRefreshTask?.cancel()
+        iCloudRemoteRefreshTask = nil
+        iCloudSyncTask?.cancel()
+        iCloudSyncTask = nil
+        pendingICloudSyncReason = nil
+        isICloudSyncInProgress = false
+        iCloudSyncStatusText = "iCloud sync is off."
+        Task { await iCloudSyncEngine.cancel() }
+    }
+
+    private func scheduleHistoryRefreshAfterRemoteChanges() {
+        guard UIApplication.shared.applicationState == .active else { return }
+        iCloudRemoteRefreshTask?.cancel()
+        iCloudRemoteRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            self?.iCloudRemoteRefreshTask = nil
+            self?.refreshHistory()
         }
     }
 

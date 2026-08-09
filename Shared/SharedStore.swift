@@ -257,6 +257,14 @@ struct SharedStore: Sendable {
         try database().textRecordsNeedingSync(limit: limit)
     }
 
+    func hasTextRecordsNeedingSync() throws -> Bool {
+        try database().hasTextRecordsNeedingSync()
+    }
+
+    func textRecordsForSync(recordNames: [String]) throws -> [String: SyncTextRecord] {
+        try database().textRecordsForSync(recordNames: recordNames)
+    }
+
     /// Row counts for diagnostics, without decoding any payloads.
     ///
     /// The dirty counts are raw flag counts, not the uploader's queue.
@@ -272,12 +280,63 @@ struct SharedStore: Sendable {
         try database().textRecordsForSyncMigration(limit: limit)
     }
 
-    func upsertSyncedTextRecord(_ record: SyncTextRecord) throws {
+    @discardableResult
+    func upsertSyncedTextRecord(_ record: SyncTextRecord) throws -> Bool {
         try database().upsertSyncedTextRecord(record)
     }
 
-    func markTextRecordSynced(kind: SyncTextRecordKind, recordName: String, changeTag: String?) throws {
-        try database().markTextRecordSynced(kind: kind, recordName: recordName, changeTag: changeTag)
+    @discardableResult
+    func upsertSyncedTextRecords(_ records: [SyncTextRecord]) throws -> [SyncTextRecord] {
+        try database().upsertSyncedTextRecords(records)
+    }
+
+    @discardableResult
+    func markTextRecordSynced(
+        kind: SyncTextRecordKind,
+        recordName: String,
+        changeTag: String?,
+        systemFields: Data? = nil,
+        recordUpdatedAt: Date,
+        syncedAt: Date = Date()
+    ) throws -> Bool {
+        try database().markTextRecordSynced(
+            kind: kind,
+            recordName: recordName,
+            changeTag: changeTag,
+            systemFields: systemFields,
+            recordUpdatedAt: recordUpdatedAt,
+            syncedAt: syncedAt
+        )
+    }
+
+    func updateTextRecordCloudMetadata(
+        kind: SyncTextRecordKind,
+        recordName: String,
+        changeTag: String?,
+        systemFields: Data?
+    ) throws {
+        try database().updateTextRecordCloudMetadata(
+            kind: kind,
+            recordName: recordName,
+            changeTag: changeTag,
+            systemFields: systemFields
+        )
+    }
+
+    func resetTextRecordCloudMetadataForAccountChange() throws {
+        try database().resetTextRecordCloudMetadataForAccountChange()
+    }
+
+    func cloudSyncStateData(forKey key: String) throws -> Data? {
+        try database().cloudSyncStateData(forKey: key)
+    }
+
+    func saveCloudSyncStateData(_ data: Data, forKey key: String) throws {
+        try database().saveCloudSyncStateData(data, forKey: key)
+    }
+
+    func clearCloudSyncStateData(forKey key: String) throws {
+        try database().clearCloudSyncStateData(forKey: key)
     }
 
     func newAudioFileURL(sessionID: UUID) throws -> URL {
@@ -485,7 +544,7 @@ private enum SharedStoreDatabaseError: Error, LocalizedError {
 
 private struct SharedStoreDatabase {
     private static let databaseFileName = "Muesli.sqlite"
-    private static let schemaVersion = 4
+    private static let schemaVersion = 5
 
     private static let initializationLock = NSLock()
     nonisolated(unsafe) private static var initializedDatabasePaths: Set<String> = []
@@ -889,13 +948,183 @@ private struct SharedStoreDatabase {
         }
     }
 
+    func hasTextRecordsNeedingSync() throws -> Bool {
+        try withDatabase { db in
+            let sql = """
+            SELECT 1
+            FROM result_history
+            WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL
+            UNION ALL
+            SELECT 1
+            FROM recording_sessions s
+            LEFT JOIN transcripts t ON t.session_id = s.id
+            WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
+              AND s.cloud_record_name IS NOT NULL
+              AND s.kind = ?
+              AND (s.deleted_at IS NOT NULL OR s.phase IN ('completed', 'failed', 'cancelled'))
+            LIMIT 1
+            """
+            return try queryRows(sql, db: db) { statement in
+                try bind(RecordingSessionKind.meeting.rawValue, to: statement, at: 1)
+            } read: { _ in true }.first ?? false
+        }
+    }
+
+    func textRecordsForSync(recordNames: [String]) throws -> [String: SyncTextRecord] {
+        let recordNames = Array(Set(recordNames.filter { !$0.isEmpty }))
+        guard !recordNames.isEmpty else { return [:] }
+
+        return try withDatabase { db in
+            let placeholders = Array(repeating: "?", count: recordNames.count).joined(separator: ", ")
+            var records: [String: SyncTextRecord] = [:]
+            let bindRecordNames: (OpaquePointer) throws -> Void = { statement in
+                for (offset, recordName) in recordNames.enumerated() {
+                    try bind(recordName, to: statement, at: Int32(offset + 1))
+                }
+            }
+
+            let dictations = try queryRows(
+                """
+                SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
+                       deleted_at, cloud_change_tag, cloud_system_fields, payload
+                FROM result_history
+                WHERE cloud_record_name IN (\(placeholders))
+                """,
+                db: db,
+                bindValues: bindRecordNames,
+                read: { statement in
+                    let text = sqliteColumnString(statement, 1) ?? ""
+                    let payload = sqliteColumnData(statement, 8)
+                    let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
+                    return SyncTextRecord(
+                        id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
+                        kind: .dictation,
+                        title: nil,
+                        text: text,
+                        speakerTranscript: nil,
+                        summaryText: nil,
+                        manualNotes: nil,
+                        source: Self.syncPlatformSource(result?.source),
+                        localSource: Self.syncSource(result?.source),
+                        engineIdentifier: sqliteColumnString(statement, 2),
+                        createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
+                        updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
+                        startedAt: nil,
+                        endedAt: nil,
+                        durationSeconds: 0,
+                        wordCount: Self.wordCount(text),
+                        isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
+                        cloudChangeTag: sqliteColumnString(statement, 6),
+                        cloudSystemFields: sqliteColumnData(statement, 7)
+                    )
+                }
+            )
+            for record in dictations { records[record.id] = record }
+
+            let meetings = try queryRows(
+                """
+                SELECT s.cloud_record_name, s.title, s.created_at, s.started_at, s.ended_at,
+                       s.engine_identifier, s.updated_at, s.deleted_at, s.cloud_change_tag,
+                       s.payload, t.text, t.speaker_transcript, t.summary_text, t.updated_at,
+                       t.deleted_at, s.manual_notes, s.manual_notes_updated_at, s.cloud_system_fields
+                FROM recording_sessions s
+                LEFT JOIN transcripts t ON t.session_id = s.id
+                WHERE s.cloud_record_name IN (\(placeholders))
+                  AND s.kind = '\(RecordingSessionKind.meeting.rawValue)'
+                """,
+                db: db,
+                bindValues: bindRecordNames,
+                read: { statement in
+                    let started = Self.optionalDate(statement, 3)
+                    let ended = Self.optionalDate(statement, 4)
+                    let text = sqliteColumnString(statement, 10) ?? ""
+                    let summary = sqliteColumnString(statement, 12)
+                    let manualNotesUpdatedAt = sqlite3_column_double(statement, 16)
+                    let updated = max(
+                        sqlite3_column_double(statement, 6),
+                        sqlite3_column_double(statement, 13),
+                        manualNotesUpdatedAt
+                    )
+                    let payload = sqliteColumnData(statement, 9)
+                    let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
+                    let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, 15)
+                    return SyncTextRecord(
+                        id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
+                        kind: .meeting,
+                        title: sqliteColumnString(statement, 1),
+                        text: text,
+                        speakerTranscript: sqliteColumnString(statement, 11),
+                        summaryText: summary,
+                        manualNotes: manualNotes,
+                        source: Self.syncPlatformSource(session?.source),
+                        localSource: Self.syncSource(session?.source, fallback: "meeting"),
+                        engineIdentifier: sqliteColumnString(statement, 5),
+                        createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 2)),
+                        updatedAt: Date(timeIntervalSince1970: updated),
+                        manualNotesUpdatedAt: manualNotesUpdatedAt > 0 ? Date(timeIntervalSince1970: manualNotesUpdatedAt) : nil,
+                        startedAt: started,
+                        endedAt: ended,
+                        durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
+                        wordCount: Self.wordCount(text + " " + (summary ?? "") + " " + (manualNotes ?? "")),
+                        isDeleted: sqlite3_column_type(statement, 7) != SQLITE_NULL
+                            || sqlite3_column_type(statement, 14) != SQLITE_NULL,
+                        cloudChangeTag: sqliteColumnString(statement, 8),
+                        cloudSystemFields: sqliteColumnData(statement, 17)
+                    )
+                }
+            )
+            for record in meetings { records[record.id] = record }
+            return records
+        }
+    }
+
+    func cloudSyncStateData(forKey key: String) throws -> Data? {
+        try withDatabase { db in
+            try queryRows(
+                "SELECT value FROM cloud_sync_state WHERE key = ? LIMIT 1",
+                db: db
+            ) { statement in
+                try bind(key, to: statement, at: 1)
+            } read: { statement in
+                sqliteColumnData(statement, 0)
+            }.first ?? nil
+        }
+    }
+
+    func saveCloudSyncStateData(_ data: Data, forKey key: String) throws {
+        try withDatabase { db in
+            try execute(
+                """
+                INSERT INTO cloud_sync_state (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                db: db
+            ) { statement in
+                try bind(key, to: statement, at: 1)
+                try bind(data, to: statement, at: 2)
+                try bind(Date().timeIntervalSince1970, to: statement, at: 3)
+            }
+        }
+    }
+
+    func clearCloudSyncStateData(forKey key: String) throws {
+        try withDatabase { db in
+            try execute("DELETE FROM cloud_sync_state WHERE key = ?", db: db) { statement in
+                try bind(key, to: statement, at: 1)
+            }
+        }
+    }
+
     func textRecordsNeedingSync(limit: Int = 200) throws -> [SyncTextRecord] {
         try withDatabase { db in
             var records: [SyncTextRecord] = []
             let dictationRows = try queryRows(
                 """
                 SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
-                       deleted_at, session_id, cloud_change_tag, payload
+                       deleted_at, session_id, cloud_change_tag, cloud_system_fields, payload
                 FROM result_history
                 WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL
                 ORDER BY updated_at DESC
@@ -905,7 +1134,7 @@ private struct SharedStoreDatabase {
             ) { statement in
                 try bind(limit, to: statement, at: 1)
             } read: { statement in
-                let payload = sqliteColumnData(statement, 8)
+                let payload = sqliteColumnData(statement, 9)
                 let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
                 return SyncTextRecord(
                     id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
@@ -925,7 +1154,8 @@ private struct SharedStoreDatabase {
                     durationSeconds: 0,
                     wordCount: Self.wordCount(sqliteColumnString(statement, 1) ?? ""),
                     isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
-                    cloudChangeTag: sqliteColumnString(statement, 7)
+                    cloudChangeTag: sqliteColumnString(statement, 7),
+                    cloudSystemFields: sqliteColumnData(statement, 8)
                 )
             }
             records.append(contentsOf: dictationRows)
@@ -940,7 +1170,7 @@ private struct SharedStoreDatabase {
                        s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
                        t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
                        t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
-                       s.manual_notes_updated_at
+                       s.manual_notes_updated_at, s.cloud_system_fields
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
@@ -983,7 +1213,8 @@ private struct SharedStoreDatabase {
                     durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
                     wordCount: Self.wordCount(text + " " + (summary ?? "") + " " + (manualNotes ?? "")),
                     isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 20) != SQLITE_NULL,
-                    cloudChangeTag: sqliteColumnString(statement, 12)
+                    cloudChangeTag: sqliteColumnString(statement, 12),
+                    cloudSystemFields: sqliteColumnData(statement, 23)
                 )
             }
             records.append(contentsOf: meetingRows)
@@ -997,7 +1228,7 @@ private struct SharedStoreDatabase {
             let dictationRows = try queryRows(
                 """
                 SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
-                       deleted_at, session_id, cloud_change_tag, payload
+                       deleted_at, session_id, cloud_change_tag, cloud_system_fields, payload
                 FROM result_history
                 WHERE cloud_record_name IS NOT NULL
                 ORDER BY updated_at DESC
@@ -1007,7 +1238,7 @@ private struct SharedStoreDatabase {
             ) { statement in
                 try bind(limit, to: statement, at: 1)
             } read: { statement in
-                let payload = sqliteColumnData(statement, 8)
+                let payload = sqliteColumnData(statement, 9)
                 let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
                 return SyncTextRecord(
                     id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
@@ -1027,7 +1258,8 @@ private struct SharedStoreDatabase {
                     durationSeconds: 0,
                     wordCount: Self.wordCount(sqliteColumnString(statement, 1) ?? ""),
                     isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
-                    cloudChangeTag: sqliteColumnString(statement, 7)
+                    cloudChangeTag: sqliteColumnString(statement, 7),
+                    cloudSystemFields: sqliteColumnData(statement, 8)
                 )
             }
             records.append(contentsOf: dictationRows)
@@ -1042,7 +1274,7 @@ private struct SharedStoreDatabase {
                        s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
                        t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
                        t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
-                       s.manual_notes_updated_at
+                       s.manual_notes_updated_at, s.cloud_system_fields
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE s.cloud_record_name IS NOT NULL
@@ -1083,7 +1315,8 @@ private struct SharedStoreDatabase {
                     durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
                     wordCount: Self.wordCount(text + " " + (summary ?? "") + " " + (manualNotes ?? "")),
                     isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 20) != SQLITE_NULL,
-                    cloudChangeTag: sqliteColumnString(statement, 12)
+                    cloudChangeTag: sqliteColumnString(statement, 12),
+                    cloudSystemFields: sqliteColumnData(statement, 23)
                 )
             }
             records.append(contentsOf: meetingRows)
@@ -1091,47 +1324,184 @@ private struct SharedStoreDatabase {
         }
     }
 
-    func upsertSyncedTextRecord(_ record: SyncTextRecord) throws {
-        try withDatabase { db in
-            switch record.kind {
-            case .dictation:
-                try upsertSyncedDictation(record, db: db)
-            case .meeting:
-                try upsertSyncedMeeting(record, db: db)
+    @discardableResult
+    func upsertSyncedTextRecord(_ record: SyncTextRecord) throws -> Bool {
+        try !upsertSyncedTextRecords([record]).isEmpty
+    }
+
+    @discardableResult
+    func upsertSyncedTextRecords(_ records: [SyncTextRecord]) throws -> [SyncTextRecord] {
+        guard !records.isEmpty else { return [] }
+        return try withDatabase { db in
+            var applied: [SyncTextRecord] = []
+            try transaction(db: db) {
+                for record in records {
+                    let didApply: Bool
+                    switch record.kind {
+                    case .dictation:
+                        didApply = try upsertSyncedDictation(record, db: db)
+                    case .meeting:
+                        didApply = try upsertSyncedMeeting(record, db: db)
+                    }
+                    if didApply { applied.append(record) }
+                }
             }
+            return applied
         }
     }
 
-    func markTextRecordSynced(kind: SyncTextRecordKind, recordName: String, changeTag: String?) throws {
+    @discardableResult
+    func markTextRecordSynced(
+        kind: SyncTextRecordKind,
+        recordName: String,
+        changeTag: String?,
+        systemFields: Data?,
+        recordUpdatedAt: Date,
+        syncedAt: Date
+    ) throws -> Bool {
         try withDatabase { db in
-            let now = Date().timeIntervalSince1970
+            let uploadedAt = recordUpdatedAt.timeIntervalSince1970
+            let now = syncedAt.timeIntervalSince1970
+            var didAcknowledge = false
+            try transaction(db: db) {
+                switch kind {
+                case .dictation:
+                    try execute(
+                        """
+                        UPDATE result_history
+                        SET cloud_change_tag = ?, cloud_system_fields = ?, last_synced_at = ?, sync_dirty = 0
+                        WHERE cloud_record_name = ? AND updated_at <= ?
+                        """,
+                        db: db
+                    ) { statement in
+                        try bind(changeTag, to: statement, at: 1)
+                        try bind(systemFields, to: statement, at: 2)
+                        try bind(now, to: statement, at: 3)
+                        try bind(recordName, to: statement, at: 4)
+                        try bind(uploadedAt, to: statement, at: 5)
+                    }
+                    didAcknowledge = sqlite3_changes(db) > 0
+
+                case .meeting:
+                    let sessionID = try queryRows(
+                        """
+                        SELECT s.id
+                        FROM recording_sessions s
+                        WHERE s.cloud_record_name = ?
+                          AND s.updated_at <= ?
+                          AND s.manual_notes_updated_at <= ?
+                          AND NOT EXISTS (
+                              SELECT 1 FROM transcripts t
+                              WHERE t.session_id = s.id AND t.updated_at > ?
+                          )
+                        LIMIT 1
+                        """,
+                        db: db
+                    ) { statement in
+                        try bind(recordName, to: statement, at: 1)
+                        try bind(uploadedAt, to: statement, at: 2)
+                        try bind(uploadedAt, to: statement, at: 3)
+                        try bind(uploadedAt, to: statement, at: 4)
+                    } read: { statement in
+                        sqliteColumnString(statement, 0)
+                    }.first ?? nil
+                    guard let sessionID else { return }
+
+                    try execute(
+                        """
+                        UPDATE recording_sessions
+                        SET cloud_change_tag = ?, cloud_system_fields = ?, last_synced_at = ?, sync_dirty = 0
+                        WHERE id = ?
+                        """,
+                        db: db
+                    ) { statement in
+                        try bind(changeTag, to: statement, at: 1)
+                        try bind(systemFields, to: statement, at: 2)
+                        try bind(now, to: statement, at: 3)
+                        try bind(sessionID, to: statement, at: 4)
+                    }
+                    try execute(
+                        """
+                        UPDATE transcripts
+                        SET cloud_change_tag = ?, last_synced_at = ?, sync_dirty = 0
+                        WHERE session_id = ?
+                        """,
+                        db: db
+                    ) { statement in
+                        try bind(changeTag, to: statement, at: 1)
+                        try bind(now, to: statement, at: 2)
+                        try bind(sessionID, to: statement, at: 3)
+                    }
+                    didAcknowledge = true
+                }
+            }
+            return didAcknowledge
+        }
+    }
+
+    func updateTextRecordCloudMetadata(
+        kind: SyncTextRecordKind,
+        recordName: String,
+        changeTag: String?,
+        systemFields: Data?
+    ) throws {
+        try withDatabase { db in
             let table = kind == .dictation ? "result_history" : "recording_sessions"
             try execute(
                 """
                 UPDATE \(table)
-                SET cloud_change_tag = ?, last_synced_at = ?, sync_dirty = 0
+                SET cloud_change_tag = ?, cloud_system_fields = ?
                 WHERE cloud_record_name = ?
                 """,
                 db: db
             ) { statement in
                 try bind(changeTag, to: statement, at: 1)
-                try bind(now, to: statement, at: 2)
+                try bind(systemFields, to: statement, at: 2)
                 try bind(recordName, to: statement, at: 3)
             }
-            if kind == .meeting {
-                try execute(
+        }
+    }
+
+    func resetTextRecordCloudMetadataForAccountChange() throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                try exec(
+                    """
+                    UPDATE result_history
+                    SET cloud_change_tag = NULL,
+                        cloud_system_fields = NULL,
+                        last_synced_at = NULL,
+                        sync_dirty = 1
+                    WHERE cloud_record_name IS NOT NULL
+                    """,
+                    db: db
+                )
+                try exec(
+                    """
+                    UPDATE recording_sessions
+                    SET cloud_change_tag = NULL,
+                        cloud_system_fields = NULL,
+                        last_synced_at = NULL,
+                        sync_dirty = 1
+                    WHERE cloud_record_name IS NOT NULL
+                      AND (deleted_at IS NOT NULL OR phase IN ('completed', 'failed', 'cancelled'))
+                    """,
+                    db: db
+                )
+                try exec(
                     """
                     UPDATE transcripts
-                    SET last_synced_at = ?, sync_dirty = 0
+                    SET cloud_change_tag = NULL,
+                        last_synced_at = NULL,
+                        sync_dirty = 1
                     WHERE session_id IN (
-                        SELECT id FROM recording_sessions WHERE cloud_record_name = ?
+                        SELECT id FROM recording_sessions
+                        WHERE cloud_record_name IS NOT NULL
+                          AND (deleted_at IS NOT NULL OR phase IN ('completed', 'failed', 'cancelled'))
                     )
                     """,
                     db: db
-                ) { statement in
-                    try bind(now, to: statement, at: 1)
-                    try bind(recordName, to: statement, at: 2)
-                }
+                )
             }
         }
     }
@@ -1188,6 +1558,7 @@ private struct SharedStoreDatabase {
             ("result_history", "deleted_at", "ALTER TABLE result_history ADD COLUMN deleted_at REAL"),
             ("result_history", "cloud_record_name", "ALTER TABLE result_history ADD COLUMN cloud_record_name TEXT"),
             ("result_history", "cloud_change_tag", "ALTER TABLE result_history ADD COLUMN cloud_change_tag TEXT"),
+            ("result_history", "cloud_system_fields", "ALTER TABLE result_history ADD COLUMN cloud_system_fields BLOB"),
             ("result_history", "last_synced_at", "ALTER TABLE result_history ADD COLUMN last_synced_at REAL"),
             ("result_history", "sync_dirty", "ALTER TABLE result_history ADD COLUMN sync_dirty INTEGER NOT NULL DEFAULT 1"),
 
@@ -1205,6 +1576,7 @@ private struct SharedStoreDatabase {
             ("recording_sessions", "deleted_at", "ALTER TABLE recording_sessions ADD COLUMN deleted_at REAL"),
             ("recording_sessions", "cloud_record_name", "ALTER TABLE recording_sessions ADD COLUMN cloud_record_name TEXT"),
             ("recording_sessions", "cloud_change_tag", "ALTER TABLE recording_sessions ADD COLUMN cloud_change_tag TEXT"),
+            ("recording_sessions", "cloud_system_fields", "ALTER TABLE recording_sessions ADD COLUMN cloud_system_fields BLOB"),
             ("recording_sessions", "last_synced_at", "ALTER TABLE recording_sessions ADD COLUMN last_synced_at REAL"),
             ("recording_sessions", "sync_dirty", "ALTER TABLE recording_sessions ADD COLUMN sync_dirty INTEGER NOT NULL DEFAULT 1"),
 
@@ -1783,10 +2155,17 @@ private struct SharedStoreDatabase {
         }
     }
 
-    private func upsertSyncedDictation(_ record: SyncTextRecord, db: OpaquePointer) throws {
-        if let localUpdatedAt = try localUpdatedAt(table: "result_history", recordName: record.id, db: db),
-           localUpdatedAt > record.updatedAt.timeIntervalSince1970 {
-            return
+    private func upsertSyncedDictation(_ record: SyncTextRecord, db: OpaquePointer) throws -> Bool {
+        if let local = try localSyncMetadata(
+            table: "result_history",
+            recordName: record.id,
+            db: db
+        ) {
+            let remoteUpdatedAt = record.updatedAt.timeIntervalSince1970
+            if local.updatedAt > remoteUpdatedAt
+                || (local.updatedAt == remoteUpdatedAt && local.isDirty) {
+                return false
+            }
         }
 
         let existingLink = try queryRows(
@@ -1818,9 +2197,10 @@ private struct SharedStoreDatabase {
             """
             INSERT INTO result_history (
                 id, request_id, session_id, text, engine_identifier, created_at, updated_at,
-                deleted_at, cloud_record_name, cloud_change_tag, last_synced_at, sync_dirty, payload
+                deleted_at, cloud_record_name, cloud_change_tag, cloud_system_fields,
+                last_synced_at, sync_dirty, payload
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
             ON CONFLICT(cloud_record_name) DO UPDATE SET
                 id = excluded.id,
                 request_id = excluded.request_id,
@@ -1832,6 +2212,7 @@ private struct SharedStoreDatabase {
                 deleted_at = excluded.deleted_at,
                 cloud_record_name = excluded.cloud_record_name,
                 cloud_change_tag = excluded.cloud_change_tag,
+                cloud_system_fields = excluded.cloud_system_fields,
                 last_synced_at = excluded.last_synced_at,
                 sync_dirty = 0,
                 payload = excluded.payload
@@ -1848,14 +2229,26 @@ private struct SharedStoreDatabase {
             try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 8)
             try bind(record.id, to: statement, at: 9)
             try bind(record.cloudChangeTag, to: statement, at: 10)
-            try bind(Date().timeIntervalSince1970, to: statement, at: 11)
-            try bind(try encoder.encode(result), to: statement, at: 12)
+            try bind(record.cloudSystemFields, to: statement, at: 11)
+            try bind(Date().timeIntervalSince1970, to: statement, at: 12)
+            try bind(try encoder.encode(result), to: statement, at: 13)
         }
+        return true
     }
 
-    private func upsertSyncedMeeting(_ record: SyncTextRecord, db: OpaquePointer) throws {
+    private func upsertSyncedMeeting(_ record: SyncTextRecord, db: OpaquePointer) throws -> Bool {
         let existingSession = try queryRows(
-            "SELECT id, manual_notes, manual_notes_updated_at, updated_at, payload FROM recording_sessions WHERE cloud_record_name = ? LIMIT 1",
+            """
+            SELECT s.id, s.manual_notes, s.manual_notes_updated_at,
+                   MAX(s.updated_at, s.manual_notes_updated_at, COALESCE(MAX(t.updated_at), 0)),
+                   s.payload,
+                   MAX(s.sync_dirty, COALESCE(MAX(t.sync_dirty), 0))
+            FROM recording_sessions s
+            LEFT JOIN transcripts t ON t.session_id = s.id
+            WHERE s.cloud_record_name = ?
+            GROUP BY s.id
+            LIMIT 1
+            """,
             db: db
         ) { statement in
             try bind(record.id, to: statement, at: 1)
@@ -1865,7 +2258,8 @@ private struct SharedStoreDatabase {
                 manualNotes: sqliteColumnString(statement, 1),
                 manualNotesUpdatedAt: sqlite3_column_double(statement, 2),
                 updatedAt: sqlite3_column_double(statement, 3),
-                payload: sqliteColumnData(statement, 4)
+                payload: sqliteColumnData(statement, 4),
+                isDirty: sqlite3_column_int(statement, 5) != 0
             )
         }.first ?? nil
         let existingManualNotesUpdatedAt = existingSession?.manualNotesUpdatedAt ?? 0
@@ -1882,8 +2276,11 @@ private struct SharedStoreDatabase {
             .map { [.recording, .transcriptionQueued, .transcribing].contains($0.phase) }
             ?? false
 
+        let remoteUpdatedAt = record.updatedAt.timeIntervalSince1970
         if let existingSession,
-           existingSessionIsLocallyActive || existingSession.updatedAt > record.updatedAt.timeIntervalSince1970 {
+           existingSessionIsLocallyActive
+            || existingSession.updatedAt > remoteUpdatedAt
+            || (existingSession.updatedAt == remoteUpdatedAt && existingSession.isDirty) {
             if shouldUseIncomingManualNotes, let existingID = existingSession.id {
                 let encodedPayload: Data?
                 if let payload = existingSession.payload,
@@ -1922,7 +2319,7 @@ private struct SharedStoreDatabase {
                     }
                 }
             }
-            return
+            return false
         }
 
         let sessionID = existingSession?.id.flatMap(UUID.init(uuidString:)) ?? UUID(uuidString: record.id) ?? UUID()
@@ -1964,10 +2361,10 @@ private struct SharedStoreDatabase {
             INSERT INTO recording_sessions (
                 id, request_id, kind, title, phase, created_at, started_at, ended_at,
                 audio_file_name, keeps_audio_recording, transcript_id, engine_identifier,
-                manual_notes, manual_notes_updated_at, error_message, updated_at, deleted_at, cloud_record_name, cloud_change_tag,
-                last_synced_at, sync_dirty, payload
+                manual_notes, manual_notes_updated_at, error_message, updated_at, deleted_at,
+                cloud_record_name, cloud_change_tag, cloud_system_fields, last_synced_at, sync_dirty, payload
             )
-            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0, ?)
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 phase = excluded.phase,
@@ -1983,6 +2380,7 @@ private struct SharedStoreDatabase {
                 deleted_at = excluded.deleted_at,
                 cloud_record_name = excluded.cloud_record_name,
                 cloud_change_tag = excluded.cloud_change_tag,
+                cloud_system_fields = excluded.cloud_system_fields,
                 last_synced_at = excluded.last_synced_at,
                 sync_dirty = 0,
                 payload = excluded.payload
@@ -2004,8 +2402,9 @@ private struct SharedStoreDatabase {
             try bind(record.isDeleted ? record.updatedAt.timeIntervalSince1970 : nil, to: statement, at: 13)
             try bind(record.id, to: statement, at: 14)
             try bind(record.cloudChangeTag, to: statement, at: 15)
-            try bind(Date().timeIntervalSince1970, to: statement, at: 16)
-            try bind(try encoder.encode(sessionWithManualNotes), to: statement, at: 17)
+            try bind(record.cloudSystemFields, to: statement, at: 16)
+            try bind(Date().timeIntervalSince1970, to: statement, at: 17)
+            try bind(try encoder.encode(sessionWithManualNotes), to: statement, at: 18)
         }
 
         try execute("DELETE FROM transcripts WHERE session_id = ?", db: db) { statement in
@@ -2028,16 +2427,24 @@ private struct SharedStoreDatabase {
             try bind(Date().timeIntervalSince1970, to: statement, at: 5)
             try bind(sessionID.uuidString, to: statement, at: 6)
         }
+        return true
     }
 
-    private func localUpdatedAt(table: String, recordName: String, db: OpaquePointer) throws -> Double? {
+    private func localSyncMetadata(
+        table: String,
+        recordName: String,
+        db: OpaquePointer
+    ) throws -> (updatedAt: Double, isDirty: Bool)? {
         try queryRows(
-            "SELECT updated_at FROM \(table) WHERE cloud_record_name = ? LIMIT 1",
+            "SELECT updated_at, sync_dirty FROM \(table) WHERE cloud_record_name = ? LIMIT 1",
             db: db
         ) { statement in
             try bind(recordName, to: statement, at: 1)
         } read: { statement in
-            sqlite3_column_double(statement, 0)
+            (
+                updatedAt: sqlite3_column_double(statement, 0),
+                isDirty: sqlite3_column_int(statement, 1) != 0
+            )
         }.first ?? nil
     }
 
@@ -2242,6 +2649,16 @@ private struct SharedStoreDatabase {
         }
     }
 
+    private func bind(_ data: Data?, to statement: OpaquePointer, at index: Int32) throws {
+        guard let data else {
+            guard sqlite3_bind_null(statement, index) == SQLITE_OK else {
+                throw SharedStoreDatabaseError.bindFailed("optional blob at index \(index)")
+            }
+            return
+        }
+        try bind(data, to: statement, at: index)
+    }
+
     private func sqlite3ErrorMessage(_ db: OpaquePointer) -> String {
         sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown SQLite error"
     }
@@ -2321,6 +2738,7 @@ private struct SharedStoreDatabase {
         deleted_at REAL,
         cloud_record_name TEXT,
         cloud_change_tag TEXT,
+        cloud_system_fields BLOB,
         last_synced_at REAL,
         sync_dirty INTEGER NOT NULL DEFAULT 1,
         payload BLOB NOT NULL
@@ -2347,6 +2765,7 @@ private struct SharedStoreDatabase {
         deleted_at REAL,
         cloud_record_name TEXT,
         cloud_change_tag TEXT,
+        cloud_system_fields BLOB,
         last_synced_at REAL,
         sync_dirty INTEGER NOT NULL DEFAULT 1,
         payload BLOB NOT NULL
@@ -2378,6 +2797,12 @@ private struct SharedStoreDatabase {
     );
     CREATE INDEX IF NOT EXISTS idx_transcripts_session_id ON transcripts(session_id);
     CREATE INDEX IF NOT EXISTS idx_transcripts_created_at ON transcripts(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS cloud_sync_state (
+        key TEXT PRIMARY KEY NOT NULL,
+        value BLOB NOT NULL,
+        updated_at REAL NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS custom_words (
         id TEXT PRIMARY KEY NOT NULL,

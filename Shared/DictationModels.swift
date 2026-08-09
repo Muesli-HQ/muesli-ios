@@ -121,6 +121,7 @@ struct SyncTextRecord: Codable, Sendable, Equatable, Identifiable {
     var wordCount: Int
     var isDeleted: Bool
     var cloudChangeTag: String?
+    var cloudSystemFields: Data? = nil
 }
 
 enum SyncOrigin: Sendable, Equatable {

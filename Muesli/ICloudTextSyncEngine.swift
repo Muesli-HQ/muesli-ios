@@ -207,10 +207,10 @@ enum MuesliBridgeDeviceIdentity {
 }
 
 
-final class ICloudTextSyncEngine {
+final class ICloudTextSyncEngine: @unchecked Sendable {
     static let containerIdentifier = "iCloud.com.mueslihq.muesli"
 
-    private enum Schema {
+    enum Schema {
         static let containerIdentifier = ICloudTextSyncEngine.containerIdentifier
         static let syncZoneName = "MuesliSyncZone"
         static let textRecordType = "MuesliTextRecord"
@@ -226,6 +226,13 @@ final class ICloudTextSyncEngine {
     private let database: CKDatabase
     private let changeTokenStore: ICloudTextChangeTokenStore
     private let defaults: UserDefaults
+
+    static var cloudSyncStateKeyComponent: String {
+        Bundle.main.bundleIdentifier?
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            .lowercased()
+            ?? "unspecified"
+    }
 
     init(
         container: CKContainer = CKContainer(identifier: Schema.containerIdentifier),
@@ -249,9 +256,7 @@ final class ICloudTextSyncEngine {
     static func diagnosticsSummary(store: SharedStore = SharedStore()) -> String {
         let defaults = UserDefaults.standard
         let migrated = defaults.bool(forKey: Schema.migratedDefaultZoneKey)
-        let hasToken = defaults.data(
-            forKey: UserDefaultsICloudTextChangeTokenStore.defaultKey
-        ) != nil
+        let hasEngineState = (try? store.cloudSyncStateData(forKey: MuesliCKSyncEngine.stateKey)) != nil
         let enabled = MuesliPreferences.iCloudSyncEnabled
 
         // Counted in SQL rather than by fetching rows: this runs on the main
@@ -271,7 +276,7 @@ final class ICloudTextSyncEngine {
         return [
             "sync: enabled=\(enabled)",
             "migrated=\(migrated)",
-            "changeToken=\(hasToken ? "present" : "none")",
+            "engineState=\(hasEngineState ? "present" : "none")",
             "dirtyNotes/dirtySessions=\(dirty ?? "?")",
             "localNotes=\(results.map(String.init) ?? "?")",
             "localSessions=\(sessions.map(String.init) ?? "?")",
@@ -283,7 +288,7 @@ final class ICloudTextSyncEngine {
         store: SharedStore = SharedStore(),
         forceBridgeDeviceRefresh: Bool = false
     ) async throws -> ICloudTextSyncResult {
-        try await ensureSyncZone()
+        _ = try await ensureSyncZone()
         await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
         try await migrateDefaultZoneIfNeeded(store: store)
 
@@ -296,27 +301,49 @@ final class ICloudTextSyncEngine {
         }
 
         let dirtyRecords = try store.textRecordsNeedingSync()
-        let savedRecords = try await save(records: dirtyRecords.map(Self.syncZoneCloudRecord(from:)))
+        let dirtyByRecordName = Dictionary(uniqueKeysWithValues: dirtyRecords.map { ($0.id, $0) })
+        let savedRecords = try await save(records: dirtyRecords.map {
+            Self.syncZoneCloudRecord(from: $0)
+        })
         for savedRecord in savedRecords {
-            guard let kind = Self.kind(from: savedRecord) else { continue }
+            guard let kind = Self.kind(from: savedRecord),
+                  let uploadedRecord = dirtyByRecordName[savedRecord.recordID.recordName]
+            else { continue }
             try store.markTextRecordSynced(
                 kind: kind,
                 recordName: savedRecord.recordID.recordName,
-                changeTag: savedRecord.recordChangeTag
+                changeTag: savedRecord.recordChangeTag,
+                recordUpdatedAt: uploadedRecord.updatedAt
             )
         }
 
         return ICloudTextSyncResult(uploaded: savedRecords.count, downloaded: downloaded)
     }
 
-    private func ensureSyncZone() async throws {
+    /// Transitional preflight retained during the CKSyncEngine migration.
+    /// Bridge discovery and the one-time default-zone import still use their
+    /// existing operations; custom-zone fetches and uploads belong to CKSyncEngine.
+    func prepareForCKSyncEngine(
+        store: SharedStore,
+        forceBridgeDeviceRefresh: Bool = false
+    ) async throws -> Bool {
+        let syncZoneWasRecreated = try await ensureSyncZone()
+        await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
+        try await migrateDefaultZoneIfNeeded(store: store)
+        return syncZoneWasRecreated
+    }
+
+    @discardableResult
+    func ensureSyncZone() async throws -> Bool {
         do {
             _ = try await fetchZone(id: Schema.syncZoneID)
+            return false
         } catch {
             guard Self.isSyncZoneMissing(error) else { throw error }
             _ = try await save(zone: CKRecordZone(zoneName: Schema.syncZoneName))
             changeTokenStore.clearToken()
             defaults.set(false, forKey: Schema.migratedDefaultZoneKey)
+            return true
         }
     }
 
@@ -418,7 +445,9 @@ final class ICloudTextSyncEngine {
         }
 
         let migrationRecords = try store.textRecordsForSyncMigration()
-        _ = try await saveInBatches(records: migrationRecords.map(Self.syncZoneCloudRecord(from:)))
+        _ = try await saveInBatches(records: migrationRecords.map {
+            Self.syncZoneCloudRecord(from: $0)
+        })
 
         changeTokenStore.clearToken()
         let primedSyncZoneRecords = try await fetchChangedTextRecords()
@@ -756,18 +785,13 @@ final class ICloudTextSyncEngine {
         }
     }
 
-    private static func syncZoneCloudRecord(from record: SyncTextRecord) -> CKRecord {
-        let cloud = CKRecord(
-            recordType: Schema.textRecordType,
-            recordID: CKRecord.ID(recordName: record.id, zoneID: Schema.syncZoneID)
-        )
+    static func syncZoneCloudRecord(from record: SyncTextRecord, baseRecord: CKRecord? = nil) -> CKRecord {
+        let recordID = CKRecord.ID(recordName: record.id, zoneID: Schema.syncZoneID)
+        let persistedRecord = record.cloudSystemFields.flatMap(Self.record(fromSystemFields:))
+        let cloud = baseRecord
+            ?? persistedRecord
+            ?? CKRecord(recordType: Schema.textRecordType, recordID: recordID)
         cloud["kind"] = record.kind.rawValue as NSString
-        cloud["title"] = record.title as NSString?
-        cloud["text"] = record.text as NSString
-        cloud["speakerTranscript"] = record.speakerTranscript as NSString?
-        cloud["summaryText"] = record.summaryText as NSString?
-        cloud["manualNotes"] = record.manualNotes as NSString?
-        cloud["manualNotesUpdatedAt"] = record.manualNotesUpdatedAt as NSDate?
         cloud["source"] = record.source as NSString?
         cloud["localSource"] = record.localSource as NSString?
         cloud["engineIdentifier"] = record.engineIdentifier as NSString?
@@ -779,21 +803,37 @@ final class ICloudTextSyncEngine {
         cloud["wordCount"] = record.wordCount as NSNumber
         cloud["isDeleted"] = record.isDeleted as NSNumber
         cloud["schemaVersion"] = 1 as NSNumber
+        guard !record.isDeleted else {
+            cloud["title"] = nil as NSString?
+            cloud["text"] = nil as NSString?
+            cloud["speakerTranscript"] = nil as NSString?
+            cloud["summaryText"] = nil as NSString?
+            cloud["manualNotes"] = nil as NSString?
+            cloud["manualNotesUpdatedAt"] = nil as NSDate?
+            return cloud
+        }
+        cloud["title"] = record.title as NSString?
+        cloud["text"] = record.text as NSString
+        cloud["speakerTranscript"] = record.speakerTranscript as NSString?
+        cloud["summaryText"] = record.summaryText as NSString?
+        cloud["manualNotes"] = record.manualNotes as NSString?
+        cloud["manualNotesUpdatedAt"] = record.manualNotesUpdatedAt as NSDate?
         return cloud
     }
 
-    private static func syncTextRecord(from record: CKRecord) -> SyncTextRecord? {
+    static func syncTextRecord(from record: CKRecord) -> SyncTextRecord? {
         guard let kind = kind(from: record),
-              let text = record["text"] as? String,
               let createdAt = record["createdAt"] as? Date,
               let updatedAt = record["updatedAt"] as? Date else {
             return nil
         }
+        let isDeleted = (record["isDeleted"] as? NSNumber)?.boolValue ?? false
+        guard isDeleted || record["text"] is String else { return nil }
         return SyncTextRecord(
             id: record.recordID.recordName,
             kind: kind,
             title: record["title"] as? String,
-            text: text,
+            text: (record["text"] as? String) ?? "",
             speakerTranscript: record["speakerTranscript"] as? String,
             summaryText: record["summaryText"] as? String,
             manualNotes: record["manualNotes"] as? String,
@@ -807,12 +847,31 @@ final class ICloudTextSyncEngine {
             endedAt: record["endedAt"] as? Date,
             durationSeconds: (record["durationSeconds"] as? NSNumber)?.doubleValue ?? 0,
             wordCount: (record["wordCount"] as? NSNumber)?.intValue ?? 0,
-            isDeleted: (record["isDeleted"] as? NSNumber)?.boolValue ?? false,
-            cloudChangeTag: record.recordChangeTag
+            isDeleted: isDeleted,
+            cloudChangeTag: record.recordChangeTag,
+            cloudSystemFields: encodedSystemFields(for: record)
         )
     }
 
-    private static func kind(from record: CKRecord) -> SyncTextRecordKind? {
+    static func encodedSystemFields(for record: CKRecord) -> Data? {
+        let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+        record.encodeSystemFields(with: archiver)
+        archiver.finishEncoding()
+        return archiver.encodedData
+    }
+
+    static func record(fromSystemFields data: Data) -> CKRecord? {
+        do {
+            let unarchiver = try NSKeyedUnarchiver(forReadingFrom: data)
+            unarchiver.requiresSecureCoding = true
+            defer { unarchiver.finishDecoding() }
+            return CKRecord(coder: unarchiver)
+        } catch {
+            return nil
+        }
+    }
+
+    static func kind(from record: CKRecord) -> SyncTextRecordKind? {
         guard let raw = record["kind"] as? String else { return nil }
         return SyncTextRecordKind(rawValue: raw)
     }

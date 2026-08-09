@@ -90,14 +90,14 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertFalse(bus.postedEvents.contains(.commandChanged))
     }
 
-    func testFreshSQLiteStoreCreatesV4Schema() throws {
+    func testFreshSQLiteStoreCreatesV5Schema() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let store = SharedStore(containerURL: directory)
         XCTAssertEqual(try store.resultsHistory(), [])
 
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 4)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 5)
         XCTAssertTrue(try sqliteColumnNames(table: "result_history", in: directory).isSuperset(of: [
             "session_id",
             "text",
@@ -106,14 +106,17 @@ final class SharedStoreTests: XCTestCase {
             "deleted_at",
             "cloud_record_name",
             "cloud_change_tag",
+            "cloud_system_fields",
             "last_synced_at",
             "sync_dirty"
         ]))
         XCTAssertTrue(try sqliteColumnNames(table: "recording_sessions", in: directory).contains("audio_file_name"))
         XCTAssertTrue(try sqliteColumnNames(table: "recording_sessions", in: directory).contains("manual_notes"))
         XCTAssertTrue(try sqliteColumnNames(table: "recording_sessions", in: directory).contains("manual_notes_updated_at"))
+        XCTAssertTrue(try sqliteColumnNames(table: "recording_sessions", in: directory).contains("cloud_system_fields"))
         XCTAssertTrue(try sqliteColumnNames(table: "transcripts", in: directory).contains("summary_model"))
         XCTAssertTrue(try sqliteColumnNames(table: "custom_words", in: directory).contains("matching_threshold"))
+        XCTAssertEqual(try sqliteInt("SELECT COUNT(*) FROM cloud_sync_state", in: directory), 0)
     }
 
     func testLegacyJSONFilesMigrateIntoSQLiteStore() throws {
@@ -164,7 +167,7 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try sqliteString("SELECT text FROM result_history LIMIT 1", in: directory), "migrated dictation")
         XCTAssertEqual(try sqliteString("SELECT engine_identifier FROM result_history LIMIT 1", in: directory), "parakeet-v3")
         XCTAssertEqual(try sqliteString("SELECT replacement FROM custom_words LIMIT 1", in: directory), "Muesli")
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 4)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 5)
     }
 
     func testResultsHistoryPersistsSortedResultsAfterOneOffResultIsCleared() throws {
@@ -449,6 +452,247 @@ final class SharedStoreTests: XCTestCase {
 
         let record = try XCTUnwrap(try store.textRecordsNeedingSync().first { $0.kind == .dictation })
         XCTAssertEqual(record.source, "macos")
+    }
+
+    func testCloudSyncEngineStateRoundTripsAndClears() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let state = Data([0x43, 0x4B, 0x53, 0x45])
+
+        XCTAssertNil(try store.cloudSyncStateData(forKey: "private-zone"))
+        try store.saveCloudSyncStateData(state, forKey: "private-zone")
+        XCTAssertEqual(try store.cloudSyncStateData(forKey: "private-zone"), state)
+        try store.clearCloudSyncStateData(forKey: "private-zone")
+        XCTAssertNil(try store.cloudSyncStateData(forKey: "private-zone"))
+    }
+
+    func testSyncRecordBatchLookupIncludesCloudSystemFields() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let recordID = UUID().uuidString
+        let systemFields = Data([1, 2, 3, 4])
+        let record = SyncTextRecord(
+            id: recordID,
+            kind: .dictation,
+            title: nil,
+            text: "server text",
+            speakerTranscript: nil,
+            summaryText: nil,
+            manualNotes: nil,
+            source: "ios",
+            engineIdentifier: "icloud",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 200),
+            startedAt: nil,
+            endedAt: nil,
+            durationSeconds: 0,
+            wordCount: 2,
+            isDeleted: false,
+            cloudChangeTag: "tag-1",
+            cloudSystemFields: systemFields
+        )
+
+        XCTAssertTrue(try store.upsertSyncedTextRecord(record))
+        let fetched = try XCTUnwrap(try store.textRecordsForSync(recordNames: [recordID])[recordID])
+        XCTAssertEqual(fetched.cloudChangeTag, "tag-1")
+        XCTAssertEqual(fetched.cloudSystemFields, systemFields)
+        XCTAssertEqual(fetched.text, "server text")
+    }
+
+    func testUploadAcknowledgementDoesNotClearNewerLocalDictationEdit() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let id = UUID()
+        let requestID = UUID()
+        try store.saveResult(DictationResult(
+            id: id,
+            requestID: requestID,
+            text: "version one",
+            engineIdentifier: "test"
+        ))
+        let uploaded = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try store.saveResult(DictationResult(
+            id: id,
+            requestID: requestID,
+            text: "version two",
+            engineIdentifier: "test"
+        ))
+
+        XCTAssertFalse(try store.markTextRecordSynced(
+            kind: .dictation,
+            recordName: id.uuidString,
+            changeTag: "stale-upload-tag",
+            systemFields: Data([9]),
+            recordUpdatedAt: uploaded.updatedAt
+        ))
+        XCTAssertTrue(try store.hasTextRecordsNeedingSync())
+        let pending = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        XCTAssertEqual(pending.text, "version two")
+        XCTAssertNil(pending.cloudSystemFields)
+    }
+
+    func testEqualTimestampFetchedRecordCannotOverwriteDirtyLocalDictation() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        try store.saveResult(DictationResult(
+            requestID: UUID(),
+            text: "local value",
+            engineIdentifier: "test"
+        ))
+        let local = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        var remote = local
+        remote.text = "different server value"
+        remote.cloudSystemFields = Data([1])
+
+        XCTAssertFalse(try store.upsertSyncedTextRecord(remote))
+        XCTAssertEqual(try store.textRecordsNeedingSync().first?.text, "local value")
+    }
+
+    func testUploadAcknowledgementPersistsMetadataAndClearsExactLocalVersion() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let result = DictationResult(
+            requestID: UUID(),
+            text: "ready to acknowledge",
+            engineIdentifier: "test"
+        )
+        try store.saveResult(result)
+        let uploaded = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        let systemFields = Data([5, 6, 7])
+
+        XCTAssertTrue(try store.markTextRecordSynced(
+            kind: .dictation,
+            recordName: uploaded.id,
+            changeTag: "saved-tag",
+            systemFields: systemFields,
+            recordUpdatedAt: uploaded.updatedAt
+        ))
+        XCTAssertFalse(try store.hasTextRecordsNeedingSync())
+        let stored = try XCTUnwrap(try store.textRecordsForSync(recordNames: [uploaded.id])[uploaded.id])
+        XCTAssertEqual(stored.cloudChangeTag, "saved-tag")
+        XCTAssertEqual(stored.cloudSystemFields, systemFields)
+    }
+
+    func testAccountChangeResetPreservesTextAndRequeuesRecords() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let result = DictationResult(
+            requestID: UUID(),
+            text: "must survive account switch",
+            engineIdentifier: "test"
+        )
+        try store.saveResult(result)
+        let uploaded = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        XCTAssertTrue(try store.markTextRecordSynced(
+            kind: .dictation,
+            recordName: uploaded.id,
+            changeTag: "old-account-tag",
+            systemFields: Data([8]),
+            recordUpdatedAt: uploaded.updatedAt
+        ))
+
+        try store.resetTextRecordCloudMetadataForAccountChange()
+
+        XCTAssertEqual(try store.resultsHistory().first?.text, "must survive account switch")
+        let requeued = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        XCTAssertNil(requeued.cloudChangeTag)
+        XCTAssertNil(requeued.cloudSystemFields)
+    }
+
+    func testMeetingUploadAcknowledgementDoesNotClearNewerTranscriptEdit() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let transcriptID = UUID()
+        let session = RecordingSession(
+            id: UUID(),
+            kind: .meeting,
+            title: "Sync race",
+            phase: .completed,
+            transcriptID: transcriptID,
+            engineIdentifier: "test",
+            source: "ios"
+        )
+        try store.saveSession(session)
+        try store.saveTranscript(Transcript(
+            id: transcriptID,
+            sessionID: session.id,
+            text: "first transcript",
+            engineIdentifier: "test"
+        ))
+        let uploaded = try XCTUnwrap(
+            try store.textRecordsNeedingSync().first { $0.kind == .meeting }
+        )
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try store.saveTranscript(Transcript(
+            id: transcriptID,
+            sessionID: session.id,
+            text: "newer transcript",
+            engineIdentifier: "test"
+        ))
+
+        XCTAssertFalse(try store.markTextRecordSynced(
+            kind: .meeting,
+            recordName: uploaded.id,
+            changeTag: "stale-meeting-tag",
+            systemFields: Data([4]),
+            recordUpdatedAt: uploaded.updatedAt
+        ))
+        let pending = try XCTUnwrap(
+            try store.textRecordsNeedingSync().first { $0.kind == .meeting }
+        )
+        XCTAssertEqual(pending.text, "newer transcript")
+        XCTAssertNil(pending.cloudSystemFields)
+    }
+
+    func testFetchedMeetingChecksTranscriptTimestampBeforeOverwriting() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let transcriptID = UUID()
+        let session = RecordingSession(
+            id: UUID(),
+            kind: .meeting,
+            title: "Transcript race",
+            phase: .completed,
+            transcriptID: transcriptID,
+            engineIdentifier: "test",
+            source: "ios"
+        )
+        try store.saveSession(session)
+        try store.saveTranscript(Transcript(
+            id: transcriptID,
+            sessionID: session.id,
+            text: "initial local transcript",
+            engineIdentifier: "test"
+        ))
+        let initial = try XCTUnwrap(
+            try store.textRecordsNeedingSync().first { $0.kind == .meeting }
+        )
+
+        Thread.sleep(forTimeInterval: 0.02)
+        try store.saveTranscript(Transcript(
+            id: transcriptID,
+            sessionID: session.id,
+            text: "newest local transcript",
+            engineIdentifier: "test"
+        ))
+        var remote = initial
+        remote.text = "intermediate server transcript"
+        remote.updatedAt = initial.updatedAt.addingTimeInterval(0.001)
+
+        XCTAssertFalse(try store.upsertSyncedTextRecord(remote))
+        XCTAssertEqual(try store.transcript(for: session.id)?.text, "newest local transcript")
+        XCTAssertTrue(try store.hasTextRecordsNeedingSync())
     }
 
     func testSyncedDictationPreservesLocalSessionLink() throws {
@@ -1354,7 +1598,7 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try store.recordingSessions(), [expectedSession])
         XCTAssertEqual(try store.transcript(for: session.id), transcript)
         XCTAssertEqual(try store.customWords(), [customWord])
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 4)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 5)
         XCTAssertEqual(try sqliteString("SELECT text FROM result_history LIMIT 1", in: directory), "legacy sqlite dictation")
         XCTAssertEqual(try sqliteString("SELECT audio_file_name FROM recording_sessions LIMIT 1", in: directory), "legacy.wav")
         XCTAssertEqual(try sqliteString("SELECT summary_text FROM transcripts LIMIT 1", in: directory), "Legacy notes")

@@ -177,6 +177,9 @@ final class DictationCoordinator {
         store: store,
         onRemoteChanges: { @MainActor [weak self] in
             self?.scheduleHistoryRefreshAfterRemoteChanges()
+        },
+        onProgress: { @MainActor [weak self] progress in
+            self?.updateICloudSyncProgress(progress)
         }
     )
     private var onboardingModelReadyCueModel: LocalTranscriptionModel?
@@ -2779,6 +2782,22 @@ final class DictationCoordinator {
             guard !Task.isCancelled else { return }
             self?.iCloudRemoteRefreshTask = nil
             self?.refreshHistory()
+        }
+    }
+
+    private func updateICloudSyncProgress(_ progress: MuesliCKSyncProgress) {
+        guard MuesliPreferences.iCloudSyncEnabled else { return }
+        switch progress {
+        case .preparing:
+            iCloudSyncStatusText = "Preparing private iCloud..."
+        case .fetching:
+            iCloudSyncStatusText = "Checking iCloud for changes..."
+        case .downloading(let count):
+            iCloudSyncStatusText = "Applied \(count) iCloud changes..."
+        case .uploading(let count):
+            iCloudSyncStatusText = count > 0
+                ? "Uploaded \(count) local changes..."
+                : "Uploading local changes..."
         }
     }
 

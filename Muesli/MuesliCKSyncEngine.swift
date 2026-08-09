@@ -40,6 +40,26 @@ struct MuesliCKSyncRecordBatch: Sendable {
     let staleChanges: [CKSyncEngine.PendingRecordZoneChange]
 }
 
+enum MuesliCKSyncProgress: Equatable, Sendable {
+    case preparing
+    case fetching
+    case downloading(Int)
+    case uploading(Int)
+
+    var diagnosticValue: String {
+        switch self {
+        case .preparing:
+            "preparing"
+        case .fetching:
+            "fetching"
+        case .downloading:
+            "downloading"
+        case .uploading:
+            "uploading"
+        }
+    }
+}
+
 /// Owns the one CKSyncEngine instance for the private text-record zone.
 ///
 /// SQLite's `sync_dirty` flags remain the durable outbox. Before every send,
@@ -56,6 +76,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
 
     private let store: SharedStore
     private let onRemoteChanges: @Sendable () async -> Void
+    private let onProgress: @Sendable (MuesliCKSyncProgress) async -> Void
     private var container: CKContainer?
     private var preflight: ICloudTextSyncEngine?
     private var engine: CKSyncEngine?
@@ -66,20 +87,24 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     init(
         store: SharedStore = SharedStore(),
         container: CKContainer? = nil,
-        onRemoteChanges: @escaping @Sendable () async -> Void = {}
+        onRemoteChanges: @escaping @Sendable () async -> Void = {},
+        onProgress: @escaping @Sendable (MuesliCKSyncProgress) async -> Void = { _ in }
     ) {
         self.store = store
         self.container = container
         self.onRemoteChanges = onRemoteChanges
+        self.onProgress = onProgress
     }
 
     func sync(forceBridgeDeviceRefresh: Bool = false) async throws -> ICloudTextSyncResult {
         uploaded = 0
         downloaded = 0
 
+        await reportProgress(.preparing)
         let (_, syncEngine) = try await prepareEngine(
             forceBridgeDeviceRefresh: forceBridgeDeviceRefresh
         )
+        await reportProgress(.fetching)
         try await MuesliCKSyncCycle.run(
             maximumUploadBatches: Self.maximumUploadBatchesPerSync,
             fetch: {
@@ -89,7 +114,11 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                 try await syncEngine.fetchChanges(options)
             },
             registerNextBatch: {
-                try self.registerNextDirtyBatch(state: syncEngine.state)
+                let registered = try self.registerNextDirtyBatch(state: syncEngine.state)
+                if registered > 0 {
+                    await self.reportProgress(.uploading(self.uploaded))
+                }
+                return registered
             },
             uploadedCount: { self.uploaded },
             send: {
@@ -101,6 +130,23 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         )
 
         return ICloudTextSyncResult(uploaded: uploaded, downloaded: downloaded)
+    }
+
+    private func reportProgress(_ progress: MuesliCKSyncProgress) async {
+        // Phase and count only: never include record IDs or authored text.
+        let count: Int?
+        switch progress {
+        case .downloading(let value), .uploading(let value):
+            count = value
+        case .preparing, .fetching:
+            count = nil
+        }
+        let countSuffix = count.map { " count=\($0)" } ?? ""
+        fputs(
+            "[muesli-ios] CKSyncEngine phase=\(progress.diagnosticValue)\(countSuffix)\n",
+            stderr
+        )
+        await onProgress(progress)
     }
 
     @discardableResult
@@ -281,7 +327,10 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                     changes.modifications.map(\.record),
                     state: syncEngine.state
                 )
-                if applied > 0 { await onRemoteChanges() }
+                if applied > 0 {
+                    await reportProgress(.downloading(downloaded))
+                    await onRemoteChanges()
+                }
                 // Muesli represents deletion as a saved tombstone. Hard-delete
                 // notifications are intentionally ignored by this record contract.
 
@@ -293,6 +342,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                     },
                     state: syncEngine.state
                 )
+                await reportProgress(.uploading(uploaded))
 
             case .accountChange(let change):
                 conflictBaseRecords.removeAll()

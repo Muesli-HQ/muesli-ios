@@ -3,6 +3,13 @@ import XCTest
 @testable import Muesli
 
 final class MuesliCKSyncEngineTests: XCTestCase {
+    func testProgressDiagnosticsExposeOnlyFixedPhaseNames() {
+        XCTAssertEqual(MuesliCKSyncProgress.preparing.diagnosticValue, "preparing")
+        XCTAssertEqual(MuesliCKSyncProgress.fetching.diagnosticValue, "fetching")
+        XCTAssertEqual(MuesliCKSyncProgress.downloading(42).diagnosticValue, "downloading")
+        XCTAssertEqual(MuesliCKSyncProgress.uploading(42).diagnosticValue, "uploading")
+    }
+
     func testCycleFetchesBeforeSendingEveryAvailableDirtyPage() async throws {
         var events: [String] = []
         var registeredPages = [2, 1, 0]

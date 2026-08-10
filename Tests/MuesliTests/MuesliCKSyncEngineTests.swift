@@ -124,6 +124,23 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertEqual(rehydrated["text"] as? String, "second")
     }
 
+    func testDictationTimingSurvivesCloudRecordRoundTrip() throws {
+        let startedAt = Date(timeIntervalSince1970: 100)
+        let endedAt = Date(timeIntervalSince1970: 142)
+        var local = Self.record(id: "timed", text: "timed voice note")
+        local.startedAt = startedAt
+        local.endedAt = endedAt
+        local.durationSeconds = 42
+
+        let cloud = ICloudTextSyncEngine.syncZoneCloudRecord(from: local)
+        let decoded = try XCTUnwrap(ICloudTextSyncEngine.syncTextRecord(from: cloud))
+
+        XCTAssertEqual((cloud["durationSeconds"] as? NSNumber)?.doubleValue, 42)
+        XCTAssertEqual(decoded.startedAt, startedAt)
+        XCTAssertEqual(decoded.endedAt, endedAt)
+        XCTAssertEqual(decoded.durationSeconds, 42, accuracy: 0.001)
+    }
+
     func testNewerFetchedServerRecordReplacesLocalDirtyRowAndPendingSave() async throws {
         let directory = try Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

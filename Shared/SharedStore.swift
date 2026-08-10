@@ -335,6 +335,11 @@ struct SharedStore: Sendable {
         try database().saveCloudSyncStateData(data, forKey: key)
     }
 
+    @discardableResult
+    func requeueDictationsWithRecoverableTimingIfNeeded(repairKey: String) throws -> Int {
+        try database().requeueDictationsWithRecoverableTimingIfNeeded(repairKey: repairKey)
+    }
+
     func clearCloudSyncStateData(forKey key: String) throws {
         try database().clearCloudSyncStateData(forKey: key)
     }
@@ -985,39 +990,16 @@ private struct SharedStoreDatabase {
 
             let dictations = try queryRows(
                 """
-                SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
-                       deleted_at, cloud_change_tag, cloud_system_fields, payload
-                FROM result_history
-                WHERE cloud_record_name IN (\(placeholders))
+                SELECT r.cloud_record_name, r.text, r.engine_identifier, r.created_at, r.updated_at,
+                       r.deleted_at, r.cloud_change_tag, r.cloud_system_fields, r.payload,
+                       s.started_at, s.ended_at
+                FROM result_history r
+                LEFT JOIN recording_sessions s ON s.id = r.session_id
+                WHERE r.cloud_record_name IN (\(placeholders))
                 """,
                 db: db,
                 bindValues: bindRecordNames,
-                read: { statement in
-                    let text = sqliteColumnString(statement, 1) ?? ""
-                    let payload = sqliteColumnData(statement, 8)
-                    let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
-                    return SyncTextRecord(
-                        id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
-                        kind: .dictation,
-                        title: nil,
-                        text: text,
-                        speakerTranscript: nil,
-                        summaryText: nil,
-                        manualNotes: nil,
-                        source: Self.syncPlatformSource(result?.source),
-                        localSource: Self.syncSource(result?.source),
-                        engineIdentifier: sqliteColumnString(statement, 2),
-                        createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
-                        updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
-                        startedAt: nil,
-                        endedAt: nil,
-                        durationSeconds: 0,
-                        wordCount: Self.wordCount(text),
-                        isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
-                        cloudChangeTag: sqliteColumnString(statement, 6),
-                        cloudSystemFields: sqliteColumnData(statement, 7)
-                    )
-                }
+                read: syncDictationRecord
             )
             for record in dictations { records[record.id] = record }
 
@@ -1118,45 +1100,72 @@ private struct SharedStoreDatabase {
         }
     }
 
+    @discardableResult
+    func requeueDictationsWithRecoverableTimingIfNeeded(repairKey: String) throws -> Int {
+        try withDatabase { db in
+            var requeued = 0
+            try transaction(db: db) {
+                let alreadyRepaired = try queryRows(
+                    "SELECT 1 FROM cloud_sync_state WHERE key = ? LIMIT 1",
+                    db: db
+                ) { statement in
+                    try bind(repairKey, to: statement, at: 1)
+                } read: { _ in true }.first ?? false
+                guard !alreadyRepaired else { return }
+
+                try execute(
+                    """
+                    UPDATE result_history
+                    SET sync_dirty = 1
+                    WHERE cloud_record_name IS NOT NULL
+                      AND deleted_at IS NULL
+                      AND session_id IN (
+                          SELECT id
+                          FROM recording_sessions
+                          WHERE started_at IS NOT NULL
+                            AND ended_at IS NOT NULL
+                            AND ended_at > started_at
+                      )
+                    """,
+                    db: db
+                ) { _ in }
+                requeued = Int(sqlite3_changes(db))
+
+                try execute(
+                    """
+                    INSERT INTO cloud_sync_state (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    db: db
+                ) { statement in
+                    try bind(repairKey, to: statement, at: 1)
+                    try bind(Data([1]), to: statement, at: 2)
+                    try bind(Date().timeIntervalSince1970, to: statement, at: 3)
+                }
+            }
+            return requeued
+        }
+    }
+
     func textRecordsNeedingSync(limit: Int = 200) throws -> [SyncTextRecord] {
         try withDatabase { db in
             var records: [SyncTextRecord] = []
             let dictationRows = try queryRows(
                 """
-                SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
-                       deleted_at, session_id, cloud_change_tag, cloud_system_fields, payload
-                FROM result_history
-                WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL
-                ORDER BY updated_at DESC
+                SELECT r.cloud_record_name, r.text, r.engine_identifier, r.created_at, r.updated_at,
+                       r.deleted_at, r.cloud_change_tag, r.cloud_system_fields, r.payload,
+                       s.started_at, s.ended_at
+                FROM result_history r
+                LEFT JOIN recording_sessions s ON s.id = r.session_id
+                WHERE r.sync_dirty = 1 AND r.cloud_record_name IS NOT NULL
+                ORDER BY r.updated_at DESC
                 LIMIT ?
                 """,
                 db: db
             ) { statement in
                 try bind(limit, to: statement, at: 1)
             } read: { statement in
-                let payload = sqliteColumnData(statement, 9)
-                let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
-                return SyncTextRecord(
-                    id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
-                    kind: .dictation,
-                    title: nil,
-                    text: sqliteColumnString(statement, 1) ?? "",
-                    speakerTranscript: nil,
-                    summaryText: nil,
-                    manualNotes: nil,
-                    source: Self.syncPlatformSource(result?.source),
-                    localSource: Self.syncSource(result?.source),
-                    engineIdentifier: sqliteColumnString(statement, 2),
-                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
-                    updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
-                    startedAt: nil,
-                    endedAt: nil,
-                    durationSeconds: 0,
-                    wordCount: Self.wordCount(sqliteColumnString(statement, 1) ?? ""),
-                    isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
-                    cloudChangeTag: sqliteColumnString(statement, 7),
-                    cloudSystemFields: sqliteColumnData(statement, 8)
-                )
+                syncDictationRecord(statement)
             }
             records.append(contentsOf: dictationRows)
 
@@ -1227,40 +1236,20 @@ private struct SharedStoreDatabase {
             var records: [SyncTextRecord] = []
             let dictationRows = try queryRows(
                 """
-                SELECT cloud_record_name, text, engine_identifier, created_at, updated_at,
-                       deleted_at, session_id, cloud_change_tag, cloud_system_fields, payload
-                FROM result_history
-                WHERE cloud_record_name IS NOT NULL
-                ORDER BY updated_at DESC
+                SELECT r.cloud_record_name, r.text, r.engine_identifier, r.created_at, r.updated_at,
+                       r.deleted_at, r.cloud_change_tag, r.cloud_system_fields, r.payload,
+                       s.started_at, s.ended_at
+                FROM result_history r
+                LEFT JOIN recording_sessions s ON s.id = r.session_id
+                WHERE r.cloud_record_name IS NOT NULL
+                ORDER BY r.updated_at DESC
                 LIMIT ?
                 """,
                 db: db
             ) { statement in
                 try bind(limit, to: statement, at: 1)
             } read: { statement in
-                let payload = sqliteColumnData(statement, 9)
-                let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
-                return SyncTextRecord(
-                    id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
-                    kind: .dictation,
-                    title: nil,
-                    text: sqliteColumnString(statement, 1) ?? "",
-                    speakerTranscript: nil,
-                    summaryText: nil,
-                    manualNotes: nil,
-                    source: Self.syncPlatformSource(result?.source),
-                    localSource: Self.syncSource(result?.source),
-                    engineIdentifier: sqliteColumnString(statement, 2),
-                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
-                    updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
-                    startedAt: nil,
-                    endedAt: nil,
-                    durationSeconds: 0,
-                    wordCount: Self.wordCount(sqliteColumnString(statement, 1) ?? ""),
-                    isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
-                    cloudChangeTag: sqliteColumnString(statement, 7),
-                    cloudSystemFields: sqliteColumnData(statement, 8)
-                )
+                syncDictationRecord(statement)
             }
             records.append(contentsOf: dictationRows)
 
@@ -2684,6 +2673,41 @@ private struct SharedStoreDatabase {
         let value = sqlite3_column_double(statement, index)
         guard value > 0 else { return nil }
         return Date(timeIntervalSince1970: value)
+    }
+
+    private func syncDictationRecord(_ statement: OpaquePointer) -> SyncTextRecord {
+        let text = sqliteColumnString(statement, 1) ?? ""
+        let payload = sqliteColumnData(statement, 8)
+        let result = payload.flatMap { try? decoder.decode(DictationResult.self, from: $0) }
+        let startedAt = Self.optionalDate(statement, 9)
+        let endedAt = Self.optionalDate(statement, 10)
+        let durationSeconds: TimeInterval
+        if let startedAt, let endedAt {
+            durationSeconds = max(endedAt.timeIntervalSince(startedAt), 0)
+        } else {
+            durationSeconds = 0
+        }
+        return SyncTextRecord(
+            id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
+            kind: .dictation,
+            title: nil,
+            text: text,
+            speakerTranscript: nil,
+            summaryText: nil,
+            manualNotes: nil,
+            source: Self.syncPlatformSource(result?.source),
+            localSource: Self.syncSource(result?.source),
+            engineIdentifier: sqliteColumnString(statement, 2),
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
+            updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
+            startedAt: startedAt,
+            endedAt: endedAt,
+            durationSeconds: durationSeconds,
+            wordCount: Self.wordCount(text),
+            isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
+            cloudChangeTag: sqliteColumnString(statement, 6),
+            cloudSystemFields: sqliteColumnData(statement, 7)
+        )
     }
 
     private static func wordCount(_ text: String) -> Int {

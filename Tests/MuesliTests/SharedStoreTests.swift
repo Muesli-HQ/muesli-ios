@@ -467,6 +467,95 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertNil(try store.cloudSyncStateData(forKey: "private-zone"))
     }
 
+    func testDictationSyncRecordsIncludeLinkedSessionTiming() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let startedAt = Date(timeIntervalSince1970: 100)
+        let endedAt = Date(timeIntervalSince1970: 145)
+        let session = RecordingSession(
+            kind: .quickDictation,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            phase: .completed,
+            source: "ios"
+        )
+        try store.saveSession(session)
+        let result = DictationResult(
+            requestID: UUID(),
+            sessionID: session.id,
+            text: "timed sync record",
+            engineIdentifier: "test"
+        )
+        try store.saveResult(result)
+
+        let dirty = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        let current = try XCTUnwrap(
+            try store.textRecordsForSync(recordNames: [dirty.id])[dirty.id]
+        )
+        let migration = try XCTUnwrap(
+            try store.textRecordsForSyncMigration().first { $0.id == dirty.id }
+        )
+
+        for record in [dirty, current, migration] {
+            XCTAssertEqual(record.startedAt, startedAt)
+            XCTAssertEqual(record.endedAt, endedAt)
+            XCTAssertEqual(record.durationSeconds, 45, accuracy: 0.001)
+        }
+    }
+
+    func testDictationTimingRepairRequeuesOnlyRecoverableRowsOnce() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let session = RecordingSession(
+            kind: .quickDictation,
+            startedAt: Date(timeIntervalSince1970: 100),
+            endedAt: Date(timeIntervalSince1970: 130),
+            phase: .completed,
+            source: "ios"
+        )
+        try store.saveSession(session)
+        let timed = DictationResult(
+            requestID: UUID(),
+            sessionID: session.id,
+            text: "recoverable timing",
+            engineIdentifier: "test"
+        )
+        let legacy = DictationResult(
+            requestID: UUID(),
+            text: "no linked timing",
+            engineIdentifier: "test"
+        )
+        try store.saveResult(timed)
+        try store.saveResult(legacy)
+
+        for record in try store.textRecordsNeedingSync() where record.kind == .dictation {
+            XCTAssertTrue(try store.markTextRecordSynced(
+                kind: .dictation,
+                recordName: record.id,
+                changeTag: "saved-tag",
+                systemFields: Data([1]),
+                recordUpdatedAt: record.updatedAt
+            ))
+        }
+        XCTAssertFalse(try store.hasTextRecordsNeedingSync())
+
+        XCTAssertEqual(
+            try store.requeueDictationsWithRecoverableTimingIfNeeded(repairKey: "timing-v1"),
+            1
+        )
+        let requeued = try store.textRecordsNeedingSync()
+        XCTAssertEqual(requeued.map(\.id), [timed.id.uuidString])
+        XCTAssertEqual(try XCTUnwrap(requeued.first).durationSeconds, 30, accuracy: 0.001)
+
+        XCTAssertEqual(
+            try store.requeueDictationsWithRecoverableTimingIfNeeded(repairKey: "timing-v1"),
+            0
+        )
+        XCTAssertEqual(try store.textRecordsNeedingSync().map(\.id), [timed.id.uuidString])
+    }
+
     func testSyncRecordBatchLookupIncludesCloudSystemFields() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

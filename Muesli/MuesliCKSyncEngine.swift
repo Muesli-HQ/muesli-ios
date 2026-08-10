@@ -73,6 +73,9 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private static let subscriptionID = "muesli-ios-cksyncengine-private-v1"
     private static let uploadBatchSize = 200
     private static let maximumUploadBatchesPerSync = 50
+    private static var dictationTimingRepairKey: String {
+        "cksyncengine.dictation-timing-repair.\(ICloudTextSyncEngine.cloudSyncStateKeyComponent).v1"
+    }
 
     private let store: SharedStore
     private let onRemoteChanges: @Sendable () async -> Void
@@ -217,6 +220,12 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         configuration.subscriptionID = Self.subscriptionID
         let created = CKSyncEngine(configuration)
         engine = created
+        let repaired = try store.requeueDictationsWithRecoverableTimingIfNeeded(
+            repairKey: Self.dictationTimingRepairKey
+        )
+        if repaired > 0 {
+            _ = try registerNextDirtyBatch(state: created.state)
+        }
         return created
     }
 

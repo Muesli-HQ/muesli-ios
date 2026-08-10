@@ -217,6 +217,45 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertNotNil(stored.cloudSystemFields)
     }
 
+    func testAccountChangeClearsOldStateAndRequeuesSyncedLocalText() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "local text survives account change",
+            engineIdentifier: "test"
+        ))
+        let local = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        let saved = Self.cloudRecord(
+            basedOn: local,
+            text: local.text,
+            updatedAt: local.updatedAt
+        )
+        XCTAssertTrue(try store.markTextRecordSynced(
+            kind: local.kind,
+            recordName: local.id,
+            changeTag: "old-account-tag",
+            systemFields: ICloudTextSyncEngine.encodedSystemFields(for: saved),
+            recordUpdatedAt: local.updatedAt
+        ))
+        XCTAssertFalse(try store.hasTextRecordsNeedingSync())
+        try store.saveCloudSyncStateData(Data([1, 2, 3]), forKey: MuesliCKSyncEngine.stateKey)
+
+        let state = TestPendingState()
+        let engine = MuesliCKSyncEngine(store: store)
+        try await engine.handleAccountChange(requiresMetadataReset: true, state: state)
+
+        XCTAssertNil(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.stateKey))
+        XCTAssertTrue(try store.hasTextRecordsNeedingSync())
+        let pending = try XCTUnwrap(state.pendingRecordZoneChanges.first)
+        guard case .saveRecord(let pendingRecordID) = pending else {
+            return XCTFail("Expected account change to queue a record save")
+        }
+        XCTAssertEqual(pendingRecordID.recordName, local.id)
+        XCTAssertEqual(pendingRecordID.zoneID, ICloudTextSyncEngine.Schema.syncZoneID)
+    }
+
     private static func cloudRecord(
         basedOn record: Muesli.SyncTextRecord,
         text: String,

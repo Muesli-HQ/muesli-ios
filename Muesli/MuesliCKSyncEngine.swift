@@ -348,9 +348,15 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                 conflictBaseRecords.removeAll()
                 switch change.changeType {
                 case .signIn, .switchAccounts:
-                    try await handleAccountChange(requiresMetadataReset: true)
+                    try handleAccountChange(
+                        requiresMetadataReset: true,
+                        state: syncEngine.state
+                    )
                 case .signOut:
-                    try await handleAccountChange(requiresMetadataReset: false)
+                    try handleAccountChange(
+                        requiresMetadataReset: false,
+                        state: syncEngine.state
+                    )
                 @unknown default:
                     break
                 }
@@ -453,14 +459,19 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         }
     }
 
-    func handleAccountChange(requiresMetadataReset: Bool) async throws {
-        let engineToCancel = engine
-        engine = nil
-        await engineToCancel?.cancelOperations()
+    func handleAccountChange(
+        requiresMetadataReset: Bool,
+        state: any MuesliCKSyncPendingState
+    ) throws {
+        // This runs inside CKSyncEngine's own delegate callback. Cancelling the
+        // same engine here is re-entrant and CloudKit deliberately traps. Keep
+        // the live engine and its account-change state; discard only the stale
+        // serialization that belongs to the previous account.
         try store.clearCloudSyncStateData(forKey: Self.stateKey)
         conflictBaseRecords.removeAll()
-        if requiresMetadataReset {
-            try store.resetTextRecordCloudMetadataForAccountChange()
-        }
+        guard requiresMetadataReset else { return }
+
+        try store.resetTextRecordCloudMetadataForAccountChange()
+        _ = try registerNextDirtyBatch(state: state)
     }
 }

@@ -20,21 +20,23 @@ This branch migrates Muesli iOS text-record synchronization from the manual Clou
 - `CKSyncEngine` owns CloudKit change fetching and upload scheduling.
 - SQLite dirty state remains the durable source of pending local changes.
 - Engine serialization is environment-namespaced so Development and Production state cannot collide.
-- Account changes clear stale serialized engine state without cancelling the engine from inside its own delegate callback.
+- The first CloudKit account is stored only as a SHA-256 scope. A different account clears pending engine work and pauses sync without requeueing or uploading the local library.
+- Same-account zone recreation clears obsolete record change tags/system fields before migration, then safely requeues the preserved local text.
+- CloudKit chooses size-aware upload batches through its record-provider API while SQLite still loads each local page once.
 - Sync diagnostics expose only phase, timestamps, and counts; note text and record identifiers are never emitted.
 - Dictation records now carry linked recording-session start/end times and a positive duration when recoverable.
 - A versioned, environment-scoped repair marks only existing cloud-backed dictations with valid linked timing dirty once. It does not fabricate timing for legacy rows that lack it.
 
 ## Validation
 
-- Full `MuesliTests` suite passed after the timing repair.
+- Full `MuesliTests` suite passed after the review fixes: 222 tests, 0 failures.
 - A disposable MuesliDev device harness was signed with:
   - bundle: `com.phequals7.muesli.ios.dev`
   - app group: `group.com.phequals7.muesli.dev`
   - CloudKit container: `iCloud.com.mueslihq.muesli`
   - CloudKit environment: Production
 - The updated app installed successfully over the existing picophone MuesliDev installation, preserving the same identity and application data.
-- Final launch and two-way timing validation still require the phone to remain unlocked.
+- Final automated device validation was blocked by a disconnected Xcode Wi-Fi tunnel; rerunning it requires the picophone to be unlocked and reachable from this Mac.
 
 ## Companion macOS defense
 

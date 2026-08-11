@@ -467,6 +467,20 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertNil(try store.cloudSyncStateData(forKey: "private-zone"))
     }
 
+    func testCloudSyncAccountScopeCanBeClaimedButNotReassigned() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+
+        XCTAssertTrue(try store.claimCloudSyncAccountScope("scope-a", forKey: "account-owner"))
+        XCTAssertTrue(try store.claimCloudSyncAccountScope("scope-a", forKey: "account-owner"))
+        XCTAssertFalse(try store.claimCloudSyncAccountScope("scope-b", forKey: "account-owner"))
+        XCTAssertEqual(
+            try store.cloudSyncStateData(forKey: "account-owner"),
+            Data("scope-a".utf8)
+        )
+    }
+
     func testDictationSyncRecordsIncludeLinkedSessionTiming() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -669,13 +683,13 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(stored.cloudSystemFields, systemFields)
     }
 
-    func testAccountChangeResetPreservesTextAndRequeuesRecords() throws {
+    func testZoneRecreationResetPreservesTextAndRequeuesRecordsWithoutStaleMetadata() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SharedStore(containerURL: directory)
         let result = DictationResult(
             requestID: UUID(),
-            text: "must survive account switch",
+            text: "must survive zone recreation",
             engineIdentifier: "test"
         )
         try store.saveResult(result)
@@ -683,14 +697,14 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertTrue(try store.markTextRecordSynced(
             kind: .dictation,
             recordName: uploaded.id,
-            changeTag: "old-account-tag",
+            changeTag: "deleted-zone-tag",
             systemFields: Data([8]),
             recordUpdatedAt: uploaded.updatedAt
         ))
 
-        try store.resetTextRecordCloudMetadataForAccountChange()
+        try store.resetTextRecordCloudMetadataForZoneRecreation()
 
-        XCTAssertEqual(try store.resultsHistory().first?.text, "must survive account switch")
+        XCTAssertEqual(try store.resultsHistory().first?.text, "must survive zone recreation")
         let requeued = try XCTUnwrap(try store.textRecordsNeedingSync().first)
         XCTAssertNil(requeued.cloudChangeTag)
         XCTAssertNil(requeued.cloudSystemFields)
@@ -1041,6 +1055,61 @@ final class SharedStoreTests: XCTestCase {
 
         let record = try XCTUnwrap(try store.textRecordsNeedingSync().first { $0.kind == .meeting })
         XCTAssertEqual(record.source, "macos")
+    }
+
+    func testMeetingSyncDecodersAgreeAcrossDirtyLookupAndMigrationQueries() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let transcriptID = UUID()
+        let session = RecordingSession(
+            id: UUID(),
+            kind: .meeting,
+            title: "Decoder contract",
+            createdAt: Date(timeIntervalSince1970: 100),
+            startedAt: Date(timeIntervalSince1970: 110),
+            endedAt: Date(timeIntervalSince1970: 170),
+            phase: .completed,
+            transcriptID: transcriptID,
+            engineIdentifier: "test",
+            source: "ios"
+        )
+        try store.saveSession(session)
+        try store.saveTranscript(Transcript(
+            id: transcriptID,
+            sessionID: session.id,
+            text: "shared transcript",
+            createdAt: Date(timeIntervalSince1970: 171),
+            engineIdentifier: "test",
+            speakerTranscript: "Speaker 1: shared transcript",
+            summaryText: "Shared summary"
+        ))
+        try store.updateMeetingManualNotes(
+            sessionID: session.id,
+            manualNotes: "Shared notes"
+        )
+
+        let dirty = try XCTUnwrap(
+            try store.textRecordsNeedingSync().first { $0.kind == .meeting }
+        )
+        let lookup = try XCTUnwrap(
+            try store.textRecordsForSync(recordNames: [dirty.id])[dirty.id]
+        )
+        let migration = try XCTUnwrap(
+            try store.textRecordsForSyncMigration().first { $0.id == dirty.id }
+        )
+
+        for record in [dirty, lookup, migration] {
+            XCTAssertEqual(record.id, session.id.uuidString)
+            XCTAssertEqual(record.title, "Decoder contract")
+            XCTAssertEqual(record.text, "shared transcript")
+            XCTAssertEqual(record.speakerTranscript, "Speaker 1: shared transcript")
+            XCTAssertEqual(record.summaryText, "Shared summary")
+            XCTAssertEqual(record.manualNotes, "Shared notes")
+            XCTAssertEqual(record.startedAt, Date(timeIntervalSince1970: 110))
+            XCTAssertEqual(record.endedAt, Date(timeIntervalSince1970: 170))
+            XCTAssertEqual(record.durationSeconds, 60, accuracy: 0.001)
+        }
     }
 
     func testMeetingManualNotesPersistAndSync() throws {

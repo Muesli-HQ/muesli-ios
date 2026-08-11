@@ -1,6 +1,9 @@
 import CloudKit
+import CryptoKit
 import Foundation
+import OSLog
 
+/// Minimal pending-state surface used by the engine and deterministic tests.
 protocol MuesliCKSyncPendingState: AnyObject, Sendable {
     var pendingRecordZoneChanges: [CKSyncEngine.PendingRecordZoneChange] { get }
     func add(pendingRecordZoneChanges: [CKSyncEngine.PendingRecordZoneChange])
@@ -9,6 +12,7 @@ protocol MuesliCKSyncPendingState: AnyObject, Sendable {
 
 extension CKSyncEngine.State: MuesliCKSyncPendingState {}
 
+/// Runs fetch-first sync and stops upload paging when CloudKit makes no progress.
 enum MuesliCKSyncCycle {
     static func run(
         maximumUploadBatches: Int,
@@ -30,16 +34,31 @@ enum MuesliCKSyncCycle {
     }
 }
 
+/// Send failure normalized away from CKSyncEngine event wrappers.
 struct MuesliCKSyncFailedRecordSave: Sendable {
     let record: CKRecord
     let error: CKError
 }
 
+/// Locally materialized records and obsolete pending saves found in one read.
 struct MuesliCKSyncRecordBatch: Sendable {
     let recordsToSave: [CKRecord]
     let staleChanges: [CKSyncEngine.PendingRecordZoneChange]
 }
 
+/// Safety errors that require an account or user action before sync resumes.
+enum MuesliCKSyncError: LocalizedError {
+    case accountChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .accountChanged:
+            "iCloud sync is paused because this Muesli library belongs to a different iCloud account."
+        }
+    }
+}
+
+/// Privacy-safe progress phases exposed to diagnostics and the settings UI.
 enum MuesliCKSyncProgress: Equatable, Sendable {
     case preparing
     case fetching
@@ -70,9 +89,17 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         "cksyncengine.private.MuesliSyncZone.\(ICloudTextSyncEngine.cloudSyncStateKeyComponent).v1"
     }
 
+    static var accountScopeKey: String {
+        "cksyncengine.private.MuesliSyncZone.\(ICloudTextSyncEngine.cloudSyncStateKeyComponent).account-owner.v1"
+    }
+
     private static let subscriptionID = "muesli-ios-cksyncengine-private-v1"
     private static let uploadBatchSize = 200
     private static let maximumUploadBatchesPerSync = 50
+    private static let logger = Logger(
+        subsystem: "com.mueslihq.muesli",
+        category: "cksyncengine"
+    )
     private static var dictationTimingRepairKey: String {
         "cksyncengine.dictation-timing-repair.\(ICloudTextSyncEngine.cloudSyncStateKeyComponent).v1"
     }
@@ -86,6 +113,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private var conflictBaseRecords: [CKRecord.ID: CKRecord] = [:]
     private var uploaded = 0
     private var downloaded = 0
+    private var accountBoundaryBlocked = true
 
     init(
         store: SharedStore = SharedStore(),
@@ -99,6 +127,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         self.onProgress = onProgress
     }
 
+    /// Fetches private-zone changes, then drains the durable local outbox.
     func sync(forceBridgeDeviceRefresh: Bool = false) async throws -> ICloudTextSyncResult {
         uploaded = 0
         downloaded = 0
@@ -144,14 +173,17 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         case .preparing, .fetching:
             count = nil
         }
-        let countSuffix = count.map { " count=\($0)" } ?? ""
-        fputs(
-            "[muesli-ios] CKSyncEngine phase=\(progress.diagnosticValue)\(countSuffix)\n",
-            stderr
-        )
+        if let count {
+            Self.logger.debug(
+                "phase=\(progress.diagnosticValue, privacy: .public) count=\(count, privacy: .public)"
+            )
+        } else {
+            Self.logger.debug("phase=\(progress.diagnosticValue, privacy: .public)")
+        }
         await onProgress(progress)
     }
 
+    /// Prepares the account boundary, custom zone, migration, and engine state.
     @discardableResult
     func prepare(forceBridgeDeviceRefresh: Bool = false) async throws -> Bool {
         let (syncZoneWasRecreated, _) = try await prepareEngine(
@@ -160,6 +192,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         return syncZoneWasRecreated
     }
 
+    /// Cancels outstanding CloudKit operations and discards the live engine.
     func cancel() async {
         let engineToCancel = engine
         engine = nil
@@ -169,6 +202,17 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private func prepareEngine(
         forceBridgeDeviceRefresh: Bool
     ) async throws -> (syncZoneWasRecreated: Bool, engine: CKSyncEngine) {
+        let currentUser = try await resolvedContainer().userRecordID()
+        guard try authorizeAccount(currentUser) else {
+            if let engine {
+                engine.state.remove(
+                    pendingRecordZoneChanges: engine.state.pendingRecordZoneChanges
+                )
+            }
+            try store.clearCloudSyncStateData(forKey: Self.stateKey)
+            throw MuesliCKSyncError.accountChanged
+        }
+
         let preflight: ICloudTextSyncEngine
         if let existing = self.preflight {
             preflight = existing
@@ -188,7 +232,14 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
             await engineToCancel?.cancelOperations()
             try store.clearCloudSyncStateData(forKey: Self.stateKey)
         }
-        return (syncZoneWasRecreated, try makeEngineIfNeeded())
+        let syncEngine = try makeEngineIfNeeded()
+        let repaired = try store.requeueDictationsWithRecoverableTimingIfNeeded(
+            repairKey: Self.dictationTimingRepairKey
+        )
+        if repaired > 0 {
+            _ = try registerNextDirtyBatch(state: syncEngine.state)
+        }
+        return (syncZoneWasRecreated, syncEngine)
     }
 
     private func makeEngineIfNeeded() throws -> CKSyncEngine {
@@ -220,12 +271,6 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         configuration.subscriptionID = Self.subscriptionID
         let created = CKSyncEngine(configuration)
         engine = created
-        let repaired = try store.requeueDictationsWithRecoverableTimingIfNeeded(
-            repairKey: Self.dictationTimingRepairKey
-        )
-        if repaired > 0 {
-            _ = try registerNextDirtyBatch(state: created.state)
-        }
         return created
     }
 
@@ -236,7 +281,9 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         return created
     }
 
+    /// Registers one bounded page of SQLite outbox rows with CKSyncEngine.
     func registerNextDirtyBatch(state: any MuesliCKSyncPendingState) throws -> Int {
+        guard !accountBoundaryBlocked else { return 0 }
         let dirtyRecords = try store.textRecordsNeedingSync(limit: Self.uploadBatchSize)
         guard !dirtyRecords.isEmpty else { return 0 }
 
@@ -256,10 +303,12 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         return dirtyRecords.count
     }
 
+    /// Supplies CloudKit with a size-aware batch backed by one SQLite page read.
     func nextRecordZoneChangeBatch(
         _ context: CKSyncEngine.SendChangesContext,
         syncEngine: CKSyncEngine
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
+        guard !accountBoundaryBlocked else { return nil }
         let pending = syncEngine.state.pendingRecordZoneChanges.filter {
             context.options.scope.contains($0)
         }
@@ -268,9 +317,19 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
             syncEngine.state.remove(pendingRecordZoneChanges: batch.staleChanges)
         }
         guard !batch.recordsToSave.isEmpty else { return nil }
-        return CKSyncEngine.RecordZoneChangeBatch(recordsToSave: batch.recordsToSave)
+        let recordsByID = Dictionary(
+            uniqueKeysWithValues: batch.recordsToSave.map { ($0.recordID, $0) }
+        )
+        let saveChanges = batch.recordsToSave.map {
+            CKSyncEngine.PendingRecordZoneChange.saveRecord($0.recordID)
+        }
+        return await CKSyncEngine.RecordZoneChangeBatch(
+            pendingChanges: saveChanges,
+            recordProvider: { recordsByID[$0] }
+        )
     }
 
+    /// Materializes the latest local version for each pending record save.
     func makeRecordBatch(
         pendingChanges: [CKSyncEngine.PendingRecordZoneChange]
     ) -> MuesliCKSyncRecordBatch {
@@ -299,9 +358,8 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         } catch {
             // Keep pending saves intact on transient SQLite failures. Diagnostics
             // contain only the error category, never record IDs or authored text.
-            fputs(
-                "[muesli-ios] CKSyncEngine local batch read failed: \(String(describing: type(of: error)))\n",
-                stderr
+            Self.logger.error(
+                "local_batch_read_failed error_type=\(String(describing: type(of: error)), privacy: .public)"
             )
             return MuesliCKSyncRecordBatch(recordsToSave: [], staleChanges: [])
         }
@@ -324,6 +382,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         )
     }
 
+    /// Persists engine state and reconciles CloudKit events with SQLite.
     func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
         do {
             switch event {
@@ -332,6 +391,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                 try store.saveCloudSyncStateData(data, forKey: Self.stateKey)
 
             case .fetchedRecordZoneChanges(let changes):
+                guard !accountBoundaryBlocked else { break }
                 let applied = try handleFetchedRecords(
                     changes.modifications.map(\.record),
                     state: syncEngine.state
@@ -344,6 +404,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                 // notifications are intentionally ignored by this record contract.
 
             case .sentRecordZoneChanges(let changes):
+                guard !accountBoundaryBlocked else { break }
                 try handleSentRecordChanges(
                     savedRecords: changes.savedRecords,
                     failedRecordSaves: changes.failedRecordSaves.map {
@@ -356,14 +417,19 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
             case .accountChange(let change):
                 conflictBaseRecords.removeAll()
                 switch change.changeType {
-                case .signIn, .switchAccounts:
-                    try handleAccountChange(
-                        requiresMetadataReset: true,
+                case .signIn(let currentUser):
+                    _ = try handleAccountChange(
+                        currentUser: currentUser,
+                        state: syncEngine.state
+                    )
+                case .switchAccounts(_, let currentUser):
+                    _ = try handleAccountChange(
+                        currentUser: currentUser,
                         state: syncEngine.state
                     )
                 case .signOut:
-                    try handleAccountChange(
-                        requiresMetadataReset: false,
+                    _ = try handleAccountChange(
+                        currentUser: nil,
                         state: syncEngine.state
                     )
                 @unknown default:
@@ -384,14 +450,14 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                 break
             }
         } catch {
-            fputs(
-                "[muesli-ios] CKSyncEngine event failed: \(String(describing: type(of: error)))\n",
-                stderr
+            Self.logger.error(
+                "event_failed error_type=\(String(describing: type(of: error)), privacy: .public)"
             )
         }
     }
 
     @discardableResult
+    /// Applies fetched text records while preserving newer dirty local edits.
     func handleFetchedRecords(
         _ cloudRecords: [CKRecord],
         state: any MuesliCKSyncPendingState
@@ -424,6 +490,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         return appliedRecordIDs.count
     }
 
+    /// Acknowledges exact uploaded versions and retains retryable failures.
     func handleSentRecordChanges(
         savedRecords: [CKRecord],
         failedRecordSaves: [MuesliCKSyncFailedRecordSave],
@@ -468,19 +535,43 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         }
     }
 
+    /// Applies an account event without ever migrating local text across accounts.
+    @discardableResult
     func handleAccountChange(
-        requiresMetadataReset: Bool,
+        currentUser: CKRecord.ID?,
         state: any MuesliCKSyncPendingState
-    ) throws {
+    ) throws -> Bool {
         // This runs inside CKSyncEngine's own delegate callback. Cancelling the
         // same engine here is re-entrant and CloudKit deliberately traps. Keep
-        // the live engine and its account-change state; discard only the stale
-        // serialization that belongs to the previous account.
+        // live engine inert; discard account-specific pending work and state.
+        state.remove(pendingRecordZoneChanges: state.pendingRecordZoneChanges)
         try store.clearCloudSyncStateData(forKey: Self.stateKey)
         conflictBaseRecords.removeAll()
-        guard requiresMetadataReset else { return }
+        guard let currentUser else {
+            accountBoundaryBlocked = true
+            return false
+        }
 
-        try store.resetTextRecordCloudMetadataForAccountChange()
+        guard try authorizeAccount(currentUser) else { return false }
         _ = try registerNextDirtyBatch(state: state)
+        return true
+    }
+
+    /// Hashes the per-container user ID before it reaches local persistence.
+    static func accountScope(for userRecordID: CKRecord.ID) -> String {
+        let digest = SHA256.hash(data: Data(userRecordID.recordName.utf8))
+        return "sha256:" + digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func authorizeAccount(_ userRecordID: CKRecord.ID) throws -> Bool {
+        let matches = try store.claimCloudSyncAccountScope(
+            Self.accountScope(for: userRecordID),
+            forKey: Self.accountScopeKey
+        )
+        accountBoundaryBlocked = !matches
+        if !matches {
+            Self.logger.error("account_boundary_blocked")
+        }
+        return matches
     }
 }

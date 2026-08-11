@@ -234,7 +234,18 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertNotNil(stored.cloudSystemFields)
     }
 
-    func testAccountChangeClearsOldStateAndRequeuesSyncedLocalText() async throws {
+    func testAccountScopeHashIsStableDistinctAndDoesNotExposeRecordName() {
+        let first = CKRecord.ID(recordName: "private-user-a")
+        let second = CKRecord.ID(recordName: "private-user-b")
+
+        let firstScope = MuesliCKSyncEngine.accountScope(for: first)
+
+        XCTAssertEqual(firstScope, MuesliCKSyncEngine.accountScope(for: first))
+        XCTAssertNotEqual(firstScope, MuesliCKSyncEngine.accountScope(for: second))
+        XCTAssertFalse(firstScope.contains(first.recordName))
+    }
+
+    func testAccountSwitchClearsPendingStateWithoutRequeueingSyncedLocalText() async throws {
         let directory = try Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = Muesli.SharedStore(containerURL: directory)
@@ -258,18 +269,64 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         ))
         XCTAssertFalse(try store.hasTextRecordsNeedingSync())
         try store.saveCloudSyncStateData(Data([1, 2, 3]), forKey: MuesliCKSyncEngine.stateKey)
+        let owner = CKRecord.ID(recordName: "owner-account")
+        XCTAssertTrue(try store.claimCloudSyncAccountScope(
+            MuesliCKSyncEngine.accountScope(for: owner),
+            forKey: MuesliCKSyncEngine.accountScopeKey
+        ))
+
+        let pending = CKSyncEngine.PendingRecordZoneChange.saveRecord(saved.recordID)
+        let state = TestPendingState([pending])
+        let engine = MuesliCKSyncEngine(store: store)
+        let authorized = try await engine.handleAccountChange(
+            currentUser: CKRecord.ID(recordName: "different-account"),
+            state: state
+        )
+
+        XCTAssertFalse(authorized)
+        XCTAssertNil(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.stateKey))
+        XCTAssertTrue(state.pendingRecordZoneChanges.isEmpty)
+        XCTAssertFalse(try store.hasTextRecordsNeedingSync())
+        let registeredWhileBlocked = try await engine.registerNextDirtyBatch(state: state)
+        XCTAssertEqual(registeredWhileBlocked, 0)
+
+        let preserved = try XCTUnwrap(
+            try store.textRecordsForSync(recordNames: [local.id])[local.id]
+        )
+        XCTAssertEqual(preserved.text, "local text survives account change")
+        XCTAssertEqual(preserved.cloudChangeTag, "old-account-tag")
+        XCTAssertNotNil(preserved.cloudSystemFields)
+    }
+
+    func testSameAccountSignInRebuildsPendingSavesForDirtyRows() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "same-account dirty row",
+            engineIdentifier: "test"
+        ))
+        let dirty = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        let owner = CKRecord.ID(recordName: "owner-account")
+        XCTAssertTrue(try store.claimCloudSyncAccountScope(
+            MuesliCKSyncEngine.accountScope(for: owner),
+            forKey: MuesliCKSyncEngine.accountScopeKey
+        ))
 
         let state = TestPendingState()
         let engine = MuesliCKSyncEngine(store: store)
-        try await engine.handleAccountChange(requiresMetadataReset: true, state: state)
+        let authorized = try await engine.handleAccountChange(
+            currentUser: owner,
+            state: state
+        )
 
-        XCTAssertNil(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.stateKey))
-        XCTAssertTrue(try store.hasTextRecordsNeedingSync())
+        XCTAssertTrue(authorized)
         let pending = try XCTUnwrap(state.pendingRecordZoneChanges.first)
         guard case .saveRecord(let pendingRecordID) = pending else {
-            return XCTFail("Expected account change to queue a record save")
+            return XCTFail("Expected the dirty row to be restored to the pending outbox")
         }
-        XCTAssertEqual(pendingRecordID.recordName, local.id)
+        XCTAssertEqual(pendingRecordID.recordName, dirty.id)
         XCTAssertEqual(pendingRecordID.zoneID, ICloudTextSyncEngine.Schema.syncZoneID)
     }
 

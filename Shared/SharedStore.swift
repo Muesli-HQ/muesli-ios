@@ -323,8 +323,18 @@ struct SharedStore: Sendable {
         )
     }
 
-    func resetTextRecordCloudMetadataForAccountChange() throws {
-        try database().resetTextRecordCloudMetadataForAccountChange()
+    /// Claims this local dataset for a privacy-preserving CloudKit account scope.
+    ///
+    /// The first scope wins. A later account can observe only a mismatch; it
+    /// cannot replace the owner and accidentally upload this dataset.
+    func claimCloudSyncAccountScope(_ scope: String, forKey key: String) throws -> Bool {
+        try database().claimCloudSyncAccountScope(scope, forKey: key)
+    }
+
+    /// Requeues text records after their same-account custom zone is recreated.
+    /// Authored content and stable record names are preserved.
+    func resetTextRecordCloudMetadataForZoneRecreation() throws {
+        try database().resetTextRecordCloudMetadataForZoneRecreation()
     }
 
     func cloudSyncStateData(forKey key: String) throws -> Data? {
@@ -550,6 +560,57 @@ private enum SharedStoreDatabaseError: Error, LocalizedError {
 private struct SharedStoreDatabase {
     private static let databaseFileName = "Muesli.sqlite"
     private static let schemaVersion = 5
+
+    private static let syncMeetingLookupColumns = """
+    s.cloud_record_name, s.title, s.created_at, s.started_at, s.ended_at,
+    s.engine_identifier, s.updated_at, s.deleted_at, s.cloud_change_tag,
+    s.payload, t.text, t.speaker_transcript, t.summary_text, t.updated_at,
+    t.deleted_at, s.manual_notes, s.manual_notes_updated_at, s.cloud_system_fields
+    """
+    private static let syncMeetingDetailedColumns = """
+    s.cloud_record_name, s.id, s.title, s.kind, s.phase, s.created_at,
+    s.started_at, s.ended_at, s.engine_identifier, s.error_message,
+    s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
+    t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
+    t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
+    s.manual_notes_updated_at, s.cloud_system_fields
+    """
+
+    private struct SyncMeetingColumnLayout {
+        let recordName: Int32
+        let title: Int32
+        let createdAt: Int32
+        let startedAt: Int32
+        let endedAt: Int32
+        let engineIdentifier: Int32
+        let updatedAt: Int32
+        let deletedAt: Int32
+        let cloudChangeTag: Int32
+        let payload: Int32
+        let text: Int32
+        let speakerTranscript: Int32
+        let summaryText: Int32
+        let transcriptUpdatedAt: Int32
+        let transcriptDeletedAt: Int32
+        let manualNotes: Int32
+        let manualNotesUpdatedAt: Int32
+        let cloudSystemFields: Int32
+    }
+
+    private static let syncMeetingLookupLayout = SyncMeetingColumnLayout(
+        recordName: 0, title: 1, createdAt: 2, startedAt: 3, endedAt: 4,
+        engineIdentifier: 5, updatedAt: 6, deletedAt: 7, cloudChangeTag: 8,
+        payload: 9, text: 10, speakerTranscript: 11, summaryText: 12,
+        transcriptUpdatedAt: 13, transcriptDeletedAt: 14, manualNotes: 15,
+        manualNotesUpdatedAt: 16, cloudSystemFields: 17
+    )
+    private static let syncMeetingDetailedLayout = SyncMeetingColumnLayout(
+        recordName: 0, title: 2, createdAt: 5, startedAt: 6, endedAt: 7,
+        engineIdentifier: 8, updatedAt: 10, deletedAt: 11, cloudChangeTag: 12,
+        payload: 13, text: 14, speakerTranscript: 15, summaryText: 16,
+        transcriptUpdatedAt: 19, transcriptDeletedAt: 20, manualNotes: 21,
+        manualNotesUpdatedAt: 22, cloudSystemFields: 23
+    )
 
     private static let initializationLock = NSLock()
     nonisolated(unsafe) private static var initializedDatabasePaths: Set<String> = []
@@ -1005,10 +1066,7 @@ private struct SharedStoreDatabase {
 
             let meetings = try queryRows(
                 """
-                SELECT s.cloud_record_name, s.title, s.created_at, s.started_at, s.ended_at,
-                       s.engine_identifier, s.updated_at, s.deleted_at, s.cloud_change_tag,
-                       s.payload, t.text, t.speaker_transcript, t.summary_text, t.updated_at,
-                       t.deleted_at, s.manual_notes, s.manual_notes_updated_at, s.cloud_system_fields
+                SELECT \(Self.syncMeetingLookupColumns)
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE s.cloud_record_name IN (\(placeholders))
@@ -1016,44 +1074,7 @@ private struct SharedStoreDatabase {
                 """,
                 db: db,
                 bindValues: bindRecordNames,
-                read: { statement in
-                    let started = Self.optionalDate(statement, 3)
-                    let ended = Self.optionalDate(statement, 4)
-                    let text = sqliteColumnString(statement, 10) ?? ""
-                    let summary = sqliteColumnString(statement, 12)
-                    let manualNotesUpdatedAt = sqlite3_column_double(statement, 16)
-                    let updated = max(
-                        sqlite3_column_double(statement, 6),
-                        sqlite3_column_double(statement, 13),
-                        manualNotesUpdatedAt
-                    )
-                    let payload = sqliteColumnData(statement, 9)
-                    let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
-                    let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, 15)
-                    return SyncTextRecord(
-                        id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
-                        kind: .meeting,
-                        title: sqliteColumnString(statement, 1),
-                        text: text,
-                        speakerTranscript: sqliteColumnString(statement, 11),
-                        summaryText: summary,
-                        manualNotes: manualNotes,
-                        source: Self.syncPlatformSource(session?.source),
-                        localSource: Self.syncSource(session?.source, fallback: "meeting"),
-                        engineIdentifier: sqliteColumnString(statement, 5),
-                        createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 2)),
-                        updatedAt: Date(timeIntervalSince1970: updated),
-                        manualNotesUpdatedAt: manualNotesUpdatedAt > 0 ? Date(timeIntervalSince1970: manualNotesUpdatedAt) : nil,
-                        startedAt: started,
-                        endedAt: ended,
-                        durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
-                        wordCount: Self.wordCount(text + " " + (summary ?? "") + " " + (manualNotes ?? "")),
-                        isDeleted: sqlite3_column_type(statement, 7) != SQLITE_NULL
-                            || sqlite3_column_type(statement, 14) != SQLITE_NULL,
-                        cloudChangeTag: sqliteColumnString(statement, 8),
-                        cloudSystemFields: sqliteColumnData(statement, 17)
-                    )
-                }
+                read: { syncMeetingRecord($0, layout: Self.syncMeetingLookupLayout) }
             )
             for record in meetings { records[record.id] = record }
             return records
@@ -1070,6 +1091,39 @@ private struct SharedStoreDatabase {
             } read: { statement in
                 sqliteColumnData(statement, 0)
             }.first ?? nil
+        }
+    }
+
+    func claimCloudSyncAccountScope(_ scope: String, forKey key: String) throws -> Bool {
+        let scopeData = Data(scope.utf8)
+        return try withDatabase { db in
+            var matches = false
+            try transaction(db: db) {
+                let existing = try queryRows(
+                    "SELECT value FROM cloud_sync_state WHERE key = ? LIMIT 1",
+                    db: db
+                ) { statement in
+                    try bind(key, to: statement, at: 1)
+                } read: { statement in
+                    sqliteColumnData(statement, 0)
+                }.first ?? nil
+
+                if let existing {
+                    matches = existing == scopeData
+                    return
+                }
+
+                try execute(
+                    "INSERT INTO cloud_sync_state (key, value, updated_at) VALUES (?, ?, ?)",
+                    db: db
+                ) { statement in
+                    try bind(key, to: statement, at: 1)
+                    try bind(scopeData, to: statement, at: 2)
+                    try bind(Date().timeIntervalSince1970, to: statement, at: 3)
+                }
+                matches = true
+            }
+            return matches
         }
     }
 
@@ -1174,12 +1228,7 @@ private struct SharedStoreDatabase {
 
             let meetingRows = try queryRows(
                 """
-                SELECT s.cloud_record_name, s.id, s.title, s.kind, s.phase, s.created_at,
-                       s.started_at, s.ended_at, s.engine_identifier, s.error_message,
-                       s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
-                       t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
-                       t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
-                       s.manual_notes_updated_at, s.cloud_system_fields
+                SELECT \(Self.syncMeetingDetailedColumns)
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
@@ -1193,39 +1242,7 @@ private struct SharedStoreDatabase {
             ) { statement in
                 try bind(RecordingSessionKind.meeting.rawValue, to: statement, at: 1)
                 try bind(remaining, to: statement, at: 2)
-            } read: { statement in
-                let started = Self.optionalDate(statement, 6)
-                let ended = Self.optionalDate(statement, 7)
-                let text = sqliteColumnString(statement, 14) ?? ""
-                let summary = sqliteColumnString(statement, 16)
-                let manualNotesUpdatedAt = sqlite3_column_double(statement, 22)
-                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19), manualNotesUpdatedAt)
-                let payload = sqliteColumnData(statement, 13)
-                let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
-                let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, 21)
-                return SyncTextRecord(
-                    id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
-                    kind: .meeting,
-                    title: sqliteColumnString(statement, 2),
-                    text: text,
-                    speakerTranscript: sqliteColumnString(statement, 15),
-                    summaryText: summary,
-                    manualNotes: manualNotes,
-                    source: Self.syncPlatformSource(session?.source),
-                    localSource: Self.syncSource(session?.source, fallback: "meeting"),
-                    engineIdentifier: sqliteColumnString(statement, 8),
-                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
-                    updatedAt: Date(timeIntervalSince1970: updated),
-                    manualNotesUpdatedAt: manualNotesUpdatedAt > 0 ? Date(timeIntervalSince1970: manualNotesUpdatedAt) : nil,
-                    startedAt: started,
-                    endedAt: ended,
-                    durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
-                    wordCount: Self.wordCount(text + " " + (summary ?? "") + " " + (manualNotes ?? "")),
-                    isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 20) != SQLITE_NULL,
-                    cloudChangeTag: sqliteColumnString(statement, 12),
-                    cloudSystemFields: sqliteColumnData(statement, 23)
-                )
-            }
+            } read: { syncMeetingRecord($0, layout: Self.syncMeetingDetailedLayout) }
             records.append(contentsOf: meetingRows)
             return records
         }
@@ -1258,12 +1275,7 @@ private struct SharedStoreDatabase {
 
             let meetingRows = try queryRows(
                 """
-                SELECT s.cloud_record_name, s.id, s.title, s.kind, s.phase, s.created_at,
-                       s.started_at, s.ended_at, s.engine_identifier, s.error_message,
-                       s.updated_at, s.deleted_at, s.cloud_change_tag, s.payload,
-                       t.text, t.speaker_transcript, t.summary_text, t.summary_backend,
-                       t.summary_model, t.updated_at, t.deleted_at, s.manual_notes,
-                       s.manual_notes_updated_at, s.cloud_system_fields
+                SELECT \(Self.syncMeetingDetailedColumns)
                 FROM recording_sessions s
                 LEFT JOIN transcripts t ON t.session_id = s.id
                 WHERE s.cloud_record_name IS NOT NULL
@@ -1275,39 +1287,7 @@ private struct SharedStoreDatabase {
             ) { statement in
                 try bind(RecordingSessionKind.meeting.rawValue, to: statement, at: 1)
                 try bind(remaining, to: statement, at: 2)
-            } read: { statement in
-                let started = Self.optionalDate(statement, 6)
-                let ended = Self.optionalDate(statement, 7)
-                let text = sqliteColumnString(statement, 14) ?? ""
-                let summary = sqliteColumnString(statement, 16)
-                let manualNotesUpdatedAt = sqlite3_column_double(statement, 22)
-                let updated = max(sqlite3_column_double(statement, 10), sqlite3_column_double(statement, 19), manualNotesUpdatedAt)
-                let payload = sqliteColumnData(statement, 13)
-                let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
-                let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, 21)
-                return SyncTextRecord(
-                    id: sqliteColumnString(statement, 0) ?? UUID().uuidString,
-                    kind: .meeting,
-                    title: sqliteColumnString(statement, 2),
-                    text: text,
-                    speakerTranscript: sqliteColumnString(statement, 15),
-                    summaryText: summary,
-                    manualNotes: manualNotes,
-                    source: Self.syncPlatformSource(session?.source),
-                    localSource: Self.syncSource(session?.source, fallback: "meeting"),
-                    engineIdentifier: sqliteColumnString(statement, 8),
-                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5)),
-                    updatedAt: Date(timeIntervalSince1970: updated),
-                    manualNotesUpdatedAt: manualNotesUpdatedAt > 0 ? Date(timeIntervalSince1970: manualNotesUpdatedAt) : nil,
-                    startedAt: started,
-                    endedAt: ended,
-                    durationSeconds: started.map { (ended ?? Date()).timeIntervalSince($0) } ?? 0,
-                    wordCount: Self.wordCount(text + " " + (summary ?? "") + " " + (manualNotes ?? "")),
-                    isDeleted: sqlite3_column_type(statement, 11) != SQLITE_NULL || sqlite3_column_type(statement, 20) != SQLITE_NULL,
-                    cloudChangeTag: sqliteColumnString(statement, 12),
-                    cloudSystemFields: sqliteColumnData(statement, 23)
-                )
-            }
+            } read: { syncMeetingRecord($0, layout: Self.syncMeetingDetailedLayout) }
             records.append(contentsOf: meetingRows)
             return records
         }
@@ -1451,7 +1431,7 @@ private struct SharedStoreDatabase {
         }
     }
 
-    func resetTextRecordCloudMetadataForAccountChange() throws {
+    func resetTextRecordCloudMetadataForZoneRecreation() throws {
         try withDatabase { db in
             try transaction(db: db) {
                 try exec(
@@ -2707,6 +2687,53 @@ private struct SharedStoreDatabase {
             isDeleted: sqlite3_column_type(statement, 5) != SQLITE_NULL,
             cloudChangeTag: sqliteColumnString(statement, 6),
             cloudSystemFields: sqliteColumnData(statement, 7)
+        )
+    }
+
+    private func syncMeetingRecord(
+        _ statement: OpaquePointer,
+        layout: SyncMeetingColumnLayout
+    ) -> SyncTextRecord {
+        let startedAt = Self.optionalDate(statement, layout.startedAt)
+        let endedAt = Self.optionalDate(statement, layout.endedAt)
+        let text = sqliteColumnString(statement, layout.text) ?? ""
+        let summary = sqliteColumnString(statement, layout.summaryText)
+        let manualNotesTimestamp = sqlite3_column_double(statement, layout.manualNotesUpdatedAt)
+        let updatedTimestamp = max(
+            sqlite3_column_double(statement, layout.updatedAt),
+            sqlite3_column_double(statement, layout.transcriptUpdatedAt),
+            manualNotesTimestamp
+        )
+        let payload = sqliteColumnData(statement, layout.payload)
+        let session = payload.flatMap { try? decoder.decode(RecordingSession.self, from: $0) }
+        let manualNotes = session?.manualNotes ?? sqliteColumnString(statement, layout.manualNotes)
+
+        return SyncTextRecord(
+            id: sqliteColumnString(statement, layout.recordName) ?? UUID().uuidString,
+            kind: .meeting,
+            title: sqliteColumnString(statement, layout.title),
+            text: text,
+            speakerTranscript: sqliteColumnString(statement, layout.speakerTranscript),
+            summaryText: summary,
+            manualNotes: manualNotes,
+            source: Self.syncPlatformSource(session?.source),
+            localSource: Self.syncSource(session?.source, fallback: "meeting"),
+            engineIdentifier: sqliteColumnString(statement, layout.engineIdentifier),
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, layout.createdAt)),
+            updatedAt: Date(timeIntervalSince1970: updatedTimestamp),
+            manualNotesUpdatedAt: manualNotesTimestamp > 0
+                ? Date(timeIntervalSince1970: manualNotesTimestamp)
+                : nil,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            durationSeconds: startedAt.map { (endedAt ?? Date()).timeIntervalSince($0) } ?? 0,
+            wordCount: Self.wordCount(
+                text + " " + (summary ?? "") + " " + (manualNotes ?? "")
+            ),
+            isDeleted: sqlite3_column_type(statement, layout.deletedAt) != SQLITE_NULL
+                || sqlite3_column_type(statement, layout.transcriptDeletedAt) != SQLITE_NULL,
+            cloudChangeTag: sqliteColumnString(statement, layout.cloudChangeTag),
+            cloudSystemFields: sqliteColumnData(statement, layout.cloudSystemFields)
         )
     }
 

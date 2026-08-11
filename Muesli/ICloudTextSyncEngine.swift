@@ -1,5 +1,6 @@
 import CloudKit
 import Foundation
+import OSLog
 
 struct ICloudTextSyncResult: Equatable {
     let uploaded: Int
@@ -209,6 +210,10 @@ enum MuesliBridgeDeviceIdentity {
 
 final class ICloudTextSyncEngine: @unchecked Sendable {
     static let containerIdentifier = "iCloud.com.mueslihq.muesli"
+    private static let logger = Logger(
+        subsystem: "com.mueslihq.muesli",
+        category: "icloud-preflight"
+    )
 
     enum Schema {
         static let containerIdentifier = ICloudTextSyncEngine.containerIdentifier
@@ -328,6 +333,12 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         forceBridgeDeviceRefresh: Bool = false
     ) async throws -> Bool {
         let syncZoneWasRecreated = try await ensureSyncZone()
+        if syncZoneWasRecreated {
+            // The new zone belongs to the same account, but persisted system
+            // fields still carry record change tags from the deleted zone.
+            // Clear them before migration builds any CKRecord instances.
+            try store.resetTextRecordCloudMetadataForZoneRecreation()
+        }
         await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
         try await migrateDefaultZoneIfNeeded(store: store)
         return syncZoneWasRecreated
@@ -359,7 +370,9 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
             MuesliBridgeDeviceIdentity.updateRemoteDevices(from: records, defaults: defaults)
             MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults)
         } catch {
-            print("Failed to refresh iCloud bridge device identity: \(error)")
+            Self.logger.error(
+                "bridge_refresh_failed error_type=\(String(describing: type(of: error)), privacy: .public)"
+            )
             MuesliBridgeDeviceIdentity.markRefreshFailed(defaults: defaults)
         }
     }

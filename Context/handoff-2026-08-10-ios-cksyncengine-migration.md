@@ -21,7 +21,7 @@ This branch migrates Muesli iOS text-record synchronization from the manual Clou
 - `CKSyncEngine` owns CloudKit change fetching and upload scheduling.
 - SQLite dirty state remains the durable source of pending local changes.
 - Engine serialization is environment-namespaced so Development and Production state cannot collide.
-- The first CloudKit account is stored only as a SHA-256 scope. A different account clears pending engine work and pauses sync without requeueing or uploading the local library.
+- The first CloudKit account is stored only as a SHA-256 scope. A different account clears pending engine work and pauses sync without requeuing or uploading the local library.
 - Before an already-synced legacy library can claim its first account scope, the current private zone must contain at least one matching stable text-record ID. The proof uses batched record existence requests with no desired fields, so it downloads no authored content. A missing zone or zero overlap pauses sync instead of risking a cross-account upload; local-only libraries can claim normally.
 - Same-account zone recreation clears obsolete record change tags/system fields before migration, then safely requeues the preserved local text.
 - CloudKit chooses size-aware upload batches through its record-provider API while SQLite still loads each local page once.

@@ -14,6 +14,7 @@ This branch migrates Muesli iOS text-record synchronization from the manual Clou
   - `d1d56a6` Report privacy-safe iCloud sync progress
   - `a8b37c6` Fix CKSyncEngine account-change crash
   - `2643d0e` Repair synced dictation timing metadata
+  - `f6d267e` Harden CKSyncEngine account and batching safety
 
 ## Behavior
 
@@ -21,6 +22,7 @@ This branch migrates Muesli iOS text-record synchronization from the manual Clou
 - SQLite dirty state remains the durable source of pending local changes.
 - Engine serialization is environment-namespaced so Development and Production state cannot collide.
 - The first CloudKit account is stored only as a SHA-256 scope. A different account clears pending engine work and pauses sync without requeueing or uploading the local library.
+- Before an already-synced legacy library can claim its first account scope, the current private zone must contain at least one matching stable text-record ID. The proof uses batched record existence requests with no desired fields, so it downloads no authored content. A missing zone or zero overlap pauses sync instead of risking a cross-account upload; local-only libraries can claim normally.
 - Same-account zone recreation clears obsolete record change tags/system fields before migration, then safely requeues the preserved local text.
 - CloudKit chooses size-aware upload batches through its record-provider API while SQLite still loads each local page once.
 - Sync diagnostics expose only phase, timestamps, and counts; note text and record identifiers are never emitted.
@@ -29,7 +31,7 @@ This branch migrates Muesli iOS text-record synchronization from the manual Clou
 
 ## Validation
 
-- Full `MuesliTests` suite passed after the review fixes: 222 tests, 0 failures.
+- Full `MuesliTests` suite passed after the review fixes: 225 tests, 0 failures.
 - A disposable MuesliDev device harness was signed with:
   - bundle: `com.phequals7.muesli.ios.dev`
   - app group: `group.com.phequals7.muesli.dev`

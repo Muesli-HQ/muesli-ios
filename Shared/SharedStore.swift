@@ -280,6 +280,13 @@ struct SharedStore: Sendable {
         try database().textRecordsForSyncMigration(limit: limit)
     }
 
+    /// Stable record names that prove this library has completed CloudKit sync
+    /// before. The names stay in process and are used only for an account-bound
+    /// existence check; authored text is never read for that check.
+    func textRecordNamesRequiringAccountVerification() throws -> Set<String> {
+        try database().textRecordNamesRequiringAccountVerification()
+    }
+
     @discardableResult
     func upsertSyncedTextRecord(_ record: SyncTextRecord) throws -> Bool {
         try database().upsertSyncedTextRecord(record)
@@ -1290,6 +1297,41 @@ private struct SharedStoreDatabase {
             } read: { syncMeetingRecord($0, layout: Self.syncMeetingDetailedLayout) }
             records.append(contentsOf: meetingRows)
             return records
+        }
+    }
+
+    func textRecordNamesRequiringAccountVerification() throws -> Set<String> {
+        try withDatabase { db in
+            let names = try queryRows(
+                """
+                SELECT cloud_record_name
+                FROM result_history
+                WHERE cloud_record_name IS NOT NULL
+                  AND (
+                      cloud_change_tag IS NOT NULL
+                      OR cloud_system_fields IS NOT NULL
+                      OR last_synced_at IS NOT NULL
+                      OR sync_dirty = 0
+                  )
+                UNION
+                SELECT cloud_record_name
+                FROM recording_sessions
+                WHERE cloud_record_name IS NOT NULL
+                  AND kind = ?
+                  AND (
+                      cloud_change_tag IS NOT NULL
+                      OR cloud_system_fields IS NOT NULL
+                      OR last_synced_at IS NOT NULL
+                      OR sync_dirty = 0
+                  )
+                """,
+                db: db
+            ) { statement in
+                try bind(RecordingSessionKind.meeting.rawValue, to: statement, at: 1)
+            } read: { statement in
+                sqliteColumnString(statement, 0)
+            }
+            return Set(names.compactMap { $0 })
         }
     }
 

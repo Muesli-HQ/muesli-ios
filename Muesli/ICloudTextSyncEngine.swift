@@ -344,6 +344,46 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         return syncZoneWasRecreated
     }
 
+    /// Proves that an unscoped legacy library belongs to the current account.
+    ///
+    /// Only stable record IDs are requested and `desiredKeys` is empty, so this
+    /// check never downloads authored text or other user-authored fields. A
+    /// missing record/zone is a safe non-match; connectivity and service errors
+    /// still propagate so a transient failure cannot claim the wrong account.
+    func syncZoneContainsAnyTextRecord(named recordNames: Set<String>) async throws -> Bool {
+        let names = recordNames.filter { !$0.isEmpty }.sorted()
+        guard !names.isEmpty else { return false }
+
+        let batchSize = 200
+        var start = names.startIndex
+        while start < names.endIndex {
+            let end = names.index(start, offsetBy: batchSize, limitedBy: names.endIndex)
+                ?? names.endIndex
+            let recordIDs = names[start..<end].map {
+                CKRecord.ID(recordName: $0, zoneID: Schema.syncZoneID)
+            }
+
+            do {
+                let results = try await database.records(for: recordIDs, desiredKeys: [])
+                for result in results.values {
+                    switch result {
+                    case .success(let record):
+                        if record.recordType == Schema.textRecordType {
+                            return true
+                        }
+                    case .failure(let error):
+                        guard Self.isMissingProvenanceRecord(error) else { throw error }
+                    }
+                }
+            } catch {
+                guard Self.isMissingProvenanceRecord(error) else { throw error }
+            }
+
+            start = end
+        }
+        return false
+    }
+
     @discardableResult
     func ensureSyncZone() async throws -> Bool {
         do {
@@ -913,6 +953,35 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
             .joined(separator: " ")
         return message.contains(Schema.syncZoneName.lowercased())
             && (message.contains("zone not found") || message.contains("zone does not exist"))
+    }
+
+    private static func isMissingProvenanceRecord(_ error: Error) -> Bool {
+        if let ckError = error as? CKError {
+            switch ckError.code {
+            case .unknownItem, .zoneNotFound:
+                return true
+            case .partialFailure:
+                guard let errors = ckError.partialErrorsByItemID?.values,
+                      !errors.isEmpty else { return false }
+                return errors.allSatisfy(isMissingProvenanceRecord)
+            default:
+                return false
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == CKError.errorDomain {
+            switch CKError.Code(rawValue: nsError.code) {
+            case .unknownItem, .zoneNotFound:
+                return true
+            default:
+                break
+            }
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isMissingProvenanceRecord(underlying)
+        }
+        return false
     }
 
     private static var desiredTextRecordKeys: [CKRecord.FieldKey] {

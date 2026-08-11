@@ -330,6 +330,98 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertEqual(pendingRecordID.zoneID, ICloudTextSyncEngine.Schema.syncZoneID)
     }
 
+    func testUnscopedLegacyLibraryDoesNotClaimUnverifiedAccount() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "legacy authored text stays local",
+            engineIdentifier: "test"
+        ))
+        let local = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        let saved = Self.cloudRecord(
+            basedOn: local,
+            text: local.text,
+            updatedAt: local.updatedAt
+        )
+        XCTAssertTrue(try store.markTextRecordSynced(
+            kind: local.kind,
+            recordName: local.id,
+            changeTag: "legacy-account-tag",
+            systemFields: ICloudTextSyncEngine.encodedSystemFields(for: saved),
+            recordUpdatedAt: local.updatedAt
+        ))
+        try store.saveCloudSyncStateData(Data([7, 8, 9]), forKey: MuesliCKSyncEngine.stateKey)
+
+        let pending = CKSyncEngine.PendingRecordZoneChange.saveRecord(saved.recordID)
+        let state = TestPendingState([pending])
+        let engine = MuesliCKSyncEngine(
+            store: store,
+            legacyAccountRecordVerifier: { recordNames in
+                XCTAssertEqual(recordNames, Set([local.id]))
+                return false
+            }
+        )
+        let authorized = try await engine.handleAccountChange(
+            currentUser: CKRecord.ID(recordName: "unverified-account"),
+            state: state
+        )
+
+        XCTAssertFalse(authorized)
+        XCTAssertNil(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.accountScopeKey))
+        XCTAssertNil(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.stateKey))
+        XCTAssertTrue(state.pendingRecordZoneChanges.isEmpty)
+        XCTAssertFalse(try store.hasTextRecordsNeedingSync())
+
+        let preserved = try XCTUnwrap(
+            try store.textRecordsForSync(recordNames: [local.id])[local.id]
+        )
+        XCTAssertEqual(preserved.text, "legacy authored text stays local")
+        XCTAssertEqual(preserved.cloudChangeTag, "legacy-account-tag")
+        XCTAssertNotNil(preserved.cloudSystemFields)
+    }
+
+    func testUnscopedLegacyLibraryClaimsVerifiedAccount() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "legacy synced text",
+            engineIdentifier: "test"
+        ))
+        let local = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        XCTAssertTrue(try store.markTextRecordSynced(
+            kind: local.kind,
+            recordName: local.id,
+            changeTag: "legacy-account-tag",
+            systemFields: Data([1]),
+            recordUpdatedAt: local.updatedAt
+        ))
+
+        let currentUser = CKRecord.ID(recordName: "verified-account")
+        let state = TestPendingState()
+        let engine = MuesliCKSyncEngine(
+            store: store,
+            legacyAccountRecordVerifier: { recordNames in
+                XCTAssertEqual(recordNames, Set([local.id]))
+                return true
+            }
+        )
+        let authorized = try await engine.handleAccountChange(
+            currentUser: currentUser,
+            state: state
+        )
+
+        XCTAssertTrue(authorized)
+        XCTAssertEqual(
+            try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.accountScopeKey),
+            Data(MuesliCKSyncEngine.accountScope(for: currentUser).utf8)
+        )
+        XCTAssertTrue(state.pendingRecordZoneChanges.isEmpty)
+    }
+
     private static func cloudRecord(
         basedOn record: Muesli.SyncTextRecord,
         text: String,

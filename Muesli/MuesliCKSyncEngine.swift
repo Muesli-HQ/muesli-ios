@@ -107,6 +107,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private let store: SharedStore
     private let onRemoteChanges: @Sendable () async -> Void
     private let onProgress: @Sendable (MuesliCKSyncProgress) async -> Void
+    private let legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Bool)?
     private var container: CKContainer?
     private var preflight: ICloudTextSyncEngine?
     private var engine: CKSyncEngine?
@@ -119,12 +120,14 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         store: SharedStore = SharedStore(),
         container: CKContainer? = nil,
         onRemoteChanges: @escaping @Sendable () async -> Void = {},
-        onProgress: @escaping @Sendable (MuesliCKSyncProgress) async -> Void = { _ in }
+        onProgress: @escaping @Sendable (MuesliCKSyncProgress) async -> Void = { _ in },
+        legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Bool)? = nil
     ) {
         self.store = store
         self.container = container
         self.onRemoteChanges = onRemoteChanges
         self.onProgress = onProgress
+        self.legacyAccountRecordVerifier = legacyAccountRecordVerifier
     }
 
     /// Fetches private-zone changes, then drains the durable local outbox.
@@ -202,8 +205,9 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private func prepareEngine(
         forceBridgeDeviceRefresh: Bool
     ) async throws -> (syncZoneWasRecreated: Bool, engine: CKSyncEngine) {
+        let preflight = resolvedPreflight()
         let currentUser = try await resolvedContainer().userRecordID()
-        guard try authorizeAccount(currentUser) else {
+        guard try await authorizeAccount(currentUser, preflight: preflight) else {
             if let engine {
                 engine.state.remove(
                     pendingRecordZoneChanges: engine.state.pendingRecordZoneChanges
@@ -211,15 +215,6 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
             }
             try store.clearCloudSyncStateData(forKey: Self.stateKey)
             throw MuesliCKSyncError.accountChanged
-        }
-
-        let preflight: ICloudTextSyncEngine
-        if let existing = self.preflight {
-            preflight = existing
-        } else {
-            let created = ICloudTextSyncEngine(container: resolvedContainer())
-            self.preflight = created
-            preflight = created
         }
 
         let syncZoneWasRecreated = try await preflight.prepareForCKSyncEngine(
@@ -278,6 +273,13 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         if let container { return container }
         let created = CKContainer(identifier: ICloudTextSyncEngine.Schema.containerIdentifier)
         container = created
+        return created
+    }
+
+    private func resolvedPreflight() -> ICloudTextSyncEngine {
+        if let preflight { return preflight }
+        let created = ICloudTextSyncEngine(container: resolvedContainer())
+        preflight = created
         return created
     }
 
@@ -418,17 +420,17 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                 conflictBaseRecords.removeAll()
                 switch change.changeType {
                 case .signIn(let currentUser):
-                    _ = try handleAccountChange(
+                    _ = try await handleAccountChange(
                         currentUser: currentUser,
                         state: syncEngine.state
                     )
                 case .switchAccounts(_, let currentUser):
-                    _ = try handleAccountChange(
+                    _ = try await handleAccountChange(
                         currentUser: currentUser,
                         state: syncEngine.state
                     )
                 case .signOut:
-                    _ = try handleAccountChange(
+                    _ = try await handleAccountChange(
                         currentUser: nil,
                         state: syncEngine.state
                     )
@@ -540,7 +542,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     func handleAccountChange(
         currentUser: CKRecord.ID?,
         state: any MuesliCKSyncPendingState
-    ) throws -> Bool {
+    ) async throws -> Bool {
         // This runs inside CKSyncEngine's own delegate callback. Cancelling the
         // same engine here is re-entrant and CloudKit deliberately traps. Keep
         // live engine inert; discard account-specific pending work and state.
@@ -552,7 +554,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
             return false
         }
 
-        guard try authorizeAccount(currentUser) else { return false }
+        guard try await authorizeAccount(currentUser) else { return false }
         _ = try registerNextDirtyBatch(state: state)
         return true
     }
@@ -563,9 +565,40 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         return "sha256:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private func authorizeAccount(_ userRecordID: CKRecord.ID) throws -> Bool {
+    private func authorizeAccount(
+        _ userRecordID: CKRecord.ID,
+        preflight: ICloudTextSyncEngine? = nil
+    ) async throws -> Bool {
+        accountBoundaryBlocked = true
+        let requestedScope = Self.accountScope(for: userRecordID)
+
+        if let persistedScope = try store.cloudSyncStateData(forKey: Self.accountScopeKey) {
+            let matches = persistedScope == Data(requestedScope.utf8)
+            accountBoundaryBlocked = !matches
+            if !matches {
+                Self.logger.error("account_boundary_blocked")
+            }
+            return matches
+        }
+
+        let legacyRecordNames = try store.textRecordNamesRequiringAccountVerification()
+        if !legacyRecordNames.isEmpty {
+            let verified: Bool
+            if let legacyAccountRecordVerifier {
+                verified = try await legacyAccountRecordVerifier(legacyRecordNames)
+            } else {
+                verified = try await (preflight ?? resolvedPreflight()).syncZoneContainsAnyTextRecord(
+                    named: legacyRecordNames
+                )
+            }
+            guard verified else {
+                Self.logger.error("account_provenance_unverified")
+                return false
+            }
+        }
+
         let matches = try store.claimCloudSyncAccountScope(
-            Self.accountScope(for: userRecordID),
+            requestedScope,
             forKey: Self.accountScopeKey
         )
         accountBoundaryBlocked = !matches

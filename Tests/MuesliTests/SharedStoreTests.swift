@@ -481,6 +481,32 @@ final class SharedStoreTests: XCTestCase {
         )
     }
 
+    func testAccountVerificationNamesExcludeLocalOnlyRowsAndIncludeSyncedRows() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        try store.saveResult(DictationResult(
+            requestID: UUID(),
+            text: "private local text",
+            engineIdentifier: "test"
+        ))
+        let local = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+
+        XCTAssertTrue(try store.textRecordNamesRequiringAccountVerification().isEmpty)
+
+        XCTAssertTrue(try store.markTextRecordSynced(
+            kind: local.kind,
+            recordName: local.id,
+            changeTag: "server-change-tag",
+            systemFields: Data([1, 2, 3]),
+            recordUpdatedAt: local.updatedAt
+        ))
+        XCTAssertEqual(
+            try store.textRecordNamesRequiringAccountVerification(),
+            Set([local.id])
+        )
+    }
+
     func testDictationSyncRecordsIncludeLinkedSessionTiming() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

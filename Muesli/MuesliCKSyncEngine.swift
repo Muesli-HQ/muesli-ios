@@ -113,6 +113,43 @@ enum MuesliCKSyncCycle {
     }
 }
 
+/// Applies one bounded zone-recreation retry and makes every preparation
+/// invalidation explicit. Keeping the policy outside the CloudKit actor makes
+/// second-attempt failures deterministic to exercise in tests.
+enum MuesliCKSyncRecoveryRunner {
+    static func run<Value>(
+        isolation: isolated (any Actor)? = #isolation,
+        operation: () async throws -> Value,
+        isZoneMissing: (any Error) -> Bool,
+        invalidatesPreparation: (any Error) -> Bool,
+        invalidate: (any Error) async -> Void
+    ) async throws -> Value {
+        do {
+            return try await operation()
+        } catch {
+            guard isZoneMissing(error) else {
+                if invalidatesPreparation(error) {
+                    await invalidate(error)
+                }
+                throw error
+            }
+
+            await invalidate(error)
+            do {
+                return try await operation()
+            } catch {
+                // A successful retry may prepare a fresh engine before its
+                // send/fetch discovers another zone or account-context error.
+                // Retire that preparation too instead of publishing it as ready.
+                if invalidatesPreparation(error) {
+                    await invalidate(error)
+                }
+                throw error
+            }
+        }
+    }
+}
+
 /// Send failure normalized away from CKSyncEngine event wrappers.
 struct MuesliCKSyncFailedRecordSave: Sendable {
     let record: CKRecord
@@ -175,7 +212,14 @@ enum MuesliCKSyncNotificationKey {
 actor MuesliCKSyncRuntime {
     static let shared = MuesliCKSyncRuntime()
 
-    private let engine: MuesliCKSyncEngine
+    typealias ExecuteIntent = @Sendable (
+        MuesliCKSyncIntent
+    ) async throws -> ICloudTextSyncResult
+
+    private let prepareEngine: @Sendable () async throws -> Void
+    private let executeIntent: ExecuteIntent
+    private let refreshBridge: @Sendable (Bool) async -> Void
+    private let cancelEngine: @Sendable () async -> Void
     private struct Waiter {
         let generation: Int
         let continuation: CheckedContinuation<ICloudTextSyncResult, any Error>
@@ -186,7 +230,7 @@ actor MuesliCKSyncRuntime {
     private var generation = 0
 
     init(engine: MuesliCKSyncEngine? = nil) {
-        self.engine = engine ?? MuesliCKSyncEngine(
+        let resolvedEngine = engine ?? MuesliCKSyncEngine(
             onRemoteChanges: {
                 await MainActor.run {
                     NotificationCenter.default.post(name: .muesliCKSyncRemoteChanges, object: nil)
@@ -202,10 +246,37 @@ actor MuesliCKSyncRuntime {
                 }
             }
         )
+        prepareEngine = { _ = try await resolvedEngine.prepare() }
+        executeIntent = { intent in
+            if intent == .manual {
+                return try await resolvedEngine.syncManually()
+            } else if intent == .send {
+                return try await resolvedEngine.sendLocalChanges()
+            } else {
+                return try await resolvedEngine.fetchRemoteChanges()
+            }
+        }
+        refreshBridge = { forceRefresh in
+            await resolvedEngine.refreshBridgeDevice(forceRefresh: forceRefresh)
+        }
+        cancelEngine = { await resolvedEngine.cancel() }
+    }
+
+    /// Test seam for request ownership and cancellation without CloudKit I/O.
+    init(
+        prepare: @escaping @Sendable () async throws -> Void = {},
+        execute: @escaping ExecuteIntent,
+        refreshBridge: @escaping @Sendable (Bool) async -> Void = { _ in },
+        cancel: @escaping @Sendable () async -> Void = {}
+    ) {
+        prepareEngine = prepare
+        executeIntent = execute
+        self.refreshBridge = refreshBridge
+        cancelEngine = cancel
     }
 
     func prepare() async throws {
-        _ = try await engine.prepare()
+        try await prepareEngine()
     }
 
     func sendLocalChanges() async throws -> ICloudTextSyncResult {
@@ -221,7 +292,7 @@ actor MuesliCKSyncRuntime {
     }
 
     func refreshBridgeDevice(forceRefresh: Bool) async {
-        await engine.refreshBridgeDevice(forceRefresh: forceRefresh)
+        await refreshBridge(forceRefresh)
     }
 
     func cancel() async {
@@ -230,8 +301,10 @@ actor MuesliCKSyncRuntime {
         let cancelledWaiters = waiters
         waiters.removeAll()
         isRunning = false
-        await engine.cancel()
+        // Release APNs/UI callers before CloudKit cancellation. This guarantees
+        // the background fetch completion path cannot wait on cancellation I/O.
         cancelledWaiters.forEach { $0.continuation.resume(throwing: CancellationError()) }
+        await cancelEngine()
     }
 
     private func enqueue(
@@ -251,26 +324,29 @@ actor MuesliCKSyncRuntime {
         var totalUploaded = 0
         var totalDownloaded = 0
         do {
-            while !intents.pending.isEmpty {
+            while drainGeneration == generation, !intents.pending.isEmpty {
                 let intent = intents.take()
-                let result: ICloudTextSyncResult
-                if intent == .manual {
-                    result = try await engine.syncManually()
-                } else if intent == .send {
-                    result = try await engine.sendLocalChanges()
-                } else {
-                    result = try await engine.fetchRemoteChanges()
-                }
+                let result = try await executeIntent(intent)
                 totalUploaded += result.uploaded
                 totalDownloaded += result.downloaded
             }
+            guard drainGeneration == generation else { return }
             completeWaiters(generation: drainGeneration, with: .success(ICloudTextSyncResult(
                 uploaded: totalUploaded,
                 downloaded: totalDownloaded
             )))
         } catch {
+            guard drainGeneration == generation else { return }
+            // Every current-generation waiter receives this failure, so discard
+            // their merged intent too. A later trigger must not replay stale work
+            // after the callers that requested it have already been released.
+            _ = intents.take()
             completeWaiters(generation: drainGeneration, with: .failure(error))
         }
+    }
+
+    func pendingIntentForTesting() -> MuesliCKSyncIntent {
+        intents.pending
     }
 
     private func completeWaiters(
@@ -371,21 +447,21 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private func runWithZoneRecovery(
         intent: MuesliCKSyncIntent
     ) async throws -> ICloudTextSyncResult {
-        do {
-            return try await run(intent: intent)
-        } catch {
-            guard ICloudTextSyncEngine.isSyncZoneMissing(error) else {
-                if Self.invalidatesPreparation(error) {
-                    await invalidatePreparation(cancelEngine: false, clearEngineState: false)
-                }
-                throw error
+        try await MuesliCKSyncRecoveryRunner.run(
+            operation: { try await self.run(intent: intent) },
+            isZoneMissing: ICloudTextSyncEngine.isSyncZoneMissing,
+            invalidatesPreparation: Self.invalidatesPreparation,
+            invalidate: { error in
+                let zoneIsMissing = ICloudTextSyncEngine.isSyncZoneMissing(error)
+                // Zone loss must also retire serialized CKSyncEngine state;
+                // account-context failures only retire cached preparation so
+                // the next attempt proves the account boundary again.
+                await self.invalidatePreparation(
+                    cancelEngine: zoneIsMissing,
+                    clearEngineState: zoneIsMissing
+                )
             }
-
-            // One bounded retry recreates a same-account zone through preflight.
-            // That path clears obsolete CKRecord metadata before requeueing text.
-            await invalidatePreparation(cancelEngine: true, clearEngineState: true)
-            return try await run(intent: intent)
-        }
+        )
     }
 
     private func run(intent: MuesliCKSyncIntent) async throws -> ICloudTextSyncResult {
@@ -499,14 +575,12 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         }
     }
 
-    private static func invalidatesPreparation(_ error: Error) -> Bool {
-        guard let ckError = error as? CKError else { return false }
-        switch ckError.code {
-        case .notAuthenticated, .permissionFailure:
-            return true
-        default:
-            return false
-        }
+    static func invalidatesPreparation(_ error: Error) -> Bool {
+        ICloudTextSyncEngine.isSyncZoneMissing(error)
+            || ICloudTextSyncEngine.containsCloudKitError(
+                error,
+                codes: [.notAuthenticated, .permissionFailure]
+            )
     }
 
     private func makeEngineIfNeeded() throws -> CKSyncEngine {

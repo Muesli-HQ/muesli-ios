@@ -76,6 +76,26 @@ reset, size-aware batching, exact-version acknowledgements, conflict/retry handl
 privacy-safe diagnostics, recoverable WPM timing/one-time repair, local audio semantics,
 and cancellation/account-change crash protection.
 
+The recovery follow-up also closes lifecycle edge cases found during cross-platform
+review:
+
+- zone loss now includes direct or recursively nested `unknownItem`, `zoneNotFound`,
+  and `userDeletedZone` errors;
+- nested partial failures containing `notAuthenticated` or `permissionFailure` retire
+  cached preparation so the account boundary must be proven again;
+- a second zone/account-context failure after the bounded zone retry also invalidates
+  the newly prepared state before it is rethrown;
+- a failed merged runtime drain discards its pending intent with the failed waiters,
+  and cancellation generations prevent a retired drain from consuming new work;
+- cancellation releases APNs/UI waiters before waiting for CKSyncEngine cleanup, so
+  the application delegate's background completion cannot hang behind that cleanup.
+
+Validation used the existing DerivedData cache at
+`/Users/pranavhari/Library/Developer/Xcode/DerivedData/MuesliiOS-hfpsukoywdcgmbddckyxgiejqtau`:
+
+- focused `MuesliCKSyncEngineTests`: 29 tests, 0 failures;
+- full iOS unit suite (UI tests skipped): 238 tests, 0 failures.
+
 ## Remaining physical checks
 
 1. Launch MuesliDev on the unlocked picophone and allow the one-time repair to sync.

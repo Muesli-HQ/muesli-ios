@@ -937,16 +937,11 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
     }
 
     static func isSyncZoneMissing(_ error: Error) -> Bool {
-        if let ckError = error as? CKError {
-            if ckError.code == .unknownItem || ckError.code == .zoneNotFound {
-                return true
-            }
-            if ckError.code == .partialFailure,
-               ckError.partialErrorsByItemID?.values.contains(where: { partialError in
-                   (partialError as? CKError)?.code == .unknownItem
-               }) == true {
-                return true
-            }
+        if containsCloudKitError(
+            error,
+            codes: [.unknownItem, .zoneNotFound, .userDeletedZone]
+        ) {
+            return true
         }
 
         let nsError = error as NSError
@@ -962,10 +957,42 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
             && (message.contains("zone not found") || message.contains("zone does not exist"))
     }
 
+    /// Recursively inspects CKError partial failures and underlying errors.
+    /// Depth is bounded defensively because NSError graphs are not guaranteed
+    /// to be acyclic.
+    static func containsCloudKitError(
+        _ error: Error,
+        codes: [CKError.Code],
+        depth: Int = 0
+    ) -> Bool {
+        guard depth < 8 else { return false }
+
+        if let ckError = error as? CKError {
+            if codes.contains(ckError.code) { return true }
+            if ckError.code == .partialFailure,
+               ckError.partialErrorsByItemID?.values.contains(where: {
+                   containsCloudKitError($0, codes: codes, depth: depth + 1)
+               }) == true {
+                return true
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == CKError.errorDomain,
+           let code = CKError.Code(rawValue: nsError.code),
+           codes.contains(code) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return containsCloudKitError(underlying, codes: codes, depth: depth + 1)
+        }
+        return false
+    }
+
     private static func isMissingProvenanceRecord(_ error: Error) -> Bool {
         if let ckError = error as? CKError {
             switch ckError.code {
-            case .unknownItem, .zoneNotFound:
+            case .unknownItem, .zoneNotFound, .userDeletedZone:
                 return true
             case .partialFailure:
                 guard let errors = ckError.partialErrorsByItemID?.values,
@@ -979,7 +1006,7 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         let nsError = error as NSError
         if nsError.domain == CKError.errorDomain {
             switch CKError.Code(rawValue: nsError.code) {
-            case .unknownItem, .zoneNotFound:
+            case .unknownItem, .zoneNotFound, .userDeletedZone:
                 return true
             default:
                 break

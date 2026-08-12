@@ -2,6 +2,8 @@ import CloudKit
 import UIKit
 
 enum MuesliCKSyncBackgroundFetch {
+    static let cloudKitBudget: Duration = .seconds(20)
+
     static func shouldFetch(isCloudKitNotification: Bool, syncEnabled: Bool) -> Bool {
         isCloudKitNotification && syncEnabled
     }
@@ -26,11 +28,15 @@ final class MuesliAppDelegate: NSObject, UIApplicationDelegate {
         // Create/restore CKSyncEngine independently of SwiftUI view ownership so
         // automatic CloudKit push handling is available from process launch.
         let runtime = MuesliCKSyncRuntime.shared
-        if MuesliCKSyncLaunchPolicy.shouldPrepare(
+        if let initialIntent = MuesliCKSyncLaunchPolicy.initialIntent(
             syncEnabled: MuesliPreferences.iCloudSyncEnabled
         ) {
             Task {
-                try? await runtime.prepare()
+                // Startup convergence replays SQLite's durable outbox even if
+                // CKSyncEngine restored no pending state, then fetches remote work.
+                if initialIntent == .manual {
+                    _ = try? await runtime.syncManually()
+                }
             }
         }
         return true
@@ -54,7 +60,9 @@ final class MuesliAppDelegate: NSObject, UIApplicationDelegate {
         // starts a sync operation from inside its callbacks.
         Task {
             let result = await MuesliCKSyncBackgroundFetch.run {
-                try await MuesliCKSyncRuntime.shared.fetchRemoteChanges()
+                try await MuesliCKSyncRuntime.shared.fetchRemoteChanges(
+                    deadline: MuesliCKSyncBackgroundFetch.cloudKitBudget
+                )
             }
             await MainActor.run {
                 completionHandler(result)

@@ -294,7 +294,10 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         forceBridgeDeviceRefresh: Bool = false
     ) async throws -> ICloudTextSyncResult {
         _ = try await ensureSyncZone()
-        await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
+        await refreshBridgeDeviceLink(
+            forceRefresh: forceBridgeDeviceRefresh,
+            shouldCommit: { true }
+        )
         try await migrateDefaultZoneIfNeeded(store: store)
 
         let remoteRecords = try await fetchChangedTextRecords()
@@ -347,8 +350,14 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
     /// Bridge records are onboarding/UI metadata, not authorization or text
     /// synchronization state. A slow query here must never hold open a text
     /// upload, download, or the visible sync progress indicator.
-    func refreshBridgeDeviceLinkIfNeeded(forceRefresh: Bool = false) async {
-        await refreshBridgeDeviceLink(forceRefresh: forceRefresh)
+    func refreshBridgeDeviceLinkIfNeeded(
+        forceRefresh: Bool = false,
+        shouldCommit: @escaping @Sendable () async -> Bool = { true }
+    ) async {
+        await refreshBridgeDeviceLink(
+            forceRefresh: forceRefresh,
+            shouldCommit: shouldCommit
+        )
     }
 
     /// Proves that an unscoped legacy library belongs to the current account.
@@ -405,22 +414,29 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         }
     }
 
-    private func refreshBridgeDeviceLink(forceRefresh: Bool = false) async {
+    private func refreshBridgeDeviceLink(
+        forceRefresh: Bool = false,
+        shouldCommit: @escaping @Sendable () async -> Bool
+    ) async {
         guard MuesliBridgeDeviceIdentity.shouldRefresh(
             defaults: defaults,
             forceRefresh: forceRefresh
         ) else { return }
 
         do {
+            guard await shouldCommit(), !Task.isCancelled else { return }
             try await upsertLocalBridgeDeviceRecord()
             let records = try await fetchBridgeDeviceRecords()
+            guard await shouldCommit(), !Task.isCancelled else { return }
             MuesliBridgeDeviceIdentity.updateRemoteDevices(from: records, defaults: defaults)
             MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults)
         } catch {
             Self.logger.error(
                 "bridge_refresh_failed error_type=\(String(describing: type(of: error)), privacy: .public)"
             )
-            MuesliBridgeDeviceIdentity.markRefreshFailed(defaults: defaults)
+            if await shouldCommit(), !Task.isCancelled {
+                MuesliBridgeDeviceIdentity.markRefreshFailed(defaults: defaults)
+            }
         }
     }
 
@@ -989,7 +1005,8 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         return false
     }
 
-    private static func isMissingProvenanceRecord(_ error: Error) -> Bool {
+    static func isMissingProvenanceRecord(_ error: Error, depth: Int = 0) -> Bool {
+        guard depth < 8 else { return false }
         if let ckError = error as? CKError {
             switch ckError.code {
             case .unknownItem, .zoneNotFound, .userDeletedZone:
@@ -997,7 +1014,9 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
             case .partialFailure:
                 guard let errors = ckError.partialErrorsByItemID?.values,
                       !errors.isEmpty else { return false }
-                return errors.allSatisfy(isMissingProvenanceRecord)
+                return errors.allSatisfy {
+                    isMissingProvenanceRecord($0, depth: depth + 1)
+                }
             default:
                 return false
             }
@@ -1013,7 +1032,7 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
             }
         }
         if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-            return isMissingProvenanceRecord(underlying)
+            return isMissingProvenanceRecord(underlying, depth: depth + 1)
         }
         return false
     }

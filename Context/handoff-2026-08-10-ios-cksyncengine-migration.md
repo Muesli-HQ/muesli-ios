@@ -85,16 +85,29 @@ review:
   cached preparation so the account boundary must be proven again;
 - a second zone/account-context failure after the bounded zone retry also invalidates
   the newly prepared state before it is rethrown;
-- a failed merged runtime drain discards its pending intent with the failed waiters,
-  and cancellation generations prevent a retired drain from consuming new work;
+- runtime batches own only the waiters present when that batch starts, so a failed
+  send cannot discard a later APNs fetch; the later request drains exactly once;
 - cancellation releases APNs/UI waiters before waiting for CKSyncEngine cleanup, so
-  the application delegate's background completion cannot hang behind that cleanup.
+  the application delegate's background completion cannot hang behind that cleanup;
+- cancellation is also an execution barrier: requests accepted into the new generation
+  remain queued until engine cleanup finishes, then start exactly once;
+- APNs fetch waiters expire after a 20-second background budget and are removed exactly
+  once without cancelling durable CKSyncEngine convergence;
+- enabled startup now performs nonblocking send-then-fetch convergence, rebuilding
+  ordinary persisted SQLite dirty rows even when restored engine pending state is empty;
+- automatic zone-deletion/missing-zone delegate events only invalidate preparation and
+  serialized state. The next external recovery fetch escalates to paginated send-then-fetch
+  so metadata-reset rows rebuild the zone without delegate reentrancy;
+- ancillary bridge refreshes coalesce, union forced refresh intent, cancel with the sync
+  lifecycle, and require current-generation authority before publishing device identity;
+- missing-provenance error traversal is depth-bounded like other recursive CloudKit
+  classifiers.
 
 Validation used the existing DerivedData cache at
 `/Users/pranavhari/Library/Developer/Xcode/DerivedData/MuesliiOS-hfpsukoywdcgmbddckyxgiejqtau`:
 
-- focused `MuesliCKSyncEngineTests`: 29 tests, 0 failures;
-- full iOS unit suite (UI tests skipped): 238 tests, 0 failures.
+- focused `MuesliCKSyncEngineTests`: 37 tests, 0 failures;
+- full iOS unit suite (UI tests skipped): 246 tests, 0 failures.
 
 ## Remaining physical checks
 

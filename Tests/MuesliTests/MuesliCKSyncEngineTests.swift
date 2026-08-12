@@ -57,9 +57,29 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertEqual(MuesliCKSyncPlan.operations(for: .manual), [.send, .fetch])
     }
 
-    func testLaunchPolicyPreparesPersistentEngineWheneverSyncIsEnabled() {
-        XCTAssertTrue(MuesliCKSyncLaunchPolicy.shouldPrepare(syncEnabled: true))
-        XCTAssertFalse(MuesliCKSyncLaunchPolicy.shouldPrepare(syncEnabled: false))
+    func testLaunchPolicyReplaysOutgoingBeforeFetchingWheneverSyncIsEnabled() {
+        XCTAssertEqual(MuesliCKSyncLaunchPolicy.initialIntent(syncEnabled: true), .manual)
+        XCTAssertNil(MuesliCKSyncLaunchPolicy.initialIntent(syncEnabled: false))
+    }
+
+    func testAutomaticZoneLossEventsOnlyClassifyTheMuesliSyncZone() {
+        let target = ICloudTextSyncEngine.Schema.syncZoneID
+        let unrelated = CKRecordZone.ID(zoneName: "unrelated")
+
+        XCTAssertTrue(MuesliCKSyncAutomaticEventPolicy.lostSyncZone(in: [target]))
+        XCTAssertFalse(MuesliCKSyncAutomaticEventPolicy.lostSyncZone(in: [unrelated]))
+        XCTAssertTrue(MuesliCKSyncAutomaticEventPolicy.lostSyncZone(
+            zoneID: target,
+            error: CKError(.userDeletedZone)
+        ))
+        XCTAssertFalse(MuesliCKSyncAutomaticEventPolicy.lostSyncZone(
+            zoneID: target,
+            error: CKError(.networkUnavailable)
+        ))
+        XCTAssertFalse(MuesliCKSyncAutomaticEventPolicy.lostSyncZone(
+            zoneID: unrelated,
+            error: CKError(.zoneNotFound)
+        ))
     }
 
     func testConcurrentTriggerIntentUnionsInsteadOfOverwritingDirections() {
@@ -208,7 +228,45 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertEqual(invalidations, 2)
     }
 
-    func testFailedRuntimeDrainDropsMergedIntentWithItsFailedWaiters() async throws {
+    func testFetchZoneRecoveryFlushesEveryRebuiltOutboxPageBeforeFetching() async throws {
+        var events: [String] = []
+        var pages = [2, 1, 0]
+        var uploaded = 0
+
+        let result: ICloudTextSyncResult = try await MuesliCKSyncRecoveryRunner.run(
+            operation: {
+                events.append("fetch-failed")
+                throw CKError(.zoneNotFound)
+            },
+            recoveryOperation: {
+                try await MuesliCKSyncCycle.sendLocalChanges(
+                    maximumUploadBatches: 10,
+                    registerNextBatch: {
+                        events.append("register")
+                        return pages.removeFirst()
+                    },
+                    uploadedCount: { uploaded },
+                    send: {
+                        events.append("send")
+                        uploaded += 1
+                    }
+                )
+                events.append("fetch")
+                return ICloudTextSyncResult(uploaded: uploaded, downloaded: 0)
+            },
+            isZoneMissing: ICloudTextSyncEngine.isSyncZoneMissing,
+            invalidatesPreparation: MuesliCKSyncEngine.invalidatesPreparation,
+            invalidate: { _ in events.append("invalidate") }
+        )
+
+        XCTAssertEqual(result.uploaded, 2)
+        XCTAssertEqual(
+            events,
+            ["fetch-failed", "invalidate", "register", "send", "register", "send", "register", "fetch"]
+        )
+    }
+
+    func testFailedActiveRuntimeBatchPreservesLaterIncomingRequest() async throws {
         let executor = TestRuntimeExecutor()
         let runtime = MuesliCKSyncRuntime(execute: { intent in
             try await executor.execute(intent)
@@ -220,17 +278,14 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         await executor.failActiveOperation()
 
         await assertFailure(first)
-        await assertFailure(merged)
-        let pendingAfterFailure = await runtime.pendingIntentForTesting()
-        XCTAssertTrue(pendingAfterFailure.isEmpty)
-
-        let next = Task { try await runtime.sendLocalChanges() }
         try await executor.waitForCallCount(2)
         await executor.succeedActiveOperation()
-        _ = try await next.value
+        _ = try await merged.value
 
         let executedIntents = await executor.executedIntents()
-        XCTAssertEqual(executedIntents, [.send, .send])
+        XCTAssertEqual(executedIntents, [.send, .fetch])
+        let pendingIntent = await runtime.pendingIntentForTesting()
+        XCTAssertTrue(pendingIntent.isEmpty)
     }
 
     func testRuntimeCancellationReleasesBackgroundWaiterBeforeEngineCleanupFinishes() async throws {
@@ -258,6 +313,108 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         await cancellation.value
         let finishedAfterRelease = await executor.cancellationCleanupFinished()
         XCTAssertTrue(finishedAfterRelease)
+    }
+
+    func testRequestEnqueuedDuringCancellationWaitsForCleanupThenStartsOnce() async throws {
+        let executor = TestRuntimeExecutor()
+        let runtime = MuesliCKSyncRuntime(
+            execute: { intent in try await executor.execute(intent) },
+            cancel: { await executor.waitForCancellationRelease() }
+        )
+        let retired = Task { try await runtime.fetchRemoteChanges() }
+        try await executor.waitForCallCount(1)
+
+        let cancellation = Task { await runtime.cancel() }
+        try await executor.waitForCancellationCleanupStart()
+        let replacement = Task { try await runtime.sendLocalChanges() }
+        try await Task.sleep(for: .milliseconds(30))
+        let intentsBeforeCleanup = await executor.executedIntents()
+        XCTAssertEqual(intentsBeforeCleanup, [.fetch])
+
+        await executor.releaseCancellationCleanup()
+        await cancellation.value
+        try await executor.waitForCallCount(2)
+        let intentsAfterCleanup = await executor.executedIntents()
+        XCTAssertEqual(intentsAfterCleanup, [.fetch, .send])
+        await executor.succeedActiveOperation()
+        _ = try await replacement.value
+
+        do {
+            _ = try await retired.value
+            XCTFail("The retired generation must be cancelled")
+        } catch is CancellationError {
+            // Expected.
+        }
+    }
+
+    func testDeadlineRemovesBlockedBackgroundWaiterButLeavesDurableFetchRunning() async throws {
+        let executor = TestRuntimeExecutor()
+        let runtime = MuesliCKSyncRuntime(execute: { intent in
+            try await executor.execute(intent)
+        })
+        let request = Task {
+            try await runtime.fetchRemoteChanges(deadline: .milliseconds(25))
+        }
+        try await executor.waitForCallCount(1)
+
+        do {
+            _ = try await request.value
+            XCTFail("The bounded APNs waiter must expire")
+        } catch MuesliCKSyncRuntimeError.deadlineExceeded {
+            // Expected.
+        }
+        let waiterCount = await runtime.waiterCountForTesting()
+        let executedIntents = await executor.executedIntents()
+        XCTAssertEqual(waiterCount, 0)
+        XCTAssertEqual(executedIntents, [.fetch])
+
+        // Expiry releases only the OS completion waiter. The shared durable
+        // operation remains owned by the runtime/CKSyncEngine and may finish.
+        await executor.succeedActiveOperation()
+    }
+
+    func testBridgeRefreshUnionsForceAndRunsOneFollowUpGeneration() async throws {
+        let bridge = TestBridgeRefreshExecutor()
+        let runtime = MuesliCKSyncRuntime(
+            execute: { _ in ICloudTextSyncResult(uploaded: 0, downloaded: 0) },
+            refreshBridge: { force, shouldCommit in
+                await bridge.execute(force: force, shouldCommit: shouldCommit)
+            }
+        )
+
+        let first = Task { await runtime.refreshBridgeDevice(forceRefresh: false) }
+        try await bridge.waitForCallCount(1)
+        let forced = Task { await runtime.refreshBridgeDevice(forceRefresh: true) }
+        await bridge.releaseActive()
+        try await bridge.waitForCallCount(2)
+        await bridge.releaseActive()
+        await first.value
+        await forced.value
+
+        let forceValues = await bridge.forceValues()
+        let commitAuthorities = await bridge.commitAuthorities()
+        XCTAssertEqual(forceValues, [false, true])
+        XCTAssertEqual(commitAuthorities, [true, true])
+    }
+
+    func testCancelledBridgeRefreshCannotPublishStaleIdentity() async throws {
+        let bridge = TestBridgeRefreshExecutor()
+        let runtime = MuesliCKSyncRuntime(
+            execute: { _ in ICloudTextSyncResult(uploaded: 0, downloaded: 0) },
+            refreshBridge: { force, shouldCommit in
+                await bridge.execute(force: force, shouldCommit: shouldCommit)
+            }
+        )
+
+        let refresh = Task { await runtime.refreshBridgeDevice(forceRefresh: true) }
+        try await bridge.waitForCallCount(1)
+        await runtime.cancel()
+        await refresh.value
+        await bridge.releaseActive()
+        try await bridge.waitForCommitCount(1)
+
+        let commitAuthorities = await bridge.commitAuthorities()
+        XCTAssertEqual(commitAuthorities, [false])
     }
 
     func testBackgroundFetchReportsNewDataOnlyForAppliedRemoteRecords() async {
@@ -289,6 +446,14 @@ final class MuesliCKSyncEngineTests: XCTestCase {
             isCloudKitNotification: true,
             syncEnabled: false
         ))
+    }
+
+    func testProvenanceMissingClassifierBoundsNestedErrorGraphs() {
+        let withinBound = Self.nestedPartialFailure(depth: 6, leaf: CKError(.unknownItem))
+        let beyondBound = Self.nestedPartialFailure(depth: 9, leaf: CKError(.unknownItem))
+
+        XCTAssertTrue(ICloudTextSyncEngine.isMissingProvenanceRecord(withinBound))
+        XCTAssertFalse(ICloudTextSyncEngine.isMissingProvenanceRecord(beyondBound))
     }
 
     func testRecordBatchLoadsCurrentRowsAndDropsOnlyMissingRows() async {
@@ -568,6 +733,38 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertEqual(pendingRecordID.zoneID, ICloudTextSyncEngine.Schema.syncZoneID)
     }
 
+    func testStartupCanRebuildOrdinaryPersistedDirtyOutboxFromEmptyEngineState() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "persisted before process launch",
+            engineIdentifier: "test"
+        ))
+        let dirty = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        let owner = CKRecord.ID(recordName: "startup-owner")
+        XCTAssertTrue(try store.claimCloudSyncAccountScope(
+            MuesliCKSyncEngine.accountScope(for: owner),
+            forKey: MuesliCKSyncEngine.accountScopeKey
+        ))
+        let state = TestPendingState()
+        let engine = MuesliCKSyncEngine(store: store)
+        let authorized = try await engine.handleAccountChange(currentUser: owner, state: state)
+        XCTAssertTrue(authorized)
+
+        // Simulate an empty restored CKSyncEngine serialization while SQLite's
+        // durable sync_dirty row survived the prior process.
+        state.remove(pendingRecordZoneChanges: state.pendingRecordZoneChanges)
+        XCTAssertTrue(state.pendingRecordZoneChanges.isEmpty)
+        let registered = try await engine.registerNextDirtyBatch(state: state)
+        XCTAssertEqual(registered, 1)
+        guard case .saveRecord(let recordID) = try XCTUnwrap(state.pendingRecordZoneChanges.first) else {
+            return XCTFail("Expected startup convergence to rebuild the save")
+        }
+        XCTAssertEqual(recordID.recordName, dirty.id)
+    }
+
     func testUnscopedLegacyLibraryDoesNotClaimUnverifiedAccount() async throws {
         let directory = try Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -698,6 +895,10 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         )
     }
 
+    private static func nestedPartialFailure(depth: Int, leaf: Error) -> Error {
+        (0..<depth).reduce(leaf) { current, _ in partialFailure(containing: current) }
+    }
+
     private func assertFailure(
         _ task: Task<ICloudTextSyncResult, Error>,
         file: StaticString = #filePath,
@@ -757,14 +958,15 @@ private actor TestAsyncCounter {
 
 private actor TestRuntimeExecutor {
     private var intents: [MuesliCKSyncIntent] = []
-    private var operationContinuation: CheckedContinuation<ICloudTextSyncResult, Error>?
+    private var operationContinuations: [CheckedContinuation<ICloudTextSyncResult, Error>] = []
     private var cancellationContinuation: CheckedContinuation<Void, Never>?
+    private var cancellationStarted = false
     private var cancellationFinished = false
 
     func execute(_ intent: MuesliCKSyncIntent) async throws -> ICloudTextSyncResult {
         intents.append(intent)
         return try await withCheckedThrowingContinuation { continuation in
-            operationContinuation = continuation
+            operationContinuations.append(continuation)
         }
     }
 
@@ -777,13 +979,15 @@ private actor TestRuntimeExecutor {
     }
 
     func failActiveOperation() {
-        operationContinuation?.resume(throwing: TestFailure.expected)
-        operationContinuation = nil
+        guard !operationContinuations.isEmpty else { return }
+        operationContinuations.removeFirst().resume(throwing: TestFailure.expected)
     }
 
     func succeedActiveOperation() {
-        operationContinuation?.resume(returning: ICloudTextSyncResult(uploaded: 1, downloaded: 0))
-        operationContinuation = nil
+        guard !operationContinuations.isEmpty else { return }
+        operationContinuations.removeFirst().resume(
+            returning: ICloudTextSyncResult(uploaded: 1, downloaded: 0)
+        )
     }
 
     func executedIntents() -> [MuesliCKSyncIntent] {
@@ -791,6 +995,7 @@ private actor TestRuntimeExecutor {
     }
 
     func waitForCancellationRelease() async {
+        cancellationStarted = true
         await withCheckedContinuation { continuation in
             cancellationContinuation = continuation
         }
@@ -798,15 +1003,65 @@ private actor TestRuntimeExecutor {
     }
 
     func releaseCancellationCleanup() {
-        operationContinuation?.resume(throwing: CancellationError())
-        operationContinuation = nil
+        if !operationContinuations.isEmpty {
+            operationContinuations.removeFirst().resume(throwing: CancellationError())
+        }
         cancellationContinuation?.resume()
         cancellationContinuation = nil
+    }
+
+    func waitForCancellationCleanupStart() async throws {
+        for _ in 0..<200 {
+            if cancellationStarted { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw TestFailure.expected
     }
 
     func cancellationCleanupFinished() -> Bool {
         cancellationFinished
     }
+}
+
+private actor TestBridgeRefreshExecutor {
+    private var forces: [Bool] = []
+    private var commitResults: [Bool] = []
+    private var operationContinuations: [CheckedContinuation<Void, Never>] = []
+
+    func execute(
+        force: Bool,
+        shouldCommit: @escaping @Sendable () async -> Bool
+    ) async {
+        forces.append(force)
+        await withCheckedContinuation { continuation in
+            operationContinuations.append(continuation)
+        }
+        commitResults.append(await shouldCommit())
+    }
+
+    func waitForCallCount(_ expected: Int) async throws {
+        for _ in 0..<200 {
+            if forces.count >= expected { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw TestFailure.expected
+    }
+
+    func waitForCommitCount(_ expected: Int) async throws {
+        for _ in 0..<200 {
+            if commitResults.count >= expected { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw TestFailure.expected
+    }
+
+    func releaseActive() {
+        guard !operationContinuations.isEmpty else { return }
+        operationContinuations.removeFirst().resume()
+    }
+
+    func forceValues() -> [Bool] { forces }
+    func commitAuthorities() -> [Bool] { commitResults }
 }
 
 private final class TestPendingState: MuesliCKSyncPendingState, @unchecked Sendable {

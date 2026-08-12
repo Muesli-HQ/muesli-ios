@@ -254,7 +254,7 @@ actor MuesliCKSyncRuntime {
     private var activeWaiters: [UUID: Waiter] = [:]
     private var deadlineTasks: [UUID: Task<Void, Never>] = [:]
     private var runningGeneration: Int?
-    private var cleanupGeneration: Int?
+    private var outstandingEngineCleanups = 0
     private var bridgePendingForceRefresh = false
     private var bridgeWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var bridgeTask: Task<Void, Never>?
@@ -342,7 +342,6 @@ actor MuesliCKSyncRuntime {
 
     func cancel() async {
         generation += 1
-        let cancellationGeneration = generation
         _ = intents.take()
         let cancelledWaiters = Array(pendingWaiters.values) + Array(activeWaiters.values)
         pendingWaiters.removeAll()
@@ -350,9 +349,10 @@ actor MuesliCKSyncRuntime {
         for task in deadlineTasks.values { task.cancel() }
         deadlineTasks.removeAll()
         runningGeneration = nil
-        cleanupGeneration = cancellationGeneration
+        outstandingEngineCleanups += 1
         bridgePendingForceRefresh = false
-        bridgeTask?.cancel()
+        let bridgeTaskToCancel = bridgeTask
+        bridgeTaskToCancel?.cancel()
         bridgeTask = nil
         let cancelledBridgeWaiters = bridgeWaiters.values
         bridgeWaiters.removeAll()
@@ -360,10 +360,12 @@ actor MuesliCKSyncRuntime {
         // the background fetch completion path cannot wait on cancellation I/O.
         cancelledWaiters.forEach { $0.continuation.resume(throwing: CancellationError()) }
         cancelledBridgeWaiters.forEach { $0.resume() }
+        // Do not release the generation barrier until the retired bridge task
+        // has observed cancellation and its CKOperations have completed cleanup.
+        await bridgeTaskToCancel?.value
         await cancelEngine()
-        guard generation == cancellationGeneration,
-              cleanupGeneration == cancellationGeneration else { return }
-        cleanupGeneration = nil
+        outstandingEngineCleanups -= 1
+        guard outstandingEngineCleanups == 0 else { return }
         startDrainIfNeeded()
         startBridgeRefreshIfNeeded()
     }
@@ -403,7 +405,7 @@ actor MuesliCKSyncRuntime {
     }
 
     private func startDrainIfNeeded() {
-        guard cleanupGeneration == nil,
+        guard outstandingEngineCleanups == 0,
               runningGeneration == nil,
               !intents.pending.isEmpty else { return }
         let drainGeneration = generation
@@ -412,7 +414,9 @@ actor MuesliCKSyncRuntime {
     }
 
     private func drain(generation drainGeneration: Int) async {
-        while drainGeneration == generation, cleanupGeneration == nil, !intents.pending.isEmpty {
+        while drainGeneration == generation,
+              outstandingEngineCleanups == 0,
+              !intents.pending.isEmpty {
             let intent = intents.take()
             let batchWaiterIDs = Set(pendingWaiters.keys)
             for waiterID in batchWaiterIDs {
@@ -471,7 +475,7 @@ actor MuesliCKSyncRuntime {
     }
 
     private func startBridgeRefreshIfNeeded() {
-        guard cleanupGeneration == nil,
+        guard outstandingEngineCleanups == 0,
               bridgeTask == nil,
               !bridgeWaiters.isEmpty else { return }
         let bridgeGeneration = generation
@@ -479,13 +483,16 @@ actor MuesliCKSyncRuntime {
     }
 
     private func drainBridgeRefresh(generation bridgeGeneration: Int) async {
-        while bridgeGeneration == generation, cleanupGeneration == nil, !bridgeWaiters.isEmpty {
+        while bridgeGeneration == generation,
+              outstandingEngineCleanups == 0,
+              !bridgeWaiters.isEmpty {
             let forceRefresh = bridgePendingForceRefresh
             bridgePendingForceRefresh = false
             await refreshBridge(forceRefresh) { [weak self] in
                 await self?.isCurrentGeneration(bridgeGeneration) == true
             }
-            guard bridgeGeneration == generation, cleanupGeneration == nil else { return }
+            guard bridgeGeneration == generation,
+                  outstandingEngineCleanups == 0 else { return }
             if bridgePendingForceRefresh { continue }
             let completed = bridgeWaiters.values
             bridgeWaiters.removeAll()
@@ -497,7 +504,7 @@ actor MuesliCKSyncRuntime {
     }
 
     private func isCurrentGeneration(_ observedGeneration: Int) -> Bool {
-        observedGeneration == generation && cleanupGeneration == nil
+        observedGeneration == generation && outstandingEngineCleanups == 0
     }
 }
 

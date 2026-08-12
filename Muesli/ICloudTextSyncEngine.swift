@@ -26,6 +26,67 @@ private final class DeliveredRecordCounter: @unchecked Sendable {
     }
 }
 
+/// Makes callback-based CloudKit operations obey Swift task cancellation while
+/// resuming their continuation exactly once, even if CloudKit calls back late.
+final class MuesliCancellableCloudKitOperation<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var operation: CKOperation?
+    private var continuation: CheckedContinuation<Value, any Error>?
+    private var isCancelled = false
+
+    func install(
+        operation: CKOperation,
+        continuation: CheckedContinuation<Value, any Error>
+    ) {
+        lock.lock()
+        if isCancelled {
+            lock.unlock()
+            operation.cancel()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.operation = operation
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let operation = operation
+        let continuation = continuation
+        self.operation = nil
+        self.continuation = nil
+        lock.unlock()
+        operation?.cancel()
+        continuation?.resume(throwing: CancellationError())
+    }
+
+    func succeed(_ value: sending Value) {
+        lock.lock()
+        guard let continuation else {
+            lock.unlock()
+            return
+        }
+        self.operation = nil
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(returning: value)
+    }
+
+    func fail(_ error: any Error) {
+        lock.lock()
+        guard let continuation else {
+            lock.unlock()
+            return
+        }
+        self.operation = nil
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(throwing: error)
+    }
+}
+
 private struct ICloudTextZoneChangesPage {
     let records: [CKRecord]
     let serverChangeToken: CKServerChangeToken
@@ -425,7 +486,7 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
 
         do {
             guard await shouldCommit(), !Task.isCancelled else { return }
-            try await upsertLocalBridgeDeviceRecord()
+            try await upsertLocalBridgeDeviceRecord(shouldCommit: shouldCommit)
             let records = try await fetchBridgeDeviceRecords()
             guard await shouldCommit(), !Task.isCancelled else { return }
             MuesliBridgeDeviceIdentity.updateRemoteDevices(from: records, defaults: defaults)
@@ -440,7 +501,11 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         }
     }
 
-    private func upsertLocalBridgeDeviceRecord() async throws {
+    private func upsertLocalBridgeDeviceRecord(
+        shouldCommit: @escaping @Sendable () async -> Bool
+    ) async throws {
+        try Task.checkCancellation()
+        guard await shouldCommit() else { throw CancellationError() }
         let snapshot = MuesliBridgeDeviceIdentity.local(defaults: defaults)
         let recordID = CKRecord.ID(
             recordName: "bridge-device-\(snapshot.deviceID)",
@@ -448,6 +513,8 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         )
         let record = (try? await fetchRecord(id: recordID))
             ?? CKRecord(recordType: Schema.bridgeDeviceRecordType, recordID: recordID)
+        try Task.checkCancellation()
+        guard await shouldCommit() else { throw CancellationError() }
         if record["createdAt"] == nil {
             record["createdAt"] = Date() as NSDate
         }
@@ -808,30 +875,39 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
 
     private func save(records: [CKRecord]) async throws -> [CKRecord] {
         guard !records.isEmpty else { return [] }
-        return try await withCheckedThrowingContinuation { continuation in
-            let operation = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
-            operation.savePolicy = .changedKeys
-            let lock = NSLock()
-            var savedRecords: [CKRecord] = []
-            operation.perRecordSaveBlock = { _, result in
-                if case .success(let record) = result {
-                    lock.lock()
-                    savedRecords.append(record)
-                    lock.unlock()
+        let cancellation = MuesliCancellableCloudKitOperation<[CKRecord]>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let operation = CKModifyRecordsOperation(
+                    recordsToSave: records,
+                    recordIDsToDelete: nil
+                )
+                operation.savePolicy = .changedKeys
+                let lock = NSLock()
+                var savedRecords: [CKRecord] = []
+                operation.perRecordSaveBlock = { _, result in
+                    if case .success(let record) = result {
+                        lock.lock()
+                        savedRecords.append(record)
+                        lock.unlock()
+                    }
                 }
-            }
-            operation.modifyRecordsResultBlock = { result in
-                switch result {
-                case .success:
-                    lock.lock()
-                    let records = savedRecords
-                    lock.unlock()
-                    continuation.resume(returning: records)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
+                operation.modifyRecordsResultBlock = { result in
+                    switch result {
+                    case .success:
+                        lock.lock()
+                        let records = savedRecords
+                        lock.unlock()
+                        cancellation.succeed(records)
+                    case .failure(let error):
+                        cancellation.fail(error)
+                    }
                 }
+                cancellation.install(operation: operation, continuation: continuation)
+                database.add(operation)
             }
-            database.add(operation)
+        } onCancel: {
+            cancellation.cancel()
         }
     }
 

@@ -347,6 +347,46 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         }
     }
 
+    func testOverlappingCancellationWaitsForEveryEngineCleanup() async throws {
+        let executor = TestRuntimeExecutor()
+        let runtime = MuesliCKSyncRuntime(
+            execute: { intent in try await executor.execute(intent) },
+            cancel: { await executor.waitForCancellationRelease() }
+        )
+        let retired = Task { try await runtime.fetchRemoteChanges() }
+        try await executor.waitForCallCount(1)
+
+        let firstCancellation = Task { await runtime.cancel() }
+        try await executor.waitForCancellationCleanupCount(1)
+        let secondCancellation = Task { await runtime.cancel() }
+        try await executor.waitForCancellationCleanupCount(2)
+        let replacement = Task { try await runtime.sendLocalChanges() }
+
+        // Finish the newer cleanup first. The older cleanup still owns the
+        // execution barrier, so the replacement cannot reach the executor.
+        await executor.releaseCancellationCleanup(at: 1)
+        await secondCancellation.value
+        try await Task.sleep(for: .milliseconds(30))
+        let beforeAllCleanups = await executor.executedIntents()
+        XCTAssertEqual(beforeAllCleanups, [.fetch])
+
+        await executor.failOldOperationForCancellation()
+        await executor.releaseCancellationCleanup(at: 0)
+        await firstCancellation.value
+        try await executor.waitForCallCount(2)
+        let afterAllCleanups = await executor.executedIntents()
+        XCTAssertEqual(afterAllCleanups, [.fetch, .send])
+        await executor.succeedActiveOperation()
+        _ = try await replacement.value
+
+        do {
+            _ = try await retired.value
+            XCTFail("The retired request must be cancelled")
+        } catch is CancellationError {
+            // Expected.
+        }
+    }
+
     func testDeadlineRemovesBlockedBackgroundWaiterButLeavesDurableFetchRunning() async throws {
         let executor = TestRuntimeExecutor()
         let runtime = MuesliCKSyncRuntime(execute: { intent in
@@ -408,13 +448,42 @@ final class MuesliCKSyncEngineTests: XCTestCase {
 
         let refresh = Task { await runtime.refreshBridgeDevice(forceRefresh: true) }
         try await bridge.waitForCallCount(1)
-        await runtime.cancel()
+        let cancellation = Task { await runtime.cancel() }
         await refresh.value
         await bridge.releaseActive()
+        await cancellation.value
         try await bridge.waitForCommitCount(1)
 
         let commitAuthorities = await bridge.commitAuthorities()
         XCTAssertEqual(commitAuthorities, [false])
+    }
+
+    func testCancelledCloudKitSaveCancelsOperationAndIgnoresLateCallback() async {
+        let cancellation = MuesliCancellableCloudKitOperation<Int>()
+        let operation = CKModifyRecordsOperation(recordsToSave: [], recordIDsToDelete: [])
+        let installed = XCTestExpectation(description: "operation installed")
+        let request = Task {
+            try await withCheckedThrowingContinuation { continuation in
+                cancellation.install(operation: operation, continuation: continuation)
+                installed.fulfill()
+            }
+        }
+        await fulfillment(of: [installed], timeout: 1)
+
+        cancellation.cancel()
+        do {
+            _ = try await request.value
+            XCTFail("Cancelled CloudKit write must release its caller")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertTrue(operation.isCancelled)
+
+        // CloudKit is allowed to invoke a result block after cancellation.
+        // The completion owner must treat that callback as a no-op.
+        cancellation.succeed(42)
     }
 
     func testBackgroundFetchReportsNewDataOnlyForAppliedRemoteRecords() async {
@@ -959,9 +1028,8 @@ private actor TestAsyncCounter {
 private actor TestRuntimeExecutor {
     private var intents: [MuesliCKSyncIntent] = []
     private var operationContinuations: [CheckedContinuation<ICloudTextSyncResult, Error>] = []
-    private var cancellationContinuation: CheckedContinuation<Void, Never>?
-    private var cancellationStarted = false
-    private var cancellationFinished = false
+    private var cancellationContinuations: [CheckedContinuation<Void, Never>?] = []
+    private var cancellationFinishedCount = 0
 
     func execute(_ intent: MuesliCKSyncIntent) async throws -> ICloudTextSyncResult {
         intents.append(intent)
@@ -995,31 +1063,45 @@ private actor TestRuntimeExecutor {
     }
 
     func waitForCancellationRelease() async {
-        cancellationStarted = true
         await withCheckedContinuation { continuation in
-            cancellationContinuation = continuation
+            cancellationContinuations.append(continuation)
         }
-        cancellationFinished = true
+        cancellationFinishedCount += 1
     }
 
     func releaseCancellationCleanup() {
         if !operationContinuations.isEmpty {
             operationContinuations.removeFirst().resume(throwing: CancellationError())
         }
-        cancellationContinuation?.resume()
-        cancellationContinuation = nil
+        releaseCancellationCleanup(at: 0)
     }
 
     func waitForCancellationCleanupStart() async throws {
+        try await waitForCancellationCleanupCount(1)
+    }
+
+    func waitForCancellationCleanupCount(_ expected: Int) async throws {
         for _ in 0..<200 {
-            if cancellationStarted { return }
+            if cancellationContinuations.count >= expected { return }
             try await Task.sleep(for: .milliseconds(5))
         }
         throw TestFailure.expected
     }
 
+    func releaseCancellationCleanup(at index: Int) {
+        guard cancellationContinuations.indices.contains(index),
+              let continuation = cancellationContinuations[index] else { return }
+        cancellationContinuations[index] = nil
+        continuation.resume()
+    }
+
+    func failOldOperationForCancellation() {
+        guard !operationContinuations.isEmpty else { return }
+        operationContinuations.removeFirst().resume(throwing: CancellationError())
+    }
+
     func cancellationCleanupFinished() -> Bool {
-        cancellationFinished
+        cancellationFinishedCount > 0
     }
 }
 

@@ -103,11 +103,23 @@ review:
 - missing-provenance error traversal is depth-bounded like other recursive CloudKit
   classifiers.
 
+The final lifecycle audit added two further barriers:
+
+- overlapping cancellations are reference-counted, so a new-generation request cannot
+  execute until every older CKSyncEngine cleanup has returned, regardless of completion
+  order;
+- bridge refresh cancellation now waits for the retired bridge task, cancels its concrete
+  `CKModifyRecordsOperation`, and owns its continuation exactly once. This prevents a late
+  private-CloudKit callback from publishing stale companion presence after sync disable or
+  an account transition, without introducing any analytics identifier.
+
 Validation used the existing DerivedData cache at
 `/Users/pranavhari/Library/Developer/Xcode/DerivedData/MuesliiOS-hfpsukoywdcgmbddckyxgiejqtau`:
 
-- focused `MuesliCKSyncEngineTests`: 37 tests, 0 failures;
-- full iOS unit suite (UI tests skipped): 246 tests, 0 failures.
+- focused `MuesliCKSyncEngineTests`: 39 tests, 0 failures (43 tests including
+  `MuesliBridgeDeviceIdentityTests`);
+- full iOS unit suite (UI tests skipped): 248 tests, 0 failures;
+- `build-for-testing`: succeeded with signing disabled.
 
 ## Remaining physical checks
 

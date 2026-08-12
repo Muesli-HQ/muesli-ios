@@ -169,19 +169,13 @@ final class DictationCoordinator {
     )
     private var persistentKeyboardSessionRequestIDs = Set<UUID>()
     private var iCloudSyncTask: Task<Void, Never>?
-    private var iCloudSyncDebounceTask: Task<Void, Never>?
     private var iCloudRemoteRefreshTask: Task<Void, Never>?
+    private var pendingICloudSyncIntent: MuesliCKSyncIntent = []
     private var pendingICloudSyncReason: String?
     private var iCloudSyncGeneration = 0
-    @ObservationIgnored private lazy var iCloudSyncEngine = MuesliCKSyncEngine(
-        store: store,
-        onRemoteChanges: { @MainActor [weak self] in
-            self?.scheduleHistoryRefreshAfterRemoteChanges()
-        },
-        onProgress: { @MainActor [weak self] progress in
-            self?.updateICloudSyncProgress(progress)
-        }
-    )
+    @ObservationIgnored private let iCloudSyncRuntime = MuesliCKSyncRuntime.shared
+    @ObservationIgnored nonisolated(unsafe) private var iCloudRemoteChangesObserver: NSObjectProtocol?
+    @ObservationIgnored nonisolated(unsafe) private var iCloudSyncProgressObserver: NSObjectProtocol?
     private var onboardingModelReadyCueModel: LocalTranscriptionModel?
     private var meetingChunkTasks: [Task<MeetingChunkTranscription?, Never>] = []
     private var meetingChunkTranscriptions: [MeetingChunkTranscription] = []
@@ -471,6 +465,26 @@ final class DictationCoordinator {
                 self?.handleAudioServicesReset()
             }
         }
+        iCloudRemoteChangesObserver = NotificationCenter.default.addObserver(
+            forName: .muesliCKSyncRemoteChanges,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.scheduleHistoryRefreshAfterRemoteChanges()
+            }
+        }
+        iCloudSyncProgressObserver = NotificationCenter.default.addObserver(
+            forName: .muesliCKSyncProgress,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let progress = notification.userInfo?[MuesliCKSyncNotificationKey.progress]
+                    as? MuesliCKSyncProgress else { return }
+            Task { @MainActor in
+                self?.updateICloudSyncProgress(progress)
+            }
+        }
         keyboardSessionKeeper.onRecordingFailure = { [weak self] failure in
             Task { @MainActor in
                 self?.handleVoiceNoteWriterFailure(failure)
@@ -510,6 +524,12 @@ final class DictationCoordinator {
         }
         if let mediaServicesResetObserver {
             NotificationCenter.default.removeObserver(mediaServicesResetObserver)
+        }
+        if let iCloudRemoteChangesObserver {
+            NotificationCenter.default.removeObserver(iCloudRemoteChangesObserver)
+        }
+        if let iCloudSyncProgressObserver {
+            NotificationCenter.default.removeObserver(iCloudSyncProgressObserver)
         }
     }
 
@@ -2685,6 +2705,14 @@ final class DictationCoordinator {
     }
 
     func syncICloudTextIfEnabled(reason: String = "manual") {
+        let intent: MuesliCKSyncIntent = reason == "foreground" ? .fetch : .manual
+        requestICloudTextSync(intent: intent, reason: reason)
+    }
+
+    private func requestICloudTextSync(
+        intent: MuesliCKSyncIntent,
+        reason: String
+    ) {
         guard MuesliPreferences.iCloudSyncEnabled else {
             iCloudSyncStatusText = "iCloud sync is off."
             isICloudSyncInProgress = false
@@ -2692,6 +2720,7 @@ final class DictationCoordinator {
         }
         guard iCloudSyncTask == nil else {
             isICloudSyncInProgress = true
+            pendingICloudSyncIntent.formUnion(intent)
             pendingICloudSyncReason = reason
             return
         }
@@ -2701,9 +2730,14 @@ final class DictationCoordinator {
         iCloudSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let result = try await self.iCloudSyncEngine.sync(
-                    forceBridgeDeviceRefresh: self.shouldForceBridgeDeviceRefresh(for: reason)
-                )
+                let result: ICloudTextSyncResult
+                if intent == .manual {
+                    result = try await self.iCloudSyncRuntime.syncManually()
+                } else if intent == .send {
+                    result = try await self.iCloudSyncRuntime.sendLocalChanges()
+                } else {
+                    result = try await self.iCloudSyncRuntime.fetchRemoteChanges()
+                }
                 guard syncGeneration == self.iCloudSyncGeneration else { return }
                 self.iCloudSyncTask = nil
                 self.isICloudSyncInProgress = false
@@ -2731,6 +2765,11 @@ final class DictationCoordinator {
                         "bridge_enable_completed",
                         parameters: ["platform": "ios", "source": reason]
                     )
+                }
+                if self.shouldForceBridgeDeviceRefresh(for: reason) {
+                    Task {
+                        await self.iCloudSyncRuntime.refreshBridgeDevice(forceRefresh: true)
+                    }
                 }
                 self.runPendingICloudSyncIfNeeded()
             } catch {
@@ -2762,16 +2801,15 @@ final class DictationCoordinator {
 
     func disableICloudTextSync() {
         iCloudSyncGeneration += 1
-        iCloudSyncDebounceTask?.cancel()
-        iCloudSyncDebounceTask = nil
         iCloudRemoteRefreshTask?.cancel()
         iCloudRemoteRefreshTask = nil
         iCloudSyncTask?.cancel()
         iCloudSyncTask = nil
+        pendingICloudSyncIntent = []
         pendingICloudSyncReason = nil
         isICloudSyncInProgress = false
         iCloudSyncStatusText = "iCloud sync is off."
-        Task { await iCloudSyncEngine.cancel() }
+        Task { await iCloudSyncRuntime.cancel() }
     }
 
     private func scheduleHistoryRefreshAfterRemoteChanges() {
@@ -2803,19 +2841,16 @@ final class DictationCoordinator {
 
     private func scheduleICloudSyncAfterLocalChange(reason: String) {
         guard MuesliPreferences.iCloudSyncEnabled else { return }
-        iCloudSyncDebounceTask?.cancel()
-        iCloudSyncDebounceTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.0))
-            guard !Task.isCancelled else { return }
-            self?.iCloudSyncDebounceTask = nil
-            self?.syncICloudTextIfEnabled(reason: reason)
-        }
+        requestICloudTextSync(intent: .send, reason: reason)
     }
 
     private func runPendingICloudSyncIfNeeded() {
-        guard let reason = pendingICloudSyncReason else { return }
+        guard let reason = pendingICloudSyncReason,
+              !pendingICloudSyncIntent.isEmpty else { return }
+        let intent = pendingICloudSyncIntent
+        pendingICloudSyncIntent = []
         pendingICloudSyncReason = nil
-        scheduleICloudSyncAfterLocalChange(reason: reason)
+        requestICloudTextSync(intent: intent, reason: reason)
     }
 
     private func shouldForceBridgeDeviceRefresh(for reason: String) -> Bool {

@@ -329,8 +329,7 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
     /// Bridge discovery and the one-time default-zone import still use their
     /// existing operations; custom-zone fetches and uploads belong to CKSyncEngine.
     func prepareForCKSyncEngine(
-        store: SharedStore,
-        forceBridgeDeviceRefresh: Bool = false
+        store: SharedStore
     ) async throws -> Bool {
         let syncZoneWasRecreated = try await ensureSyncZone()
         if syncZoneWasRecreated {
@@ -339,9 +338,17 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
             // Clear them before migration builds any CKRecord instances.
             try store.resetTextRecordCloudMetadataForZoneRecreation()
         }
-        await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
         try await migrateDefaultZoneIfNeeded(store: store)
         return syncZoneWasRecreated
+    }
+
+    /// Refreshes the optional companion-presence hint outside text transport.
+    ///
+    /// Bridge records are onboarding/UI metadata, not authorization or text
+    /// synchronization state. A slow query here must never hold open a text
+    /// upload, download, or the visible sync progress indicator.
+    func refreshBridgeDeviceLinkIfNeeded(forceRefresh: Bool = false) async {
+        await refreshBridgeDeviceLink(forceRefresh: forceRefresh)
     }
 
     /// Proves that an unscoped legacy library belongs to the current account.
@@ -929,9 +936,9 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         return SyncTextRecordKind(rawValue: raw)
     }
 
-    private static func isSyncZoneMissing(_ error: Error) -> Bool {
+    static func isSyncZoneMissing(_ error: Error) -> Bool {
         if let ckError = error as? CKError {
-            if ckError.code == .unknownItem {
+            if ckError.code == .unknownItem || ckError.code == .zoneNotFound {
                 return true
             }
             if ckError.code == .partialFailure,

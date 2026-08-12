@@ -10,14 +10,13 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertEqual(MuesliCKSyncProgress.uploading(42).diagnosticValue, "uploading")
     }
 
-    func testCycleFetchesBeforeSendingEveryAvailableDirtyPage() async throws {
+    func testLocalCycleSendsEveryAvailableDirtyPageWithoutFetching() async throws {
         var events: [String] = []
         var registeredPages = [2, 1, 0]
         var uploaded = 0
 
-        try await MuesliCKSyncCycle.run(
+        try await MuesliCKSyncCycle.sendLocalChanges(
             maximumUploadBatches: 10,
-            fetch: { events.append("fetch") },
             registerNextBatch: {
                 events.append("register")
                 return registeredPages.removeFirst()
@@ -31,7 +30,7 @@ final class MuesliCKSyncEngineTests: XCTestCase {
 
         XCTAssertEqual(
             events,
-            ["fetch", "register", "send", "register", "send", "register"]
+            ["register", "send", "register", "send", "register"]
         )
         XCTAssertEqual(uploaded, 2)
     }
@@ -39,9 +38,8 @@ final class MuesliCKSyncEngineTests: XCTestCase {
     func testCycleStopsWhenSendMakesNoProgress() async throws {
         var registrations = 0
 
-        try await MuesliCKSyncCycle.run(
+        try await MuesliCKSyncCycle.sendLocalChanges(
             maximumUploadBatches: 10,
-            fetch: {},
             registerNextBatch: {
                 registrations += 1
                 return 1
@@ -51,6 +49,117 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         )
 
         XCTAssertEqual(registrations, 1)
+    }
+
+    func testOperationPlansKeepLocalAndIncomingPathsDirectional() {
+        XCTAssertEqual(MuesliCKSyncPlan.operations(for: .send), [.send])
+        XCTAssertEqual(MuesliCKSyncPlan.operations(for: .fetch), [.fetch])
+        XCTAssertEqual(MuesliCKSyncPlan.operations(for: .manual), [.send, .fetch])
+    }
+
+    func testLaunchPolicyPreparesPersistentEngineWheneverSyncIsEnabled() {
+        XCTAssertTrue(MuesliCKSyncLaunchPolicy.shouldPrepare(syncEnabled: true))
+        XCTAssertFalse(MuesliCKSyncLaunchPolicy.shouldPrepare(syncEnabled: false))
+    }
+
+    func testConcurrentTriggerIntentUnionsInsteadOfOverwritingDirections() {
+        var intents = MuesliCKSyncIntentAccumulator()
+        intents.insert(.fetch)
+        intents.insert(.send)
+
+        XCTAssertEqual(intents.take(), .manual)
+        XCTAssertTrue(intents.pending.isEmpty)
+    }
+
+    func testPreparationGateRunsPreflightOnceUntilInvalidated() async throws {
+        let gate = MuesliCKSyncPreparationGate()
+        let counter = TestAsyncCounter()
+
+        async let first = gate.prepare {
+            await counter.increment()
+            try await Task.sleep(for: .milliseconds(20))
+            return false
+        }
+        async let second = gate.prepare {
+            await counter.increment()
+            return false
+        }
+        _ = try await (first, second)
+
+        _ = try await gate.prepare {
+            await counter.increment()
+            return false
+        }
+        let countBeforeInvalidation = await counter.value
+        XCTAssertEqual(countBeforeInvalidation, 1)
+
+        await gate.invalidate()
+        _ = try await gate.prepare {
+            await counter.increment()
+            return false
+        }
+        let countAfterInvalidation = await counter.value
+        XCTAssertEqual(countAfterInvalidation, 2)
+    }
+
+    func testPreparationInvalidationCannotPublishRetiredCompletion() async throws {
+        let gate = MuesliCKSyncPreparationGate()
+        let started = XCTestExpectation(description: "preparation started")
+
+        let preparation = Task {
+            try await gate.prepare {
+                started.fulfill()
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    // Simulate an underlying CloudKit bridge that completes even
+                    // after task cancellation; the gate generation must reject it.
+                }
+                return false
+            }
+        }
+        await fulfillment(of: [started], timeout: 1)
+        await gate.invalidate()
+
+        do {
+            _ = try await preparation.value
+            XCTFail("Retired preparation must not become ready")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        _ = try await gate.prepare { false }
+    }
+
+    func testBackgroundFetchReportsNewDataOnlyForAppliedRemoteRecords() async {
+        let newData = await MuesliCKSyncBackgroundFetch.run {
+            ICloudTextSyncResult(uploaded: 0, downloaded: 1)
+        }
+        let noData = await MuesliCKSyncBackgroundFetch.run {
+            ICloudTextSyncResult(uploaded: 0, downloaded: 0)
+        }
+        let failed = await MuesliCKSyncBackgroundFetch.run {
+            throw TestFailure.expected
+        }
+
+        XCTAssertEqual(newData, .newData)
+        XCTAssertEqual(noData, .noData)
+        XCTAssertEqual(failed, .failed)
+    }
+
+    func testBackgroundNotificationRoutesOnlyCloudKitPushesWhileSyncIsEnabled() {
+        XCTAssertTrue(MuesliCKSyncBackgroundFetch.shouldFetch(
+            isCloudKitNotification: true,
+            syncEnabled: true
+        ))
+        XCTAssertFalse(MuesliCKSyncBackgroundFetch.shouldFetch(
+            isCloudKitNotification: false,
+            syncEnabled: true
+        ))
+        XCTAssertFalse(MuesliCKSyncBackgroundFetch.shouldFetch(
+            isCloudKitNotification: true,
+            syncEnabled: false
+        ))
     }
 
     func testRecordBatchLoadsCurrentRowsAndDropsOnlyMissingRows() async {
@@ -481,6 +590,14 @@ final class MuesliCKSyncEngineTests: XCTestCase {
 
 private enum TestFailure: Error {
     case expected
+}
+
+private actor TestAsyncCounter {
+    private(set) var value = 0
+
+    func increment() {
+        value += 1
+    }
 }
 
 private final class TestPendingState: MuesliCKSyncPendingState, @unchecked Sendable {

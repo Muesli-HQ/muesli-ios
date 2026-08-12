@@ -44,6 +44,38 @@ This branch migrates Muesli iOS text-record synchronization from the manual Clou
 
 The macOS branch `codex/wpm-invalid-duration-defense` excludes untimed records from the WPM numerator and denominator while continuing to include their words in total-word metrics. That defense is intentionally separate from this iOS transport migration.
 
+## 2026-08-12 low-latency orchestration follow-up
+
+Physical Production-entitled testing showed correct convergence but exposed avoidable
+latency: every small local mutation waited one second and then paid account lookup,
+zone lookup, legacy migration, fetch, and send in series. Fetch-first was an intentional
+bootstrap safety decision while CKSyncEngine first hydrated server system fields; it is
+not required for every steady-state mutation once the persistent engine is prepared.
+
+The branch now shares the same operation contract as the macOS follow-up:
+
+- `prepare()` creates/restores the persistent automatic CKSyncEngine and performs the
+  account-boundary, zone, and legacy migration work once per valid engine lifecycle;
+- `sendLocalChanges()` immediately registers SQLite `sync_dirty` pages and calls
+  `sendChanges()` without a fetch-first round trip;
+- `fetchRemoteChanges()` only fetches incoming changes for foreground/APNs delivery;
+- `syncManually()` deliberately sends outgoing changes before fetching incoming ones;
+- concurrent foreground, local, APNs, and manual triggers union their intent rather
+  than overwriting one another;
+- account/zone invalidation re-enters preparation, with one bounded same-account
+  zone-recreation retry and no cross-account upload;
+- bridge-device discovery remains throttled onboarding/UI metadata and runs outside
+  the visible text-sync critical path;
+- the app delegate creates the process-wide runtime at launch whenever sync is enabled,
+  and routes CloudKit remote notifications to fetch-only work with a correct background
+  completion result. CKSyncEngine delegate callbacks never start sync recursively.
+
+All earlier safety work remains in place: the durable outbox, environment-scoped state,
+hashed account boundary, no-content legacy provenance proof, same-account metadata
+reset, size-aware batching, exact-version acknowledgements, conflict/retry handling,
+privacy-safe diagnostics, recoverable WPM timing/one-time repair, local audio semantics,
+and cancellation/account-change crash protection.
+
 ## Remaining physical checks
 
 1. Launch MuesliDev on the unlocked picophone and allow the one-time repair to sync.

@@ -421,17 +421,21 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         )
     }
 
-    /// Proves that an unscoped legacy library belongs to the current account.
+    /// Returns the stable IDs that prove an unscoped legacy library belongs to
+    /// the current account.
     ///
     /// Only stable record IDs are requested and `desiredKeys` is empty, so this
     /// check never downloads authored text or other user-authored fields. A
     /// missing record/zone is a safe non-match; connectivity and service errors
     /// still propagate so a transient failure cannot claim the wrong account.
-    func syncZoneContainsAnyTextRecord(named recordNames: Set<String>) async throws -> Bool {
+    /// The caller requires exact equality with its complete legacy ID set: one
+    /// overlapping record is not sufficient provenance for the rest of a library.
+    func matchingSyncZoneTextRecordNames(named recordNames: Set<String>) async throws -> Set<String> {
         let names = recordNames.filter { !$0.isEmpty }.sorted()
-        guard !names.isEmpty else { return false }
+        guard !names.isEmpty else { return [] }
 
         let batchSize = 200
+        var matchedNames = Set<String>()
         var start = names.startIndex
         while start < names.endIndex {
             let end = names.index(start, offsetBy: batchSize, limitedBy: names.endIndex)
@@ -442,23 +446,39 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
 
             do {
                 let results = try await database.records(for: recordIDs, desiredKeys: [])
-                for result in results.values {
-                    switch result {
-                    case .success(let record):
-                        if record.recordType == Schema.textRecordType {
-                            return true
-                        }
-                    case .failure(let error):
-                        guard Self.isMissingProvenanceRecord(error) else { throw error }
-                    }
-                }
+                matchedNames.formUnion(try Self.matchingProvenanceRecordNames(
+                    expectedRecordIDs: recordIDs,
+                    results: results
+                ))
             } catch {
                 guard Self.isMissingProvenanceRecord(error) else { throw error }
             }
 
             start = end
         }
-        return false
+        return matchedNames
+    }
+
+    /// Classifies only requested, correctly typed records as provenance. Missing
+    /// response entries and wrong record types are safe mismatches; non-missing
+    /// CloudKit failures propagate to keep transient errors from claiming scope.
+    static func matchingProvenanceRecordNames(
+        expectedRecordIDs: [CKRecord.ID],
+        results: [CKRecord.ID: Result<CKRecord, Error>]
+    ) throws -> Set<String> {
+        var matchedNames = Set<String>()
+        for recordID in expectedRecordIDs {
+            guard let result = results[recordID] else { continue }
+            switch result {
+            case .success(let record):
+                guard record.recordID == recordID,
+                      record.recordType == Schema.textRecordType else { continue }
+                matchedNames.insert(recordID.recordName)
+            case .failure(let error):
+                guard Self.isMissingProvenanceRecord(error) else { throw error }
+            }
+        }
+        return matchedNames
     }
 
     @discardableResult

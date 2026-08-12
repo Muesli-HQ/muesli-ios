@@ -536,7 +536,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private let store: SharedStore
     private let onRemoteChanges: @Sendable () async -> Void
     private let onProgress: @Sendable (MuesliCKSyncProgress) async -> Void
-    private let legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Bool)?
+    private let legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Set<String>)?
     private let preparationGate = MuesliCKSyncPreparationGate()
     private var container: CKContainer?
     private var preflight: ICloudTextSyncEngine?
@@ -552,7 +552,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         container: CKContainer? = nil,
         onRemoteChanges: @escaping @Sendable () async -> Void = {},
         onProgress: @escaping @Sendable (MuesliCKSyncProgress) async -> Void = { _ in },
-        legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Bool)? = nil
+        legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Set<String>)? = nil
     ) {
         self.store = store
         self.container = container
@@ -1113,15 +1113,15 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
 
         let legacyRecordNames = try store.textRecordNamesRequiringAccountVerification()
         if !legacyRecordNames.isEmpty {
-            let verified: Bool
+            let matchedRecordNames: Set<String>
             if let legacyAccountRecordVerifier {
-                verified = try await legacyAccountRecordVerifier(legacyRecordNames)
+                matchedRecordNames = try await legacyAccountRecordVerifier(legacyRecordNames)
             } else {
-                verified = try await (preflight ?? resolvedPreflight()).syncZoneContainsAnyTextRecord(
+                matchedRecordNames = try await (preflight ?? resolvedPreflight()).matchingSyncZoneTextRecordNames(
                     named: legacyRecordNames
                 )
             }
-            guard verified else {
+            guard matchedRecordNames == legacyRecordNames else {
                 Self.logger.error("account_provenance_unverified")
                 return false
             }

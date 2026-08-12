@@ -22,7 +22,7 @@ This branch migrates Muesli iOS text-record synchronization from the manual Clou
 - SQLite dirty state remains the durable source of pending local changes.
 - Engine serialization is environment-namespaced so Development and Production state cannot collide.
 - The first CloudKit account is stored only as a SHA-256 scope. A different account clears pending engine work and pauses sync without requeuing or uploading the local library.
-- Before an already-synced legacy library can claim its first account scope, the current private zone must contain at least one matching stable text-record ID. The proof uses batched record existence requests with no desired fields, so it downloads no authored content. A missing zone or zero overlap pauses sync instead of risking a cross-account upload; local-only libraries can claim normally.
+- Before an already-synced legacy library can claim its first account scope, the current private zone must contain every stable text-record ID that carries evidence of prior CloudKit sync. The proof uses batched record existence requests with `desiredKeys: []`, so it downloads no authored content. Missing, partial, extra, incomplete-response, or wrong-record-type proof pauses sync instead of risking a cross-account upload; local-only libraries can claim normally.
 - Same-account zone recreation clears obsolete record change tags/system fields before migration, then safely requeues the preserved local text.
 - CloudKit chooses size-aware upload batches through its record-provider API while SQLite still loads each local page once.
 - Sync diagnostics expose only phase, timestamps, and counts; note text and record identifiers are never emitted.
@@ -120,6 +120,22 @@ Validation used the existing DerivedData cache at
   `MuesliBridgeDeviceIdentityTests`);
 - full iOS unit suite (UI tests skipped): 248 tests, 0 failures;
 - `build-for-testing`: succeeded with signing disabled.
+
+The final account-provenance review tightened the legacy claim gate from “any overlap”
+to exact set equality. CloudKit returns only the matching expected `TextRecord` identities;
+the account is claimed only when that set equals the complete local set requiring proof.
+Missing IDs, partial overlap, unrequested IDs, incomplete responses, and wrong record
+types fail closed; service errors still propagate. The request continues to use
+`desiredKeys: []`, and neither authored content nor raw record identities are logged or
+persisted as diagnostics. Fresh local-only libraries bypass this legacy proof and retain
+normal first-account behavior.
+
+Validation after provenance hardening, using the same DerivedData cache:
+
+- focused `MuesliCKSyncEngineTests`: 43 tests, 0 failures;
+- full iOS unit suite (UI tests skipped): 252 tests, 0 failures;
+- `build-for-testing`: succeeded with signing disabled;
+- `git diff --check`: clean.
 
 ## Remaining physical checks
 

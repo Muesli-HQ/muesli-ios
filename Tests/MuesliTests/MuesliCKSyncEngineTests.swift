@@ -525,6 +525,57 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertFalse(ICloudTextSyncEngine.isMissingProvenanceRecord(beyondBound))
     }
 
+    func testProvenanceMatchesOnlyCompleteExpectedTextRecordResponses() throws {
+        let zoneID = ICloudTextSyncEngine.Schema.syncZoneID
+        let firstID = CKRecord.ID(recordName: "first", zoneID: zoneID)
+        let secondID = CKRecord.ID(recordName: "second", zoneID: zoneID)
+        let first = CKRecord(
+            recordType: ICloudTextSyncEngine.Schema.textRecordType,
+            recordID: firstID
+        )
+        let second = CKRecord(
+            recordType: ICloudTextSyncEngine.Schema.textRecordType,
+            recordID: secondID
+        )
+
+        XCTAssertEqual(
+            try ICloudTextSyncEngine.matchingProvenanceRecordNames(
+                expectedRecordIDs: [firstID, secondID],
+                results: [firstID: .success(first), secondID: .success(second)]
+            ),
+            Set(["first", "second"])
+        )
+        XCTAssertEqual(
+            try ICloudTextSyncEngine.matchingProvenanceRecordNames(
+                expectedRecordIDs: [firstID, secondID],
+                results: [firstID: .success(first)]
+            ),
+            Set(["first"]),
+            "An incomplete CloudKit response must remain only a partial proof"
+        )
+
+        let wrongType = CKRecord(recordType: "BridgeDevice", recordID: secondID)
+        XCTAssertEqual(
+            try ICloudTextSyncEngine.matchingProvenanceRecordNames(
+                expectedRecordIDs: [firstID, secondID],
+                results: [firstID: .success(first), secondID: .success(wrongType)]
+            ),
+            Set(["first"]),
+            "A record with the right ID but wrong type is not text provenance"
+        )
+        XCTAssertEqual(
+            try ICloudTextSyncEngine.matchingProvenanceRecordNames(
+                expectedRecordIDs: [firstID, secondID],
+                results: [
+                    firstID: .success(first),
+                    secondID: .failure(CKError(.unknownItem))
+                ]
+            ),
+            Set(["first"]),
+            "A missing record is a safe mismatch, not proof for the library"
+        )
+    }
+
     func testRecordBatchLoadsCurrentRowsAndDropsOnlyMissingRows() async {
         let engine = MuesliCKSyncEngine()
         let presentID = CKRecord.ID(
@@ -864,7 +915,7 @@ final class MuesliCKSyncEngineTests: XCTestCase {
             store: store,
             legacyAccountRecordVerifier: { recordNames in
                 XCTAssertEqual(recordNames, Set([local.id]))
-                return false
+                return []
             }
         )
         let authorized = try await engine.handleAccountChange(
@@ -892,25 +943,34 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         let store = Muesli.SharedStore(containerURL: directory)
         try store.saveResult(Muesli.DictationResult(
             requestID: UUID(),
-            text: "legacy synced text",
+            text: "first legacy synced text",
             engineIdentifier: "test"
         ))
-        let local = try XCTUnwrap(try store.textRecordsNeedingSync().first)
-        XCTAssertTrue(try store.markTextRecordSynced(
-            kind: local.kind,
-            recordName: local.id,
-            changeTag: "legacy-account-tag",
-            systemFields: Data([1]),
-            recordUpdatedAt: local.updatedAt
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "second legacy synced text",
+            engineIdentifier: "test"
         ))
+        let locals = try store.textRecordsNeedingSync()
+        XCTAssertEqual(locals.count, 2)
+        for local in locals {
+            XCTAssertTrue(try store.markTextRecordSynced(
+                kind: local.kind,
+                recordName: local.id,
+                changeTag: "legacy-account-tag",
+                systemFields: Data([1]),
+                recordUpdatedAt: local.updatedAt
+            ))
+        }
+        let requiredNames = Set(locals.map(\.id))
 
         let currentUser = CKRecord.ID(recordName: "verified-account")
         let state = TestPendingState()
         let engine = MuesliCKSyncEngine(
             store: store,
             legacyAccountRecordVerifier: { recordNames in
-                XCTAssertEqual(recordNames, Set([local.id]))
-                return true
+                XCTAssertEqual(recordNames, requiredNames)
+                return recordNames
             }
         )
         let authorized = try await engine.handleAccountChange(
@@ -924,6 +984,120 @@ final class MuesliCKSyncEngineTests: XCTestCase {
             Data(MuesliCKSyncEngine.accountScope(for: currentUser).utf8)
         )
         XCTAssertTrue(state.pendingRecordZoneChanges.isEmpty)
+    }
+
+    func testUnscopedLegacyLibraryRejectsPartialRecordOverlap() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "first legacy note",
+            engineIdentifier: "test"
+        ))
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "second legacy note",
+            engineIdentifier: "test"
+        ))
+        let records = try store.textRecordsNeedingSync()
+        XCTAssertEqual(records.count, 2)
+        for record in records {
+            XCTAssertTrue(try store.markTextRecordSynced(
+                kind: record.kind,
+                recordName: record.id,
+                changeTag: "legacy-account-tag",
+                systemFields: Data([1]),
+                recordUpdatedAt: record.updatedAt
+            ))
+        }
+        let requiredNames = Set(records.map(\.id))
+        let oneMatchingName = try XCTUnwrap(requiredNames.first)
+        let state = TestPendingState()
+        let engine = MuesliCKSyncEngine(
+            store: store,
+            legacyAccountRecordVerifier: { recordNames in
+                XCTAssertEqual(recordNames, requiredNames)
+                return Set([oneMatchingName])
+            }
+        )
+
+        let authorized = try await engine.handleAccountChange(
+            currentUser: CKRecord.ID(recordName: "partially-overlapping-account"),
+            state: state
+        )
+
+        XCTAssertFalse(authorized)
+        XCTAssertNil(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.accountScopeKey))
+        XCTAssertTrue(state.pendingRecordZoneChanges.isEmpty)
+        XCTAssertFalse(try store.hasTextRecordsNeedingSync())
+    }
+
+    func testUnscopedLegacyLibraryRejectsMismatchedProofSet() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "legacy note",
+            engineIdentifier: "test"
+        ))
+        let local = try XCTUnwrap(try store.textRecordsNeedingSync().first)
+        XCTAssertTrue(try store.markTextRecordSynced(
+            kind: local.kind,
+            recordName: local.id,
+            changeTag: "legacy-account-tag",
+            systemFields: Data([1]),
+            recordUpdatedAt: local.updatedAt
+        ))
+        let state = TestPendingState()
+        let engine = MuesliCKSyncEngine(
+            store: store,
+            legacyAccountRecordVerifier: { recordNames in
+                recordNames.union(["unrequested-record"])
+            }
+        )
+
+        let authorized = try await engine.handleAccountChange(
+            currentUser: CKRecord.ID(recordName: "mismatched-account"),
+            state: state
+        )
+
+        XCTAssertFalse(authorized)
+        XCTAssertNil(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.accountScopeKey))
+        XCTAssertTrue(state.pendingRecordZoneChanges.isEmpty)
+    }
+
+    func testFreshLocalOnlyLibraryClaimsAccountWithoutLegacyProof() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: UUID(),
+            text: "fresh local note",
+            engineIdentifier: "test"
+        ))
+        let currentUser = CKRecord.ID(recordName: "fresh-local-account")
+        let state = TestPendingState()
+        let engine = MuesliCKSyncEngine(
+            store: store,
+            legacyAccountRecordVerifier: { _ in
+                XCTFail("Fresh local-only rows must not require legacy provenance")
+                return []
+            }
+        )
+
+        let authorized = try await engine.handleAccountChange(
+            currentUser: currentUser,
+            state: state
+        )
+
+        XCTAssertTrue(authorized)
+        XCTAssertEqual(
+            try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.accountScopeKey),
+            Data(MuesliCKSyncEngine.accountScope(for: currentUser).utf8)
+        )
+        XCTAssertEqual(state.pendingRecordZoneChanges.count, 1)
     }
 
     private static func cloudRecord(

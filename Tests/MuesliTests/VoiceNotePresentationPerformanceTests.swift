@@ -36,8 +36,7 @@ final class VoiceNotePresentationPerformanceTests: XCTestCase {
         XCTAssertEqual(VoiceNoteElapsedClock.publishedSeconds(elapsed: -5), 0)
     }
 
-    @MainActor
-    func testTimelineCacheRebuildsOnlyForExactInputChanges() {
+    func testHistoryPresentationPrecomputesStableFilteredTimelines() {
         let requestID = UUID()
         let sessionID = UUID()
         let result = Muesli.DictationResult(
@@ -56,25 +55,64 @@ final class VoiceNotePresentationPerformanceTests: XCTestCase {
             phase: .completed,
             source: "ios"
         )
-        let input = VoiceNoteTimelineInput(
+        let presentation = VoiceNoteHistoryPresentation(
+            revision: 1,
             history: [result],
-            sessions: [session],
-            sourceFilter: .all
+            sessions: [session]
         )
-        let cache = VoiceNoteTimelineCache()
 
-        XCTAssertEqual(cache.items(for: input).count, 1)
-        XCTAssertEqual(cache.rebuildCount, 1)
-        XCTAssertEqual(cache.items(for: input).count, 1)
-        XCTAssertEqual(cache.rebuildCount, 1)
-
-        let filteredInput = VoiceNoteTimelineInput(
-            history: [result],
-            sessions: [session],
-            sourceFilter: .fromMac
+        XCTAssertEqual(presentation.timeline(for: .all).count, 1)
+        XCTAssertEqual(presentation.timeline(for: .thisIPhone).count, 1)
+        XCTAssertTrue(presentation.timeline(for: .fromMac).isEmpty)
+        XCTAssertTrue(presentation.matches(history: [result], sessions: [session]))
+        XCTAssertEqual(
+            presentation.updated(history: [result], sessions: [session]).revision,
+            presentation.revision
         )
-        XCTAssertTrue(cache.items(for: filteredInput).isEmpty)
-        XCTAssertEqual(cache.rebuildCount, 2)
+    }
+
+    func testLargeHistoryRemoteInsertionPreservesEveryExistingRowIdentity() {
+        let existing = (0..<2_600).map { index in
+            Muesli.DictationResult(
+                requestID: UUID(),
+                text: "Local note \(index)",
+                createdAt: Date(timeIntervalSinceReferenceDate: TimeInterval(index)),
+                engineIdentifier: "parakeet",
+                source: "ios"
+            )
+        }.reversed()
+        let before = VoiceNoteHistoryPresentation(
+            revision: 1,
+            history: Array(existing),
+            sessions: []
+        )
+        let remote = Muesli.DictationResult(
+            requestID: UUID(),
+            text: "New Mac note",
+            createdAt: Date(timeIntervalSinceReferenceDate: 3_000),
+            engineIdentifier: "icloud",
+            source: "macos"
+        )
+        let afterHistory = [remote] + Array(existing)
+        let after = VoiceNoteHistoryPresentation(
+            revision: 2,
+            history: afterHistory,
+            sessions: []
+        )
+
+        let beforeIDs = before.timeline(for: .all).map(\.id)
+        let afterIDs = after.timeline(for: .all).map(\.id)
+        XCTAssertEqual(afterIDs.count, 2_601)
+        XCTAssertEqual(Set(afterIDs).count, 2_601)
+        XCTAssertEqual(afterIDs.first, "result-\(remote.id.uuidString)")
+        XCTAssertEqual(Array(afterIDs.dropFirst()), beforeIDs)
+        XCTAssertEqual(after.timeline(for: .fromMac).map(\.id), [afterIDs[0]])
+        XCTAssertFalse(before.matches(history: afterHistory, sessions: []))
+        XCTAssertTrue(after.matches(history: afterHistory, sessions: []))
+        XCTAssertEqual(
+            before.updated(history: afterHistory, sessions: []).revision,
+            before.revision + 1
+        )
     }
 
     func testTimelineBuilderMergesRecoverableNotesByCreationDate() {

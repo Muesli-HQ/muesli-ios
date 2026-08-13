@@ -19,7 +19,6 @@ struct DictationView: View {
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
     @State private var dashboardStats = DictationDashboardStats.empty
-    @State private var voiceNoteTimelineCache = VoiceNoteTimelineCache()
     @State private var navigationPath = NavigationPath()
 
     var body: some View {
@@ -62,11 +61,7 @@ struct DictationView: View {
                 guard active else { return }
                 refreshVisibleStateIfNeeded()
             }
-            .onChange(of: coordinator.dictationHistory.count) { _, _ in
-                guard isActive else { return }
-                updateDashboardStats()
-            }
-            .onChange(of: coordinator.recordingSessions.count) { _, _ in
+            .onChange(of: coordinator.voiceNoteHistoryPresentation.revision) { _, _ in
                 guard isActive else { return }
                 updateDashboardStats()
             }
@@ -87,7 +82,9 @@ struct DictationView: View {
                 coordinator.setKeyboardSessionModeEnabled(enabled)
             }
             .navigationDestination(for: UUID.self) { resultID in
-                if let result = coordinator.dictationHistory.first(where: { $0.id == resultID }),
+                if let result = coordinator.voiceNoteHistoryPresentation.history.first(
+                    where: { $0.id == resultID }
+                ),
                    let session = coordinator.recordingSession(for: result),
                    let audioURL = coordinator.audioFileURL(for: result) {
                     DictationAudioDetailView(result: result, session: session, audioURL: audioURL) {
@@ -521,13 +518,7 @@ struct DictationView: View {
 
     @ViewBuilder
     private var voiceNoteHistorySection: some View {
-        let timeline = voiceNoteTimelineCache.items(
-            for: VoiceNoteTimelineInput(
-                history: displayHistory,
-                sessions: timelineSessions,
-                sourceFilter: sourceFilter
-            )
-        )
+        let timeline = visibleVoiceNoteTimeline
         historyHeader(timeline: timeline)
         historyRows(timeline: timeline)
     }
@@ -546,10 +537,9 @@ struct DictationView: View {
 
                 Spacer()
 
-                ICloudSyncStatusButton(
+                CoordinatorICloudSyncStatusButton(
+                    coordinator: coordinator,
                     isEnabled: iCloudSyncEnabled,
-                    isSyncing: coordinator.isICloudSyncInProgress,
-                    hasError: syncStatusIsError,
                     action: triggerHomeSync
                 )
 
@@ -607,18 +597,26 @@ struct DictationView: View {
                         }
                     }
                 }
+                .animation(
+                    nil,
+                    value: coordinator.voiceNoteHistoryPresentation.revision
+                )
             }
         }
     }
 
-    private var timelineSessions: [RecordingSession] {
-        var sessions = coordinator.recordingSessions
+    private var visibleVoiceNoteTimeline: [VoiceNoteTimelineItem] {
         #if DEBUG
         if shouldUseMockDictations {
-            sessions = Self.mockRecordingSessions
+            return VoiceNoteTimelineBuilder.build(from: .init(
+                history: Self.mockDictationHistory,
+                sessions: Self.mockRecordingSessions,
+                sourceFilter: sourceFilter
+            ))
         }
         #endif
-        return sessions
+
+        return coordinator.voiceNoteHistoryPresentation.timeline(for: sourceFilter)
     }
 
     private func openCompletedVoiceNote(
@@ -638,7 +636,9 @@ struct DictationView: View {
     }
 
     private var statsSessions: [RecordingSession] {
-        coordinator.recordingSessions.filter { sourceFilter.includes($0.syncOrigin) }
+        coordinator.voiceNoteHistoryPresentation.sessions.filter {
+            sourceFilter.includes($0.syncOrigin)
+        }
     }
 
     private var displayHistory: [DictationResult] {
@@ -648,7 +648,7 @@ struct DictationView: View {
         }
         #endif
 
-        return coordinator.dictationHistory
+        return coordinator.voiceNoteHistoryPresentation.history
     }
 
     private var shouldUseMockDictations: Bool {
@@ -725,10 +725,6 @@ struct DictationView: View {
 
     private var isDictationButtonDisabled: Bool {
         isTranscribing
-    }
-
-    private var syncStatusIsError: Bool {
-        coordinator.iCloudSyncStatusText?.localizedCaseInsensitiveContains("sync failed") == true
     }
 
     private var dictationButtonTitle: String {
@@ -1164,6 +1160,22 @@ private struct VoiceNoteRecordButtonLabel: View {
         } else {
             MuesliTheme.textPrimary
         }
+    }
+}
+
+private struct CoordinatorICloudSyncStatusButton: View {
+    @Bindable var coordinator: DictationCoordinator
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        ICloudSyncStatusButton(
+            isEnabled: isEnabled,
+            isSyncing: coordinator.isICloudSyncInProgress,
+            hasError: coordinator.iCloudSyncStatusText?
+                .localizedCaseInsensitiveContains("sync failed") == true,
+            action: action
+        )
     }
 }
 

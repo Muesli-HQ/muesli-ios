@@ -103,7 +103,7 @@ struct SettingsView: View {
                         AppTelemetry.signal("bridge_enable_started", parameters: ["platform": "ios", "source": "settings"])
                         coordinator.syncICloudTextIfEnabled(reason: "settings_toggle")
                     } else {
-                        coordinator.iCloudSyncStatusText = "iCloud sync is off."
+                        coordinator.disableICloudTextSync()
                     }
                     refreshAppleSyncSettings()
                 }

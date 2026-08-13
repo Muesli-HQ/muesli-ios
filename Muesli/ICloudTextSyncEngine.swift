@@ -1,5 +1,6 @@
 import CloudKit
 import Foundation
+import OSLog
 
 struct ICloudTextSyncResult: Equatable {
     let uploaded: Int
@@ -22,6 +23,67 @@ private final class DeliveredRecordCounter: @unchecked Sendable {
         lock.lock()
         count += 1
         lock.unlock()
+    }
+}
+
+/// Makes callback-based CloudKit operations obey Swift task cancellation while
+/// resuming their continuation exactly once, even if CloudKit calls back late.
+final class MuesliCancellableCloudKitOperation<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var operation: CKOperation?
+    private var continuation: CheckedContinuation<Value, any Error>?
+    private var isCancelled = false
+
+    func install(
+        operation: CKOperation,
+        continuation: CheckedContinuation<Value, any Error>
+    ) {
+        lock.lock()
+        if isCancelled {
+            lock.unlock()
+            operation.cancel()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.operation = operation
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let operation = operation
+        let continuation = continuation
+        self.operation = nil
+        self.continuation = nil
+        lock.unlock()
+        operation?.cancel()
+        continuation?.resume(throwing: CancellationError())
+    }
+
+    func succeed(_ value: sending Value) {
+        lock.lock()
+        guard let continuation else {
+            lock.unlock()
+            return
+        }
+        self.operation = nil
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(returning: value)
+    }
+
+    func fail(_ error: any Error) {
+        lock.lock()
+        guard let continuation else {
+            lock.unlock()
+            return
+        }
+        self.operation = nil
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(throwing: error)
     }
 }
 
@@ -207,10 +269,14 @@ enum MuesliBridgeDeviceIdentity {
 }
 
 
-final class ICloudTextSyncEngine {
+final class ICloudTextSyncEngine: @unchecked Sendable {
     static let containerIdentifier = "iCloud.com.mueslihq.muesli"
+    private static let logger = Logger(
+        subsystem: "com.mueslihq.muesli",
+        category: "icloud-preflight"
+    )
 
-    private enum Schema {
+    enum Schema {
         static let containerIdentifier = ICloudTextSyncEngine.containerIdentifier
         static let syncZoneName = "MuesliSyncZone"
         static let textRecordType = "MuesliTextRecord"
@@ -226,6 +292,13 @@ final class ICloudTextSyncEngine {
     private let database: CKDatabase
     private let changeTokenStore: ICloudTextChangeTokenStore
     private let defaults: UserDefaults
+
+    static var cloudSyncStateKeyComponent: String {
+        Bundle.main.bundleIdentifier?
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            .lowercased()
+            ?? "unspecified"
+    }
 
     init(
         container: CKContainer = CKContainer(identifier: Schema.containerIdentifier),
@@ -249,9 +322,7 @@ final class ICloudTextSyncEngine {
     static func diagnosticsSummary(store: SharedStore = SharedStore()) -> String {
         let defaults = UserDefaults.standard
         let migrated = defaults.bool(forKey: Schema.migratedDefaultZoneKey)
-        let hasToken = defaults.data(
-            forKey: UserDefaultsICloudTextChangeTokenStore.defaultKey
-        ) != nil
+        let hasEngineState = (try? store.cloudSyncStateData(forKey: MuesliCKSyncEngine.stateKey)) != nil
         let enabled = MuesliPreferences.iCloudSyncEnabled
 
         // Counted in SQL rather than by fetching rows: this runs on the main
@@ -271,7 +342,7 @@ final class ICloudTextSyncEngine {
         return [
             "sync: enabled=\(enabled)",
             "migrated=\(migrated)",
-            "changeToken=\(hasToken ? "present" : "none")",
+            "engineState=\(hasEngineState ? "present" : "none")",
             "dirtyNotes/dirtySessions=\(dirty ?? "?")",
             "localNotes=\(results.map(String.init) ?? "?")",
             "localSessions=\(sessions.map(String.init) ?? "?")",
@@ -283,8 +354,11 @@ final class ICloudTextSyncEngine {
         store: SharedStore = SharedStore(),
         forceBridgeDeviceRefresh: Bool = false
     ) async throws -> ICloudTextSyncResult {
-        try await ensureSyncZone()
-        await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
+        _ = try await ensureSyncZone()
+        await refreshBridgeDeviceLink(
+            forceRefresh: forceBridgeDeviceRefresh,
+            shouldCommit: { true }
+        )
         try await migrateDefaultZoneIfNeeded(store: store)
 
         let remoteRecords = try await fetchChangedTextRecords()
@@ -296,48 +370,162 @@ final class ICloudTextSyncEngine {
         }
 
         let dirtyRecords = try store.textRecordsNeedingSync()
-        let savedRecords = try await save(records: dirtyRecords.map(Self.syncZoneCloudRecord(from:)))
+        let dirtyByRecordName = Dictionary(uniqueKeysWithValues: dirtyRecords.map { ($0.id, $0) })
+        let savedRecords = try await save(records: dirtyRecords.map {
+            Self.syncZoneCloudRecord(from: $0)
+        })
         for savedRecord in savedRecords {
-            guard let kind = Self.kind(from: savedRecord) else { continue }
+            guard let kind = Self.kind(from: savedRecord),
+                  let uploadedRecord = dirtyByRecordName[savedRecord.recordID.recordName]
+            else { continue }
             try store.markTextRecordSynced(
                 kind: kind,
                 recordName: savedRecord.recordID.recordName,
-                changeTag: savedRecord.recordChangeTag
+                changeTag: savedRecord.recordChangeTag,
+                recordUpdatedAt: uploadedRecord.updatedAt
             )
         }
 
         return ICloudTextSyncResult(uploaded: savedRecords.count, downloaded: downloaded)
     }
 
-    private func ensureSyncZone() async throws {
+    /// Transitional preflight retained during the CKSyncEngine migration.
+    /// Bridge discovery and the one-time default-zone import still use their
+    /// existing operations; custom-zone fetches and uploads belong to CKSyncEngine.
+    func prepareForCKSyncEngine(
+        store: SharedStore
+    ) async throws -> Bool {
+        let syncZoneWasRecreated = try await ensureSyncZone()
+        if syncZoneWasRecreated {
+            // The new zone belongs to the same account, but persisted system
+            // fields still carry record change tags from the deleted zone.
+            // Clear them before migration builds any CKRecord instances.
+            try store.resetTextRecordCloudMetadataForZoneRecreation()
+        }
+        try await migrateDefaultZoneIfNeeded(store: store)
+        return syncZoneWasRecreated
+    }
+
+    /// Refreshes the optional companion-presence hint outside text transport.
+    ///
+    /// Bridge records are onboarding/UI metadata, not authorization or text
+    /// synchronization state. A slow query here must never hold open a text
+    /// upload, download, or the visible sync progress indicator.
+    func refreshBridgeDeviceLinkIfNeeded(
+        forceRefresh: Bool = false,
+        shouldCommit: @escaping @Sendable () async -> Bool = { true }
+    ) async {
+        await refreshBridgeDeviceLink(
+            forceRefresh: forceRefresh,
+            shouldCommit: shouldCommit
+        )
+    }
+
+    /// Returns the stable IDs that prove an unscoped legacy library belongs to
+    /// the current account.
+    ///
+    /// Only stable record IDs are requested and `desiredKeys` is empty, so this
+    /// check never downloads authored text or other user-authored fields. A
+    /// missing record/zone is a safe non-match; connectivity and service errors
+    /// still propagate so a transient failure cannot claim the wrong account.
+    /// The caller requires exact equality with its complete legacy ID set: one
+    /// overlapping record is not sufficient provenance for the rest of a library.
+    func matchingSyncZoneTextRecordNames(named recordNames: Set<String>) async throws -> Set<String> {
+        let names = recordNames.filter { !$0.isEmpty }.sorted()
+        guard !names.isEmpty else { return [] }
+
+        let batchSize = 200
+        var matchedNames = Set<String>()
+        var start = names.startIndex
+        while start < names.endIndex {
+            let end = names.index(start, offsetBy: batchSize, limitedBy: names.endIndex)
+                ?? names.endIndex
+            let recordIDs = names[start..<end].map {
+                CKRecord.ID(recordName: $0, zoneID: Schema.syncZoneID)
+            }
+
+            do {
+                let results = try await database.records(for: recordIDs, desiredKeys: [])
+                matchedNames.formUnion(try Self.matchingProvenanceRecordNames(
+                    expectedRecordIDs: recordIDs,
+                    results: results
+                ))
+            } catch {
+                guard Self.isMissingProvenanceRecord(error) else { throw error }
+            }
+
+            start = end
+        }
+        return matchedNames
+    }
+
+    /// Classifies only requested, correctly typed records as provenance. Missing
+    /// response entries and wrong record types are safe mismatches; non-missing
+    /// CloudKit failures propagate to keep transient errors from claiming scope.
+    static func matchingProvenanceRecordNames(
+        expectedRecordIDs: [CKRecord.ID],
+        results: [CKRecord.ID: Result<CKRecord, Error>]
+    ) throws -> Set<String> {
+        var matchedNames = Set<String>()
+        for recordID in expectedRecordIDs {
+            guard let result = results[recordID] else { continue }
+            switch result {
+            case .success(let record):
+                guard record.recordID == recordID,
+                      record.recordType == Schema.textRecordType else { continue }
+                matchedNames.insert(recordID.recordName)
+            case .failure(let error):
+                guard Self.isMissingProvenanceRecord(error) else { throw error }
+            }
+        }
+        return matchedNames
+    }
+
+    @discardableResult
+    func ensureSyncZone() async throws -> Bool {
         do {
             _ = try await fetchZone(id: Schema.syncZoneID)
+            return false
         } catch {
             guard Self.isSyncZoneMissing(error) else { throw error }
             _ = try await save(zone: CKRecordZone(zoneName: Schema.syncZoneName))
             changeTokenStore.clearToken()
             defaults.set(false, forKey: Schema.migratedDefaultZoneKey)
+            return true
         }
     }
 
-    private func refreshBridgeDeviceLink(forceRefresh: Bool = false) async {
+    private func refreshBridgeDeviceLink(
+        forceRefresh: Bool = false,
+        shouldCommit: @escaping @Sendable () async -> Bool
+    ) async {
         guard MuesliBridgeDeviceIdentity.shouldRefresh(
             defaults: defaults,
             forceRefresh: forceRefresh
         ) else { return }
 
         do {
-            try await upsertLocalBridgeDeviceRecord()
+            guard await shouldCommit(), !Task.isCancelled else { return }
+            try await upsertLocalBridgeDeviceRecord(shouldCommit: shouldCommit)
             let records = try await fetchBridgeDeviceRecords()
+            guard await shouldCommit(), !Task.isCancelled else { return }
             MuesliBridgeDeviceIdentity.updateRemoteDevices(from: records, defaults: defaults)
             MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults)
         } catch {
-            print("Failed to refresh iCloud bridge device identity: \(error)")
-            MuesliBridgeDeviceIdentity.markRefreshFailed(defaults: defaults)
+            Self.logger.error(
+                "bridge_refresh_failed error_type=\(String(describing: type(of: error)), privacy: .public)"
+            )
+            if await shouldCommit(), !Task.isCancelled {
+                MuesliBridgeDeviceIdentity.markRefreshFailed(defaults: defaults)
+            }
         }
     }
 
-    private func upsertLocalBridgeDeviceRecord() async throws {
+    private func upsertLocalBridgeDeviceRecord(
+        shouldCommit: @escaping @Sendable () async -> Bool
+    ) async throws {
+        try Task.checkCancellation()
+        guard await shouldCommit() else { throw CancellationError() }
         let snapshot = MuesliBridgeDeviceIdentity.local(defaults: defaults)
         let recordID = CKRecord.ID(
             recordName: "bridge-device-\(snapshot.deviceID)",
@@ -345,6 +533,8 @@ final class ICloudTextSyncEngine {
         )
         let record = (try? await fetchRecord(id: recordID))
             ?? CKRecord(recordType: Schema.bridgeDeviceRecordType, recordID: recordID)
+        try Task.checkCancellation()
+        guard await shouldCommit() else { throw CancellationError() }
         if record["createdAt"] == nil {
             record["createdAt"] = Date() as NSDate
         }
@@ -418,7 +608,9 @@ final class ICloudTextSyncEngine {
         }
 
         let migrationRecords = try store.textRecordsForSyncMigration()
-        _ = try await saveInBatches(records: migrationRecords.map(Self.syncZoneCloudRecord(from:)))
+        _ = try await saveInBatches(records: migrationRecords.map {
+            Self.syncZoneCloudRecord(from: $0)
+        })
 
         changeTokenStore.clearToken()
         let primedSyncZoneRecords = try await fetchChangedTextRecords()
@@ -703,30 +895,39 @@ final class ICloudTextSyncEngine {
 
     private func save(records: [CKRecord]) async throws -> [CKRecord] {
         guard !records.isEmpty else { return [] }
-        return try await withCheckedThrowingContinuation { continuation in
-            let operation = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
-            operation.savePolicy = .changedKeys
-            let lock = NSLock()
-            var savedRecords: [CKRecord] = []
-            operation.perRecordSaveBlock = { _, result in
-                if case .success(let record) = result {
-                    lock.lock()
-                    savedRecords.append(record)
-                    lock.unlock()
+        let cancellation = MuesliCancellableCloudKitOperation<[CKRecord]>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let operation = CKModifyRecordsOperation(
+                    recordsToSave: records,
+                    recordIDsToDelete: nil
+                )
+                operation.savePolicy = .changedKeys
+                let lock = NSLock()
+                var savedRecords: [CKRecord] = []
+                operation.perRecordSaveBlock = { _, result in
+                    if case .success(let record) = result {
+                        lock.lock()
+                        savedRecords.append(record)
+                        lock.unlock()
+                    }
                 }
-            }
-            operation.modifyRecordsResultBlock = { result in
-                switch result {
-                case .success:
-                    lock.lock()
-                    let records = savedRecords
-                    lock.unlock()
-                    continuation.resume(returning: records)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
+                operation.modifyRecordsResultBlock = { result in
+                    switch result {
+                    case .success:
+                        lock.lock()
+                        let records = savedRecords
+                        lock.unlock()
+                        cancellation.succeed(records)
+                    case .failure(let error):
+                        cancellation.fail(error)
+                    }
                 }
+                cancellation.install(operation: operation, continuation: continuation)
+                database.add(operation)
             }
-            database.add(operation)
+        } onCancel: {
+            cancellation.cancel()
         }
     }
 
@@ -756,18 +957,13 @@ final class ICloudTextSyncEngine {
         }
     }
 
-    private static func syncZoneCloudRecord(from record: SyncTextRecord) -> CKRecord {
-        let cloud = CKRecord(
-            recordType: Schema.textRecordType,
-            recordID: CKRecord.ID(recordName: record.id, zoneID: Schema.syncZoneID)
-        )
+    static func syncZoneCloudRecord(from record: SyncTextRecord, baseRecord: CKRecord? = nil) -> CKRecord {
+        let recordID = CKRecord.ID(recordName: record.id, zoneID: Schema.syncZoneID)
+        let persistedRecord = record.cloudSystemFields.flatMap(Self.record(fromSystemFields:))
+        let cloud = baseRecord
+            ?? persistedRecord
+            ?? CKRecord(recordType: Schema.textRecordType, recordID: recordID)
         cloud["kind"] = record.kind.rawValue as NSString
-        cloud["title"] = record.title as NSString?
-        cloud["text"] = record.text as NSString
-        cloud["speakerTranscript"] = record.speakerTranscript as NSString?
-        cloud["summaryText"] = record.summaryText as NSString?
-        cloud["manualNotes"] = record.manualNotes as NSString?
-        cloud["manualNotesUpdatedAt"] = record.manualNotesUpdatedAt as NSDate?
         cloud["source"] = record.source as NSString?
         cloud["localSource"] = record.localSource as NSString?
         cloud["engineIdentifier"] = record.engineIdentifier as NSString?
@@ -779,21 +975,37 @@ final class ICloudTextSyncEngine {
         cloud["wordCount"] = record.wordCount as NSNumber
         cloud["isDeleted"] = record.isDeleted as NSNumber
         cloud["schemaVersion"] = 1 as NSNumber
+        guard !record.isDeleted else {
+            cloud["title"] = nil as NSString?
+            cloud["text"] = nil as NSString?
+            cloud["speakerTranscript"] = nil as NSString?
+            cloud["summaryText"] = nil as NSString?
+            cloud["manualNotes"] = nil as NSString?
+            cloud["manualNotesUpdatedAt"] = nil as NSDate?
+            return cloud
+        }
+        cloud["title"] = record.title as NSString?
+        cloud["text"] = record.text as NSString
+        cloud["speakerTranscript"] = record.speakerTranscript as NSString?
+        cloud["summaryText"] = record.summaryText as NSString?
+        cloud["manualNotes"] = record.manualNotes as NSString?
+        cloud["manualNotesUpdatedAt"] = record.manualNotesUpdatedAt as NSDate?
         return cloud
     }
 
-    private static func syncTextRecord(from record: CKRecord) -> SyncTextRecord? {
+    static func syncTextRecord(from record: CKRecord) -> SyncTextRecord? {
         guard let kind = kind(from: record),
-              let text = record["text"] as? String,
               let createdAt = record["createdAt"] as? Date,
               let updatedAt = record["updatedAt"] as? Date else {
             return nil
         }
+        let isDeleted = (record["isDeleted"] as? NSNumber)?.boolValue ?? false
+        guard isDeleted || record["text"] is String else { return nil }
         return SyncTextRecord(
             id: record.recordID.recordName,
             kind: kind,
             title: record["title"] as? String,
-            text: text,
+            text: (record["text"] as? String) ?? "",
             speakerTranscript: record["speakerTranscript"] as? String,
             summaryText: record["summaryText"] as? String,
             manualNotes: record["manualNotes"] as? String,
@@ -807,27 +1019,41 @@ final class ICloudTextSyncEngine {
             endedAt: record["endedAt"] as? Date,
             durationSeconds: (record["durationSeconds"] as? NSNumber)?.doubleValue ?? 0,
             wordCount: (record["wordCount"] as? NSNumber)?.intValue ?? 0,
-            isDeleted: (record["isDeleted"] as? NSNumber)?.boolValue ?? false,
-            cloudChangeTag: record.recordChangeTag
+            isDeleted: isDeleted,
+            cloudChangeTag: record.recordChangeTag,
+            cloudSystemFields: encodedSystemFields(for: record)
         )
     }
 
-    private static func kind(from record: CKRecord) -> SyncTextRecordKind? {
+    static func encodedSystemFields(for record: CKRecord) -> Data? {
+        let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+        record.encodeSystemFields(with: archiver)
+        archiver.finishEncoding()
+        return archiver.encodedData
+    }
+
+    static func record(fromSystemFields data: Data) -> CKRecord? {
+        do {
+            let unarchiver = try NSKeyedUnarchiver(forReadingFrom: data)
+            unarchiver.requiresSecureCoding = true
+            defer { unarchiver.finishDecoding() }
+            return CKRecord(coder: unarchiver)
+        } catch {
+            return nil
+        }
+    }
+
+    static func kind(from record: CKRecord) -> SyncTextRecordKind? {
         guard let raw = record["kind"] as? String else { return nil }
         return SyncTextRecordKind(rawValue: raw)
     }
 
-    private static func isSyncZoneMissing(_ error: Error) -> Bool {
-        if let ckError = error as? CKError {
-            if ckError.code == .unknownItem {
-                return true
-            }
-            if ckError.code == .partialFailure,
-               ckError.partialErrorsByItemID?.values.contains(where: { partialError in
-                   (partialError as? CKError)?.code == .unknownItem
-               }) == true {
-                return true
-            }
+    static func isSyncZoneMissing(_ error: Error) -> Bool {
+        if containsCloudKitError(
+            error,
+            codes: [.unknownItem, .zoneNotFound, .userDeletedZone]
+        ) {
+            return true
         }
 
         let nsError = error as NSError
@@ -841,6 +1067,70 @@ final class ICloudTextSyncEngine {
             .joined(separator: " ")
         return message.contains(Schema.syncZoneName.lowercased())
             && (message.contains("zone not found") || message.contains("zone does not exist"))
+    }
+
+    /// Recursively inspects CKError partial failures and underlying errors.
+    /// Depth is bounded defensively because NSError graphs are not guaranteed
+    /// to be acyclic.
+    static func containsCloudKitError(
+        _ error: Error,
+        codes: [CKError.Code],
+        depth: Int = 0
+    ) -> Bool {
+        guard depth < 8 else { return false }
+
+        if let ckError = error as? CKError {
+            if codes.contains(ckError.code) { return true }
+            if ckError.code == .partialFailure,
+               ckError.partialErrorsByItemID?.values.contains(where: {
+                   containsCloudKitError($0, codes: codes, depth: depth + 1)
+               }) == true {
+                return true
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == CKError.errorDomain,
+           let code = CKError.Code(rawValue: nsError.code),
+           codes.contains(code) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return containsCloudKitError(underlying, codes: codes, depth: depth + 1)
+        }
+        return false
+    }
+
+    static func isMissingProvenanceRecord(_ error: Error, depth: Int = 0) -> Bool {
+        guard depth < 8 else { return false }
+        if let ckError = error as? CKError {
+            switch ckError.code {
+            case .unknownItem, .zoneNotFound, .userDeletedZone:
+                return true
+            case .partialFailure:
+                guard let errors = ckError.partialErrorsByItemID?.values,
+                      !errors.isEmpty else { return false }
+                return errors.allSatisfy {
+                    isMissingProvenanceRecord($0, depth: depth + 1)
+                }
+            default:
+                return false
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == CKError.errorDomain {
+            switch CKError.Code(rawValue: nsError.code) {
+            case .unknownItem, .zoneNotFound, .userDeletedZone:
+                return true
+            default:
+                break
+            }
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isMissingProvenanceRecord(underlying, depth: depth + 1)
+        }
+        return false
     }
 
     private static var desiredTextRecordKeys: [CKRecord.FieldKey] {

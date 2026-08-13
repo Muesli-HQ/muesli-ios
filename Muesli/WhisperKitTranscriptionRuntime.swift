@@ -20,23 +20,11 @@ actor WhisperKitTranscriptionRuntime {
 
         try Self.prepareDownloadStorage()
 
-        let modelFolder: URL
-        if Self.isModelDownloaded(variant) {
-            progress?(0.92, "Loading downloaded Whisper model...")
-            modelFolder = Self.modelDirectory(for: variant)
-        } else {
-            let estimatedBytes = Self.estimatedDownloadBytes(for: variant)
-            progress?(0.02, "Starting \(Self.formattedSize(estimatedBytes)) download...")
-            modelFolder = try await WhisperKit.download(variant: variant) { downloadProgress in
-                let fraction = min(max(downloadProgress.fractionCompleted, 0), 1)
-                let downloadedBytes = Int64(Double(estimatedBytes) * fraction)
-                progress?(
-                    max(fraction * 0.9, 0.02),
-                    "\(Self.formattedSize(downloadedBytes)) of \(Self.formattedSize(estimatedBytes))"
-                )
-            }
-            try Self.markDownloadComplete(at: modelFolder)
+        guard Self.isModelDownloaded(variant) else {
+            throw WhisperKitRuntimeError.incompleteDownload
         }
+        progress?(0.92, "Loading downloaded Whisper model...")
+        let modelFolder = Self.modelDirectory(for: variant)
 
         progress?(0.94, "Optimizing WhisperKit for this iPhone...")
         let configuration = WhisperKitConfig(
@@ -167,31 +155,6 @@ actor WhisperKitTranscriptionRuntime {
         return false
     }
 
-    private static func estimatedDownloadBytes(for variant: String) -> Int64 {
-        switch variant {
-        case "tiny.en":
-            153 * 1_000_000
-        case "small.en":
-            250 * 1_000_000
-        case "medium.en":
-            1_500 * 1_000_000
-        case "large-v3-v20240930_626MB":
-            626 * 1_000_000
-        default:
-            250 * 1_000_000
-        }
-    }
-
-    private static func formattedSize(_ bytes: Int64) -> String {
-        let megabytes = Double(bytes) / 1_000_000
-        if megabytes >= 1_000 {
-            return String(format: "%.1f GB", megabytes / 1_000)
-        }
-        if megabytes >= 100 {
-            return "\(Int(megabytes.rounded())) MB"
-        }
-        return String(format: "%.1f MB", megabytes)
-    }
 }
 
 private enum WhisperKitRuntimeError: LocalizedError {

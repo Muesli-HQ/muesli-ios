@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreML
 import Foundation
 @preconcurrency import FluidAudio
 
@@ -198,10 +199,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         guard let asrVersion = model.asrVersion else {
             throw TranscriptionEngineError.unsupportedOfflineModel(model.shortName)
         }
-        let models = try await AsrModels.downloadAndLoad(version: asrVersion) { downloadProgress in
-            let fraction = min(max(downloadProgress.fractionCompleted, 0), 1)
-            progress?(fraction, Self.statusText(for: downloadProgress.phase, fraction: fraction))
-        }
+        let modelDirectory = try localModelDirectory(for: model)
+        progress?(0.88, "Loading downloaded model...")
+        let models = try await Self.loadLocalAsrModels(from: modelDirectory, version: asrVersion)
         progress?(1.0, "Preparing model for this iPhone...")
         let manager = AsrManager(config: .default)
         let loadHeartbeat = Self.modelLoadHeartbeatTask(
@@ -240,12 +240,11 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         guard let variant = model.streamingVariant, let chunkSize = variant.eouChunkSize else {
             throw TranscriptionEngineError.unsupportedStreamingModel(model.shortName)
         }
+        let modelDirectory = try localModelDirectory(for: model)
 
         let manager = StreamingEouAsrManager(chunkSize: chunkSize)
-        try await manager.loadModels(to: nil, configuration: nil) { downloadProgress in
-            let fraction = min(max(downloadProgress.fractionCompleted, 0), 1)
-            progress?(fraction, Self.statusText(for: downloadProgress.phase, fraction: fraction))
-        }
+        progress?(0.9, "Loading downloaded model...")
+        try await manager.loadModels(from: modelDirectory)
         self.streamingManager = manager
         progress?(1.0, "\(model.shortName) ready")
         return manager
@@ -269,6 +268,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         guard let variant = model.whisperVariant else {
             throw TranscriptionEngineError.unsupportedOfflineModel(model.shortName)
         }
+        _ = try localModelDirectory(for: model)
 
         isLoadingWhisperRuntime = true
         defer {
@@ -287,6 +287,93 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             await runtime.unload()
             throw error
         }
+    }
+
+    private func localModelDirectory(for model: LocalTranscriptionModel) throws -> URL {
+        guard ModelBackgroundDownloadService.isModelDownloaded(model),
+              let directory = ModelBackgroundDownloadService.storageDirectory(for: model)
+        else {
+            throw TranscriptionEngineError.modelNotDownloaded(model.shortName)
+        }
+        return directory
+    }
+
+    private static func loadLocalAsrModels(
+        from directory: URL,
+        version: AsrModelVersion
+    ) async throws -> AsrModels {
+        let preprocessorFile: String
+        let encoderFile: String?
+        let decoderFile: String
+        let jointFile: String
+        switch version {
+        case .tdtCtc110m:
+            preprocessorFile = ModelNames.ASR.preprocessorFile
+            encoderFile = nil
+            decoderFile = ModelNames.ASR.decoderFile
+            jointFile = ModelNames.ASR.jointFile
+        case .v3:
+            preprocessorFile = ModelNames.ASR.preprocessorFile
+            encoderFile = ModelNames.ASR.encoderFile
+            decoderFile = ModelNames.ASR.decoderFile
+            jointFile = ModelNames.ASR.jointV3File
+        default:
+            throw TranscriptionEngineError.unsupportedOfflineModel("Parakeet")
+        }
+
+        let defaultConfiguration = AsrModels.defaultConfiguration()
+        let preprocessorConfiguration = MLModelConfiguration()
+        preprocessorConfiguration.computeUnits = .cpuOnly
+
+        let preprocessor = try await MLModel.load(
+            contentsOf: directory.appendingPathComponent(preprocessorFile),
+            configuration: preprocessorConfiguration
+        )
+        let encoder: MLModel?
+        if let encoderFile {
+            encoder = try await MLModel.load(
+                contentsOf: directory.appendingPathComponent(encoderFile),
+                configuration: defaultConfiguration
+            )
+        } else {
+            encoder = nil
+        }
+        let decoder = try await MLModel.load(
+            contentsOf: directory.appendingPathComponent(decoderFile),
+            configuration: defaultConfiguration
+        )
+        let joint = try await MLModel.load(
+            contentsOf: directory.appendingPathComponent(jointFile),
+            configuration: defaultConfiguration
+        )
+        let vocabularyData = try Data(
+            contentsOf: directory.appendingPathComponent(ModelNames.ASR.vocabularyFile)
+        )
+
+        return AsrModels(
+            encoder: encoder,
+            preprocessor: preprocessor,
+            decoder: decoder,
+            joint: joint,
+            configuration: defaultConfiguration,
+            vocabulary: try decodeParakeetVocabulary(vocabularyData),
+            version: version
+        )
+    }
+
+    static func decodeParakeetVocabulary(_ data: Data) throws -> [Int: String] {
+        let object = try JSONSerialization.jsonObject(with: data)
+        if let array = object as? [String] {
+            return Dictionary(uniqueKeysWithValues: array.enumerated().map { ($0.offset, $0.element) })
+        }
+        if let dictionary = object as? [String: String] {
+            return dictionary.reduce(into: [:]) { vocabulary, entry in
+                if let tokenID = Int(entry.key) {
+                    vocabulary[tokenID] = entry.value
+                }
+            }
+        }
+        throw TranscriptionEngineError.invalidLocalVocabulary
     }
 
     private func transcribeWithWhisperKit(
@@ -405,11 +492,17 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
 }
 
 private enum TranscriptionEngineError: LocalizedError {
+    case invalidLocalVocabulary
+    case modelNotDownloaded(String)
     case unsupportedOfflineModel(String)
     case unsupportedStreamingModel(String)
 
     var errorDescription: String? {
         switch self {
+        case .invalidLocalVocabulary:
+            "The downloaded transcription vocabulary is invalid. Download the model again."
+        case .modelNotDownloaded(let modelName):
+            "\(modelName) is still downloading. Open Models to check its progress."
         case .unsupportedOfflineModel(let modelName):
             "\(modelName) does not support offline transcription."
         case .unsupportedStreamingModel(let modelName):

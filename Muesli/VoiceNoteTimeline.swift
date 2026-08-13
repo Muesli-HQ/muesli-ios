@@ -116,20 +116,75 @@ enum VoiceNoteTimelineBuilder {
     }
 }
 
-/// A view-owned memoizer. Array values are copy-on-write, so retaining the last
-/// exact input is cheap and avoids rebuilding a large timeline for unrelated UI
-/// changes such as sync or clipboard status updates.
-@MainActor
-final class VoiceNoteTimelineCache {
-    private var cachedInput: VoiceNoteTimelineInput?
-    private var cachedItems: [VoiceNoteTimelineItem] = []
-    private(set) var rebuildCount = 0
+/// One immutable presentation boundary for the home timeline.
+///
+/// Timelines are derived only when persisted history actually changes. Sync
+/// progress, clipboard state, and the rotating CloudKit glyph can therefore
+/// invalidate their own small views without rebuilding or re-diffing thousands
+/// of variable-height voice-note rows.
+struct VoiceNoteHistoryPresentation: Equatable {
+    static let empty = VoiceNoteHistoryPresentation(
+        revision: 0,
+        history: [],
+        sessions: []
+    )
 
-    func items(for input: VoiceNoteTimelineInput) -> [VoiceNoteTimelineItem] {
-        guard cachedInput != input else { return cachedItems }
-        cachedInput = input
-        cachedItems = VoiceNoteTimelineBuilder.build(from: input)
-        rebuildCount += 1
-        return cachedItems
+    let revision: UInt64
+    let history: [DictationResult]
+    let sessions: [RecordingSession]
+    private let allTimeline: [VoiceNoteTimelineItem]
+    private let iPhoneTimeline: [VoiceNoteTimelineItem]
+    private let macTimeline: [VoiceNoteTimelineItem]
+
+    init(
+        revision: UInt64,
+        history: [DictationResult],
+        sessions: [RecordingSession]
+    ) {
+        self.revision = revision
+        self.history = history
+        self.sessions = sessions
+        allTimeline = VoiceNoteTimelineBuilder.build(from: .init(
+            history: history,
+            sessions: sessions,
+            sourceFilter: .all
+        ))
+        iPhoneTimeline = VoiceNoteTimelineBuilder.build(from: .init(
+            history: history,
+            sessions: sessions,
+            sourceFilter: .thisIPhone
+        ))
+        macTimeline = VoiceNoteTimelineBuilder.build(from: .init(
+            history: history,
+            sessions: sessions,
+            sourceFilter: .fromMac
+        ))
+    }
+
+    func timeline(for filter: DictationSourceFilter) -> [VoiceNoteTimelineItem] {
+        switch filter {
+        case .all:
+            allTimeline
+        case .thisIPhone:
+            iPhoneTimeline
+        case .fromMac:
+            macTimeline
+        }
+    }
+
+    func matches(history: [DictationResult], sessions: [RecordingSession]) -> Bool {
+        self.history == history && self.sessions == sessions
+    }
+
+    func updated(
+        history: [DictationResult],
+        sessions: [RecordingSession]
+    ) -> VoiceNoteHistoryPresentation {
+        guard !matches(history: history, sessions: sessions) else { return self }
+        return VoiceNoteHistoryPresentation(
+            revision: revision &+ 1,
+            history: history,
+            sessions: sessions
+        )
     }
 }

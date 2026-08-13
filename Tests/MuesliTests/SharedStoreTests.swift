@@ -410,6 +410,42 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try sqliteInt("SELECT COUNT(*) FROM result_history", in: directory), 205)
     }
 
+    func testHistorySnapshotReadsResultsSessionsAndTranscriptsTogether() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = SharedStore(containerURL: directory)
+        let session = RecordingSession(
+            kind: .meeting,
+            createdAt: Date(timeIntervalSince1970: 100),
+            phase: .completed
+        )
+        let transcript = Transcript(
+            sessionID: session.id,
+            text: "Persisted transcript",
+            createdAt: session.createdAt,
+            engineIdentifier: "test"
+        )
+        let result = DictationResult(
+            requestID: UUID(),
+            sessionID: session.id,
+            text: "Persisted voice note",
+            createdAt: session.createdAt,
+            engineIdentifier: "test"
+        )
+        try store.saveSession(session)
+        try store.saveTranscript(transcript)
+        try store.saveResult(result)
+
+        let snapshot = try store.historySnapshot()
+
+        XCTAssertEqual(snapshot.history, [result])
+        XCTAssertEqual(snapshot.sessions.map(\.id), [session.id])
+        XCTAssertEqual(snapshot.sessions.first?.phase, session.phase)
+        XCTAssertEqual(snapshot.sessions.first?.cloudRecordName, session.id.uuidString)
+        XCTAssertEqual(snapshot.transcripts, [transcript])
+    }
+
     func testResultWritesPopulateNormalizedSyncColumns() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

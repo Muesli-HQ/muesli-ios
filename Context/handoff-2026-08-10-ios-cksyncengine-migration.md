@@ -164,6 +164,32 @@ Validation used the same existing DerivedData cache:
 - `build-for-testing`: succeeded with signing disabled;
 - `git diff --check`: clean.
 
+Physical-device sync testing also exposed a presentation-only failure when one incoming
+Mac note was inserted into an iPhone history containing roughly 2,600 entries. The data
+had committed correctly, but each fetched CloudKit page independently refreshed three
+related SQLite inventories while the home view recomputed and animated a large,
+variable-height `LazyVStack`. That allowed transient combinations of old/new history and
+session data to be rendered, producing overlapping or disappearing cards.
+
+The presentation boundary is now deterministic:
+
+- CKSyncEngine continues committing every fetched page to SQLite, but publishes one remote
+  history invalidation only after the complete fetch finishes;
+- results, recording sessions, and transcripts are read from one SQLite read transaction;
+- the coordinator publishes one immutable, equality-gated history presentation revision;
+- the three source-filtered timelines are derived once per actual history revision, not for
+  unrelated sync progress or spinner frames;
+- the animated sync button observes progress in its own small SwiftUI subtree, and external
+  history revisions do not animate the large timeline diff.
+
+Regression coverage includes a 2,600-row existing history followed by one incoming Mac
+record. It asserts one presentation revision, 2,601 unique stable row identities, and
+unchanged order for every pre-existing row. Validation used the same DerivedData cache:
+
+- focused CKSyncEngine, store, and presentation suites: 113 tests, 0 failures;
+- full iOS unit suite (UI tests skipped): 259 tests, 0 failures;
+- `git diff --check`: clean.
+
 ## Remaining physical checks
 
 1. Deploy this PR over the existing MuesliDev installation without resetting app data or permissions.
@@ -173,4 +199,6 @@ Validation used the same existing DerivedData cache:
 4. After readiness, record a >20-second note and confirm local transcription completes without
    any FluidAudio model-network request.
 5. Confirm the timestamped iPhone note appears on the Mac and WPM remains plausible.
-6. If inspecting SQLite, query aggregate counts and duration sums only. Do not inspect transcript text or record identifiers.
+6. While the iPhone home timeline is visible, sync one new Mac note and confirm the saved
+   count advances once without overlapping, disappearing, or animated row churn.
+7. If inspecting SQLite, query aggregate counts and duration sums only. Do not inspect transcript text or record identifiers.

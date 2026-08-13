@@ -91,6 +91,22 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertTrue(intents.pending.isEmpty)
     }
 
+    func testRemotePresentationPublishesOnceAfterAllFetchPagesComplete() {
+        var publication = MuesliCKSyncRemoteChangePublication()
+
+        publication.beginFetch()
+        publication.recordAppliedChanges(200)
+        publication.recordAppliedChanges(200)
+        publication.recordAppliedChanges(1)
+
+        XCTAssertTrue(publication.completeFetch())
+        XCTAssertFalse(publication.completeFetch())
+
+        publication.beginFetch()
+        publication.recordAppliedChanges(0)
+        XCTAssertFalse(publication.completeFetch())
+    }
+
     func testPreparationGateRunsPreflightOnceUntilInvalidated() async throws {
         let gate = MuesliCKSyncPreparationGate()
         let counter = TestAsyncCounter()

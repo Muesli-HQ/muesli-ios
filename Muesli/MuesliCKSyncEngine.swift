@@ -66,6 +66,27 @@ struct MuesliCKSyncIntentAccumulator: Equatable, Sendable {
     }
 }
 
+/// Publishes one UI invalidation after a complete CloudKit fetch, regardless of
+/// how many record-zone pages the engine delivered. SQLite still commits every
+/// page immediately; only the presentation notification is deferred.
+struct MuesliCKSyncRemoteChangePublication: Equatable, Sendable {
+    private(set) var hasAppliedChanges = false
+
+    mutating func beginFetch() {
+        hasAppliedChanges = false
+    }
+
+    mutating func recordAppliedChanges(_ count: Int) {
+        if count > 0 { hasAppliedChanges = true }
+    }
+
+    mutating func completeFetch() -> Bool {
+        let shouldPublish = hasAppliedChanges
+        hasAppliedChanges = false
+        return shouldPublish
+    }
+}
+
 /// Coalesces one-time/account/zone/migration preparation across concurrent triggers.
 actor MuesliCKSyncPreparationGate {
     private var isPrepared = false
@@ -544,6 +565,7 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private var conflictBaseRecords: [CKRecord.ID: CKRecord] = [:]
     private var uploaded = 0
     private var downloaded = 0
+    private var remoteChangePublication = MuesliCKSyncRemoteChangePublication()
     private var accountBoundaryBlocked = true
     private var requiresOutgoingConvergenceAfterZoneRecovery = false
 
@@ -911,8 +933,8 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                     state: syncEngine.state
                 )
                 if applied > 0 {
+                    remoteChangePublication.recordAppliedChanges(applied)
                     await reportProgress(.downloading(downloaded))
-                    await onRemoteChanges()
                 }
                 // Muesli represents deletion as a saved tombstone. Hard-delete
                 // notifications are intentionally ignored by this record contract.
@@ -969,10 +991,17 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                     await invalidatePreparation(cancelEngine: false, clearEngineState: true)
                 }
 
+            case .willFetchChanges:
+                downloaded = 0
+                remoteChangePublication.beginFetch()
+
+            case .didFetchChanges:
+                if remoteChangePublication.completeFetch() {
+                    await onRemoteChanges()
+                }
+
             case .sentDatabaseChanges,
-                 .willFetchChanges,
                  .willFetchRecordZoneChanges,
-                 .didFetchChanges,
                  .willSendChanges,
                  .didSendChanges:
                 break

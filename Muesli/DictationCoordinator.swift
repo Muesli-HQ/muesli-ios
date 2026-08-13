@@ -173,6 +173,7 @@ final class DictationCoordinator {
     private var pendingICloudSyncIntent: MuesliCKSyncIntent = []
     private var pendingICloudSyncReason: String?
     private var iCloudSyncGeneration = 0
+    @ObservationIgnored private var historyPresentationPublicationIsSuspended = false
     @ObservationIgnored private let iCloudSyncRuntime = MuesliCKSyncRuntime.shared
     @ObservationIgnored nonisolated(unsafe) private var iCloudRemoteChangesObserver: NSObjectProtocol?
     @ObservationIgnored nonisolated(unsafe) private var iCloudSyncProgressObserver: NSObjectProtocol?
@@ -304,8 +305,13 @@ final class DictationCoordinator {
         get { voiceNoteLiveState.transcript }
         set { voiceNoteLiveState.setTranscript(newValue) }
     }
-    var dictationHistory: [DictationResult] = []
-    var recordingSessions: [RecordingSession] = []
+    var voiceNoteHistoryPresentation = VoiceNoteHistoryPresentation.empty
+    var dictationHistory: [DictationResult] = [] {
+        didSet { publishVoiceNoteHistoryPresentationIfNeeded() }
+    }
+    var recordingSessions: [RecordingSession] = [] {
+        didSet { publishVoiceNoteHistoryPresentationIfNeeded() }
+    }
     private var transcriptCache: [UUID: Transcript] = [:]
     var isMeetingRecording: Bool {
         meetingPresentationState.isCapturing
@@ -1830,8 +1836,8 @@ final class DictationCoordinator {
         guard !Self.shouldConfigureForUITestingFromLaunchArguments() else { return }
         #endif
         do {
-            dictationHistory = try store.resultsHistory()
-            let persistedSessions = try store.recordingSessions()
+            let snapshot = try store.historySnapshot()
+            let persistedSessions = snapshot.sessions
             let inventoryActiveSession = activeSession?.kind == .meeting ? nil : activeSession
             let repairedSessions = RecordingSessionInventory.preservingActiveSession(
                 inventoryActiveSession,
@@ -1850,13 +1856,33 @@ final class DictationCoordinator {
                     ]
                 )
             }
-            recordingSessions = repairedSessions
+            historyPresentationPublicationIsSuspended = true
+            defer {
+                historyPresentationPublicationIsSuspended = false
+                publishVoiceNoteHistoryPresentationIfNeeded()
+            }
             reconcileMeetingRuntime(with: persistedSessions, reason: "history_refresh")
-            transcriptCache = transcriptsBySessionID(try store.transcripts())
-            lastTranscript = dictationHistory.first?.text ?? lastTranscript
+            dictationHistory = snapshot.history
+            recordingSessions = repairedSessions
+            transcriptCache = transcriptsBySessionID(snapshot.transcripts)
+            lastTranscript = snapshot.history.first?.text ?? lastTranscript
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    private func publishVoiceNoteHistoryPresentationIfNeeded() {
+        guard !historyPresentationPublicationIsSuspended,
+              !voiceNoteHistoryPresentation.matches(
+                history: dictationHistory,
+                sessions: recordingSessions
+              )
+        else { return }
+
+        voiceNoteHistoryPresentation = voiceNoteHistoryPresentation.updated(
+            history: dictationHistory,
+            sessions: recordingSessions
+        )
     }
 
     func reconcileMeetingRuntime(reason: String) {
@@ -2755,7 +2781,6 @@ final class DictationCoordinator {
                     self.iCloudSyncStatusText = remoteDeviceName.map { "All text is up to date with \($0)." }
                         ?? "All text is up to date."
                 }
-                self.refreshHistory()
                 AppTelemetry.signal(
                     "icloud_text_sync_completed",
                     parameters: ["reason": reason]

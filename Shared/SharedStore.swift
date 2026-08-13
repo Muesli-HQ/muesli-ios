@@ -12,6 +12,12 @@ enum SharedStoreError: Error, LocalizedError {
     }
 }
 
+struct SharedStoreHistorySnapshot: Sendable, Equatable {
+    let history: [DictationResult]
+    let sessions: [RecordingSession]
+    let transcripts: [Transcript]
+}
+
 struct SharedStore: Sendable {
     private let appGroupIdentifier: String
     private let overrideContainerURL: URL?
@@ -90,6 +96,13 @@ struct SharedStore: Sendable {
 
     func resultsHistory() throws -> [DictationResult] {
         try database().resultsHistory()
+    }
+
+    /// Reads every persisted input to the voice-note presentation from one
+    /// SQLite snapshot so the UI never observes a result page paired with an
+    /// older session or transcript inventory.
+    func historySnapshot() throws -> SharedStoreHistorySnapshot {
+        try database().historySnapshot()
     }
 
     func deleteResult(_ result: DictationResult) throws {
@@ -680,11 +693,27 @@ private struct SharedStoreDatabase {
 
     func resultsHistory() throws -> [DictationResult] {
         try withDatabase { db in
-            try queryBlobs(
-                "SELECT payload FROM result_history WHERE deleted_at IS NULL ORDER BY created_at DESC",
-                db: db
-            ) { _ in }.map { try decoder.decode(DictationResult.self, from: $0) }
+            try resultsHistory(db: db)
         }
+    }
+
+    func historySnapshot() throws -> SharedStoreHistorySnapshot {
+        try withDatabase { db in
+            try readTransaction(db: db) {
+                SharedStoreHistorySnapshot(
+                    history: try resultsHistory(db: db),
+                    sessions: try recordingSessions(db: db),
+                    transcripts: try transcripts(db: db)
+                )
+            }
+        }
+    }
+
+    private func resultsHistory(db: OpaquePointer) throws -> [DictationResult] {
+        try queryBlobs(
+            "SELECT payload FROM result_history WHERE deleted_at IS NULL ORDER BY created_at DESC",
+            db: db
+        ) { _ in }.map { try decoder.decode(DictationResult.self, from: $0) }
     }
 
     func deleteResult(id: UUID, requestID: UUID) throws {
@@ -813,12 +842,16 @@ private struct SharedStoreDatabase {
 
     func recordingSessions() throws -> [RecordingSession] {
         try withDatabase { db in
-            try queryRows(
-                "SELECT payload, cloud_record_name FROM recording_sessions WHERE deleted_at IS NULL ORDER BY created_at DESC",
-                db: db
-            ) { _ in } read: { statement in
-                try decodeRecordingSession(statement)
-            }
+            try recordingSessions(db: db)
+        }
+    }
+
+    private func recordingSessions(db: OpaquePointer) throws -> [RecordingSession] {
+        try queryRows(
+            "SELECT payload, cloud_record_name FROM recording_sessions WHERE deleted_at IS NULL ORDER BY created_at DESC",
+            db: db
+        ) { _ in } read: { statement in
+            try decodeRecordingSession(statement)
         }
     }
 
@@ -899,12 +932,16 @@ private struct SharedStoreDatabase {
 
     func transcripts() throws -> [Transcript] {
         try withDatabase { db in
-            try queryBlobs(
-                "SELECT payload FROM transcripts WHERE deleted_at IS NULL ORDER BY created_at DESC",
-                db: db
-            ) { _ in }
-                .map { try decoder.decode(Transcript.self, from: $0) }
+            try transcripts(db: db)
         }
+    }
+
+    private func transcripts(db: OpaquePointer) throws -> [Transcript] {
+        try queryBlobs(
+            "SELECT payload FROM transcripts WHERE deleted_at IS NULL ORDER BY created_at DESC",
+            db: db
+        ) { _ in }
+            .map { try decoder.decode(Transcript.self, from: $0) }
     }
 
     func transcript(for sessionID: UUID) throws -> Transcript? {
@@ -2464,6 +2501,18 @@ private struct SharedStoreDatabase {
         do {
             try body()
             try exec("COMMIT", db: db)
+        } catch {
+            try? exec("ROLLBACK", db: db)
+            throw error
+        }
+    }
+
+    private func readTransaction<T>(db: OpaquePointer, _ body: () throws -> T) throws -> T {
+        try exec("BEGIN DEFERRED TRANSACTION", db: db)
+        do {
+            let value = try body()
+            try exec("COMMIT", db: db)
+            return value
         } catch {
             try? exec("ROLLBACK", db: db)
             throw error

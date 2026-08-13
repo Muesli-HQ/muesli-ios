@@ -3213,6 +3213,10 @@ final class DictationCoordinator {
         guard !isRecording, !hasMeetingRecordingInProgress else { return }
 
         let model = selectedTranscriptionModel
+        guard ModelPreparationPolicy.action(isDownloaded: model.isDownloaded) == .warmDownloadedModel else {
+            prepareSelectedModel(reason: "prewarm_\(reason)")
+            return
+        }
         modelPreparation = ModelPreparationState(
             phase: .preparing,
             progress: nil,
@@ -3598,6 +3602,25 @@ final class DictationCoordinator {
     }
 
     private func startRecording(for request: DictationRequest, source: String) {
+        guard selectedTranscriptionModel.isDownloaded else {
+            let message = "\(selectedTranscriptionModel.shortName) is still downloading"
+            statusText = message
+            if !isSelectedModelDownloadSuppressed {
+                prepareSelectedModel(reason: "\(source)_recording")
+            }
+            if source == "keyboard" {
+                try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
+                saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
+                saveKeyboardRuntimeStatus(
+                    isActive: canStartKeyboardRequestsInBackground,
+                    activeRequestID: nil,
+                    phase: .failed,
+                    message: message,
+                    supportsBackgroundStart: canStartKeyboardRequestsInBackground
+                )
+            }
+            return
+        }
         guard !isRecording,
               !hasMeetingRecordingInProgress,
               !voiceNoteLifecycleState.isWorkActive,

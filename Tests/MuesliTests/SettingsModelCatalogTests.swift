@@ -90,6 +90,86 @@ final class SettingsModelCatalogTests: XCTestCase {
         )
     }
 
+    func testEverySelectableModelHasABackgroundDownloadPlan() {
+        XCTAssertTrue(
+            LocalTranscriptionModel.allCases.allSatisfy {
+                ModelBackgroundDownloadService.supportsBackgroundDownload($0)
+            }
+        )
+    }
+
+    func testPreparationPolicyDownloadsBeforeAttemptingWarmup() {
+        XCTAssertEqual(
+            ModelPreparationPolicy.action(isDownloaded: false),
+            .startBackgroundDownload
+        )
+        XCTAssertEqual(
+            ModelPreparationPolicy.action(isDownloaded: true),
+            .warmDownloadedModel
+        )
+    }
+
+    func testFluidAudioDownloadRequiresCompleteModelsAndVocabulary() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-fluidaudio-integrity-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let modelNames: Set<String> = ["Encoder.mlmodelc", "Decoder.mlmodelc"]
+        let supportingFiles: Set<String> = ["parakeet_vocab.json"]
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for modelName in modelNames {
+            let modelDirectory = root.appendingPathComponent(modelName, isDirectory: true)
+            try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+            try Data("model".utf8).write(to: modelDirectory.appendingPathComponent("coremldata.bin"))
+        }
+
+        XCTAssertFalse(
+            ModelBackgroundDownloadService.containsCompleteFluidAudioArtifacts(
+                at: root,
+                modelNames: modelNames,
+                supportingFiles: supportingFiles
+            ),
+            "Compiled models without their vocabulary must not be treated as transcription-ready."
+        )
+
+        try Data("{}".utf8).write(to: root.appendingPathComponent("parakeet_vocab.json"))
+        XCTAssertTrue(
+            ModelBackgroundDownloadService.containsCompleteFluidAudioArtifacts(
+                at: root,
+                modelNames: modelNames,
+                supportingFiles: supportingFiles
+            )
+        )
+
+        try FileManager.default.removeItem(
+            at: root.appendingPathComponent("Encoder.mlmodelc/coremldata.bin")
+        )
+        XCTAssertFalse(
+            ModelBackgroundDownloadService.containsCompleteFluidAudioArtifacts(
+                at: root,
+                modelNames: modelNames,
+                supportingFiles: supportingFiles
+            ),
+            "A partially downloaded CoreML directory must not enter the inference path."
+        )
+    }
+
+    func testLocalParakeetVocabularySupportsBothShippedFormats() throws {
+        let arrayVocabulary = try FluidAudioTranscriptionEngine.decodeParakeetVocabulary(
+            Data("[\"blank\",\"hello\"]".utf8)
+        )
+        XCTAssertEqual(arrayVocabulary, [0: "blank", 1: "hello"])
+
+        let dictionaryVocabulary = try FluidAudioTranscriptionEngine.decodeParakeetVocabulary(
+            Data("{\"0\":\"blank\",\"42\":\"hello\"}".utf8)
+        )
+        XCTAssertEqual(dictionaryVocabulary, [0: "blank", 42: "hello"])
+
+        XCTAssertThrowsError(
+            try FluidAudioTranscriptionEngine.decodeParakeetVocabulary(Data("[1]".utf8))
+        )
+    }
+
     func testEveryModelHasAnIsolatedStorageDirectory() {
         let directories = LocalTranscriptionModel.allCases.compactMap {
             ModelBackgroundDownloadService.storageDirectory(for: $0)?.standardizedFileURL.path

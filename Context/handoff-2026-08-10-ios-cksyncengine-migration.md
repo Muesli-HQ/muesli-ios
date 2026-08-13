@@ -137,9 +137,40 @@ Validation after provenance hardening, using the same DerivedData cache:
 - `build-for-testing`: succeeded with signing disabled;
 - `git diff --check`: clean.
 
+Physical-device validation then exposed an independent model lifecycle bug while checking
+the sync changes: a selected Parakeet v3 model was absent, but launch/foreground prewarm
+called FluidAudio's download-capable loader directly. A recorded note could therefore wait
+inside model acquisition until the voice-note watchdog fired, even though CloudKit sync had
+already completed. The fix keeps model transfer and inference ownership separate:
+
+- missing launch/foreground models enter `ModelBackgroundDownloadService`; only a complete
+  downloaded model is warmed into memory;
+- all selectable Parakeet, realtime Parakeet, and WhisperKit models now have background
+  download plans, and each app bundle owns a distinct background-session identifier so the
+  side-by-side MuesliDev and TestFlight apps cannot share transfer state;
+- recording is refused with a recoverable status while the selected model is incomplete,
+  instead of accepting audio that is guaranteed to stall during transcription;
+- the transcription engine opens the selected model's local directory and never uses
+  FluidAudio's `downloadAndLoad` or the streaming manager's download-capable load path;
+- FluidAudio readiness requires every compiled CoreML artifact plus its vocabulary, while
+  WhisperKit commits its existing completion marker only after all required components land;
+- no model path, authored audio, transcript, account identifier, or CloudKit record identity
+  was added to telemetry or diagnostics.
+
+Validation used the same existing DerivedData cache:
+
+- focused `SettingsModelCatalogTests`: 16 tests, 0 failures;
+- full iOS unit suite (UI tests skipped): 256 tests, 0 failures;
+- `build-for-testing`: succeeded with signing disabled;
+- `git diff --check`: clean.
+
 ## Remaining physical checks
 
-1. Launch MuesliDev on the unlocked picophone and allow the one-time repair to sync.
-2. Confirm MuesliDev on macOS reports a plausible WPM rather than a six-digit value.
-3. Record a timestamped iPhone note with measurable duration; confirm it appears on the Mac and WPM remains plausible.
-4. If inspecting SQLite, query aggregate counts and duration sums only. Do not inspect transcript text or record identifiers.
+1. Deploy this PR over the existing MuesliDev installation without resetting app data or permissions.
+2. Select an absent model, leave the Models/onboarding step, and confirm its download keeps
+   progressing and ends in the ready state.
+3. Confirm the record button cannot begin a doomed voice note while that model is incomplete.
+4. After readiness, record a >20-second note and confirm local transcription completes without
+   any FluidAudio model-network request.
+5. Confirm the timestamped iPhone note appears on the Mac and WPM remains plausible.
+6. If inspecting SQLite, query aggregate counts and duration sums only. Do not inspect transcript text or record identifiers.

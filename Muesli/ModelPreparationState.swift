@@ -22,3 +22,14 @@ struct ModelPreparationState: Equatable {
         phase == .ready
     }
 }
+
+enum ModelPreparationAction: Equatable {
+    case startBackgroundDownload
+    case warmDownloadedModel
+}
+
+enum ModelPreparationPolicy {
+    static func action(isDownloaded: Bool) -> ModelPreparationAction {
+        isDownloaded ? .warmDownloadedModel : .startBackgroundDownload
+    }
+}

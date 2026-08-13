@@ -11,7 +11,7 @@ protocol ModelBackgroundDownloadServiceDelegate: AnyObject {
 final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     static let shared = ModelBackgroundDownloadService()
 
-    private static let sessionIdentifier = "com.phequals7.muesli.ios.model-downloads"
+    private static let sessionIdentifier = "\(Bundle.main.bundleIdentifier ?? "com.phequals7.muesli.ios").model-downloads"
 
     @MainActor weak var delegate: ModelBackgroundDownloadServiceDelegate?
 
@@ -62,20 +62,45 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             return WhisperKitTranscriptionRuntime.isModelDownloaded(whisperVariant)
         }
 
-        if model == .parakeetRealtimeEou120m {
-            guard let modelDirectory = storageDirectory(for: model) else { return false }
-            return ModelNames.ParakeetEOU.requiredModels.allSatisfy { modelName in
-                FileManager.default.fileExists(
-                    atPath: modelDirectory.appendingPathComponent(modelName).path
-                )
-            }
-        }
-
         guard let spec = ModelDownloadSpec(model: model) else { return false }
-        return spec.requiredModels.allSatisfy { modelName in
-            FileManager.default.fileExists(
-                atPath: spec.repoRoot.appendingPathComponent(modelName).path
-            )
+        return containsCompleteFluidAudioArtifacts(
+            at: spec.repoRoot,
+            modelNames: spec.requiredModels,
+            supportingFiles: spec.requiredSupportingFiles
+        )
+    }
+
+    static func supportsBackgroundDownload(_ model: LocalTranscriptionModel) -> Bool {
+        ModelDownloadSpec(model: model) != nil
+    }
+
+    static func containsCompleteFluidAudioArtifacts(
+        at root: URL,
+        modelNames: Set<String>,
+        supportingFiles: Set<String>
+    ) -> Bool {
+        let fileManager = FileManager.default
+        let modelsAreComplete = modelNames.allSatisfy { modelName in
+            let modelDirectory = root.appendingPathComponent(modelName, isDirectory: true)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: modelDirectory.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { return false }
+
+            let coreMLData = modelDirectory.appendingPathComponent("coremldata.bin")
+            guard let values = try? coreMLData.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]) else {
+                return false
+            }
+            return values.isRegularFile == true && (values.fileSize ?? 0) > 0
+        }
+        guard modelsAreComplete else { return false }
+
+        return supportingFiles.allSatisfy { fileName in
+            let file = root.appendingPathComponent(fileName)
+            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]) else {
+                return false
+            }
+            return values.isRegularFile == true && (values.fileSize ?? 0) > 0
         }
     }
 
@@ -133,11 +158,12 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             throw error
         }
         let missingFiles = files.filter { file in
-            !FileManager.default.fileExists(atPath: spec.destinationURL(for: file.localPath).path)
+            !Self.localDownloadMatches(file, in: spec)
         }
 
         guard !missingFiles.isEmpty else {
             clearRequestedAttempt(ifMatching: attempt)
+            try Self.finalizeDownloadedModel(model)
             return false
         }
 
@@ -285,6 +311,19 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
         return files
     }
 
+    private static func localDownloadMatches(
+        _ file: ModelDownloadFile,
+        in spec: ModelDownloadSpec
+    ) -> Bool {
+        let destination = spec.destinationURL(for: file.localPath)
+        guard let values = try? destination.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              values.isRegularFile == true
+        else { return false }
+
+        guard file.size > 0 else { return true }
+        return Int64(values.fileSize ?? -1) == file.size
+    }
+
     private func updateProgress(task: URLSessionTask, bytesWritten: Int64) {
         var snapshot: (LocalTranscriptionModel, Double)?
         stateQueue.sync {
@@ -386,9 +425,31 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             return
         }
 
-        Task { @MainActor in
-            delegate?.modelBackgroundDownloadDidFinish(model: model)
-            handler?()
+        do {
+            try Self.finalizeDownloadedModel(model)
+            Task { @MainActor in
+                delegate?.modelBackgroundDownloadDidFinish(model: model)
+                handler?()
+            }
+        } catch {
+            Task { @MainActor in
+                delegate?.modelBackgroundDownloadDidFail(
+                    model: model,
+                    message: "Download finished, but the model files are incomplete. Try again."
+                )
+                handler?()
+            }
+        }
+    }
+
+    private static func finalizeDownloadedModel(_ model: LocalTranscriptionModel) throws {
+        if let whisperVariant = model.whisperVariant {
+            try WhisperKitTranscriptionRuntime.markDownloadComplete(
+                at: WhisperKitTranscriptionRuntime.modelDirectory(for: whisperVariant)
+            )
+        }
+        guard isModelDownloaded(model) else {
+            throw ModelBackgroundDownloadError.incompleteDownload
         }
     }
 
@@ -506,7 +567,9 @@ extension ModelBackgroundDownloadService: URLSessionDownloadDelegate {
                 self.attemptOutcomes
                     .drainCompletedAttempts()
                     .compactMap { LocalTranscriptionModel(rawValue: $0.modelRawValue) }
-            )
+            ).filter { model in
+                (try? Self.finalizeDownloadedModel(model)) != nil
+            }
             self.backgroundCompletionHandler = nil
             DispatchQueue.main.async {
                 completedModels.forEach { model in
@@ -672,16 +735,23 @@ private struct DownloadFailureResult {
 
 private struct ModelDownloadSpec {
     let model: LocalTranscriptionModel
-    let repoFolderName: String
     let remotePath: String
     let subPath: String?
     let requiredModels: Set<String>
+    let requiredSupportingFiles: Set<String>
+    let repoRoot: URL
 
     init?(model: LocalTranscriptionModel) {
         self.model = model
+        let fluidAudioModelsRoot = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+
         switch model {
         case .parakeetTdtCtc110m:
-            repoFolderName = "parakeet-tdt-ctc-110m"
             remotePath = "FluidInference/parakeet-tdt-ctc-110m-coreml"
             subPath = nil
             requiredModels = [
@@ -689,8 +759,12 @@ private struct ModelDownloadSpec {
                 "Decoder.mlmodelc",
                 "JointDecision.mlmodelc"
             ]
+            requiredSupportingFiles = ["parakeet_vocab.json"]
+            repoRoot = fluidAudioModelsRoot.appendingPathComponent(
+                "parakeet-tdt-ctc-110m",
+                isDirectory: true
+            )
         case .parakeetV3:
-            repoFolderName = "parakeet-tdt-0.6b-v3-coreml"
             remotePath = "FluidInference/parakeet-tdt-0.6b-v3-coreml"
             subPath = nil
             requiredModels = [
@@ -699,20 +773,34 @@ private struct ModelDownloadSpec {
                 "Decoder.mlmodelc",
                 "JointDecisionv3.mlmodelc"
             ]
-        case .parakeetRealtimeEou120m,
-             .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo:
-            return nil
+            requiredSupportingFiles = ["parakeet_vocab.json"]
+            repoRoot = fluidAudioModelsRoot.appendingPathComponent(
+                "parakeet-tdt-0.6b-v3-coreml",
+                isDirectory: true
+            )
+        case .parakeetRealtimeEou120m:
+            remotePath = "FluidInference/parakeet-realtime-eou-120m-coreml"
+            subPath = "320ms"
+            requiredModels = ModelNames.ParakeetEOU.requiredModels.filter { $0.hasSuffix(".mlmodelc") }
+            requiredSupportingFiles = [ModelNames.ParakeetEOU.vocab]
+            repoRoot = fluidAudioModelsRoot
+                .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
+                .appendingPathComponent("320ms", isDirectory: true)
+        case .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo:
+            guard let whisperVariant = model.whisperVariant else { return nil }
+            let modelFolderName = whisperVariant.hasPrefix("openai_whisper-")
+                ? whisperVariant
+                : "openai_whisper-\(whisperVariant)"
+            remotePath = "argmaxinc/whisperkit-coreml"
+            subPath = modelFolderName
+            requiredModels = [
+                "MelSpectrogram.mlmodelc",
+                "AudioEncoder.mlmodelc",
+                "TextDecoder.mlmodelc",
+            ]
+            requiredSupportingFiles = []
+            repoRoot = WhisperKitTranscriptionRuntime.modelDirectory(for: whisperVariant)
         }
-    }
-
-    var modelsRoot: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("FluidAudio", isDirectory: true)
-            .appendingPathComponent("Models", isDirectory: true)
-    }
-
-    var repoRoot: URL {
-        modelsRoot.appendingPathComponent(repoFolderName, isDirectory: true)
     }
 
     func destinationURL(for localPath: String) -> URL {
@@ -738,7 +826,12 @@ private struct ModelDownloadSpec {
     func shouldDownloadFile(_ path: String) -> Bool {
         let local = localPath(forRemotePath: path)
         return requiredModels.contains { local.hasPrefix("\($0)/") }
+            || requiredSupportingFiles.contains(local)
             || local.hasSuffix(".json")
             || local.hasSuffix(".txt")
     }
+}
+
+private enum ModelBackgroundDownloadError: Error {
+    case incompleteDownload
 }

@@ -320,6 +320,10 @@ struct DictationView: View {
                         Text(coordinator.statusText)
                             .font(MuesliTheme.callout())
                             .foregroundStyle(statusColor)
+                            .contentTransition(.identity)
+                            .transaction { transaction in
+                                transaction.animation = nil
+                            }
                     }
 
                     Spacer()
@@ -1232,35 +1236,27 @@ struct ICloudSyncStatusButton: View {
 
 private struct RotatingSyncGlyph: View {
     let isAnimating: Bool
-    @State private var rotationDegrees = 0.0
 
     var body: some View {
-        Image(systemName: "arrow.triangle.2.circlepath")
-            .rotationEffect(.degrees(rotationDegrees))
-            .onAppear {
-                updateRotation(animated: false)
-            }
-            .onChange(of: isAnimating) { _, _ in
-                updateRotation(animated: true)
-            }
+        // Keep this rotation time-driven: a repeatForever animation transaction
+        // can leak into sibling updates and replay the voice-note status transition.
+        TimelineView(.animation(paused: !isAnimating)) { context in
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .rotationEffect(.degrees(ICloudSyncGlyphRotation.degrees(
+                    elapsed: context.date.timeIntervalSinceReferenceDate,
+                    isAnimating: isAnimating
+                )))
+        }
     }
+}
 
-    private func updateRotation(animated: Bool) {
-        guard isAnimating else {
-            if animated {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    rotationDegrees = 0
-                }
-            } else {
-                rotationDegrees = 0
-            }
-            return
-        }
+enum ICloudSyncGlyphRotation {
+    static let period: TimeInterval = 0.9
 
-        rotationDegrees = 0
-        withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
-            rotationDegrees = 360
-        }
+    static func degrees(elapsed: TimeInterval, isAnimating: Bool) -> Double {
+        guard isAnimating else { return 0 }
+        let phase = elapsed.truncatingRemainder(dividingBy: period) / period
+        return phase * 360
     }
 }
 

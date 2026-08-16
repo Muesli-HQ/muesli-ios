@@ -65,8 +65,6 @@ private struct LaunchWarmupView: View {
     let detail: String
     let modelName: String
 
-    @State private var isAnimating = false
-
     var body: some View {
         ZStack {
             background
@@ -90,19 +88,6 @@ private struct LaunchWarmupView: View {
                     .accessibilityHidden(true)
             }
             .ignoresSafeArea(.keyboard)
-        }
-        .task(id: phase) {
-            updateAnimation(for: phase)
-        }
-    }
-
-    private func updateAnimation(for phase: ModelPreparationPhase) {
-        if phase.isLaunchWarmupActive {
-            withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
-                isAnimating = true
-            }
-        } else {
-            isAnimating = false
         }
     }
 
@@ -166,7 +151,7 @@ private struct LaunchWarmupView: View {
             }
             .padding(.horizontal, MuesliTheme.spacing20)
 
-            WarmupPulseLine(isAnimating: isAnimating)
+            WarmupPulseLine(isAnimating: phase.isLaunchWarmupActive)
                 .frame(width: 176, height: 3)
                 .accessibilityHidden(true)
 
@@ -216,28 +201,52 @@ private struct WarmupPulseLine: View {
     let isAnimating: Bool
 
     var body: some View {
-        GeometryReader { geometry in
-            let width = max(geometry.size.width, 1)
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.white.opacity(0.10))
+        // Keep the indefinite motion inside this leaf. A parent-owned
+        // repeatForever transaction can animate changing warmup copy too.
+        TimelineView(.animation(paused: !isAnimating)) { context in
+            GeometryReader { geometry in
+                let width = max(geometry.size.width, 1)
+                let progress = LaunchWarmupPulsePhase.progress(
+                    elapsed: context.date.timeIntervalSinceReferenceDate,
+                    isAnimating: isAnimating
+                )
 
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                MuesliTheme.brandBlue.opacity(0.25),
-                                MuesliTheme.syncGreen,
-                                MuesliTheme.brandBlue.opacity(0.25)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.white.opacity(0.10))
+
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    MuesliTheme.brandBlue.opacity(0.25),
+                                    MuesliTheme.syncGreen,
+                                    MuesliTheme.brandBlue.opacity(0.25)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .frame(width: width * 0.36)
-                    .offset(x: isAnimating ? width * 0.64 : 0)
+                        .frame(width: width * 0.36)
+                        .offset(x: width * 0.64 * progress)
+                }
             }
         }
         .clipShape(Capsule())
+    }
+}
+
+enum LaunchWarmupPulsePhase {
+    static let halfCycle: TimeInterval = 1.15
+
+    static func progress(elapsed: TimeInterval, isAnimating: Bool) -> Double {
+        guard isAnimating else { return 0 }
+
+        let cycle = halfCycle * 2
+        let position = elapsed.truncatingRemainder(dividingBy: cycle)
+        if position <= halfCycle {
+            return position / halfCycle
+        }
+        return (cycle - position) / halfCycle
     }
 }

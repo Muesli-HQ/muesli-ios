@@ -1236,6 +1236,7 @@ struct ICloudSyncStatusButton: View {
 
 private struct RotatingSyncGlyph: View {
     let isAnimating: Bool
+    @State private var animationStartedAt: Date?
 
     var body: some View {
         // Keep this rotation time-driven: a repeatForever animation transaction
@@ -1243,9 +1244,17 @@ private struct RotatingSyncGlyph: View {
         TimelineView(.animation(paused: !isAnimating)) { context in
             Image(systemName: "arrow.triangle.2.circlepath")
                 .rotationEffect(.degrees(ICloudSyncGlyphRotation.degrees(
-                    elapsed: context.date.timeIntervalSinceReferenceDate,
+                    at: context.date,
+                    startedAt: animationStartedAt,
                     isAnimating: isAnimating
                 )))
+                .animation(.easeOut(duration: 0.15), value: isAnimating)
+        }
+        .onAppear {
+            animationStartedAt = isAnimating ? .now : nil
+        }
+        .onChange(of: isAnimating) { _, isAnimating in
+            animationStartedAt = isAnimating ? .now : nil
         }
     }
 }
@@ -1253,8 +1262,9 @@ private struct RotatingSyncGlyph: View {
 enum ICloudSyncGlyphRotation {
     static let period: TimeInterval = 0.9
 
-    static func degrees(elapsed: TimeInterval, isAnimating: Bool) -> Double {
-        guard isAnimating else { return 0 }
+    static func degrees(at date: Date, startedAt: Date?, isAnimating: Bool) -> Double {
+        guard isAnimating, let startedAt else { return 0 }
+        let elapsed = max(date.timeIntervalSince(startedAt), 0)
         let phase = elapsed.truncatingRemainder(dividingBy: period) / period
         return phase * 360
     }

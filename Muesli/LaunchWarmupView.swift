@@ -199,6 +199,7 @@ private extension ModelPreparationPhase {
 
 private struct WarmupPulseLine: View {
     let isAnimating: Bool
+    @State private var animationStartedAt: Date?
 
     var body: some View {
         // Keep the indefinite motion inside this leaf. A parent-owned
@@ -207,7 +208,8 @@ private struct WarmupPulseLine: View {
             GeometryReader { geometry in
                 let width = max(geometry.size.width, 1)
                 let progress = LaunchWarmupPulsePhase.progress(
-                    elapsed: context.date.timeIntervalSinceReferenceDate,
+                    at: context.date,
+                    startedAt: animationStartedAt,
                     isAnimating: isAnimating
                 )
 
@@ -233,15 +235,22 @@ private struct WarmupPulseLine: View {
             }
         }
         .clipShape(Capsule())
+        .onAppear {
+            animationStartedAt = isAnimating ? .now : nil
+        }
+        .onChange(of: isAnimating) { _, isAnimating in
+            animationStartedAt = isAnimating ? .now : nil
+        }
     }
 }
 
 enum LaunchWarmupPulsePhase {
     static let halfCycle: TimeInterval = 1.15
 
-    static func progress(elapsed: TimeInterval, isAnimating: Bool) -> Double {
-        guard isAnimating else { return 0 }
+    static func progress(at date: Date, startedAt: Date?, isAnimating: Bool) -> Double {
+        guard isAnimating, let startedAt else { return 0 }
 
+        let elapsed = max(date.timeIntervalSince(startedAt), 0)
         let cycle = halfCycle * 2
         let position = elapsed.truncatingRemainder(dividingBy: cycle)
         if position <= halfCycle {

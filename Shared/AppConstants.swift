@@ -1,8 +1,19 @@
 import Foundation
 
 enum MuesliAppConstants {
-    static let appGroupIdentifier = "group.com.phequals7.muesli"
-    static let urlScheme = "muesli"
+    static let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.phequals7.muesli.ios"
+    static let appGroupIdentifier = configuredValue(
+        forInfoDictionaryKey: "MuesliAppGroupIdentifier",
+        fallback: "group.com.phequals7.muesli"
+    )
+    static let crossProcessPrefix = configuredValue(
+        forInfoDictionaryKey: "MuesliCrossProcessPrefix",
+        fallback: "com.phequals7.muesli"
+    )
+    static let urlScheme = configuredValue(
+        forInfoDictionaryKey: "MuesliURLScheme",
+        fallback: "muesli"
+    )
     static let dictateHost = "dictate"
     static let syncHost = "sync"
     static let settingsHost = "settings"
@@ -23,4 +34,15 @@ enum MuesliAppConstants {
     static let startAction = "start"
     static let stopAction = "stop"
     static let cancelAction = "cancel"
+
+    private static func configuredValue(forInfoDictionaryKey key: String, fallback: String) -> String {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: key) as? String else {
+            return fallback
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("$(") else {
+            return fallback
+        }
+        return trimmed
+    }
 }

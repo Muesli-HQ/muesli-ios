@@ -64,6 +64,7 @@ enum AppTelemetryParameterSanitizer {
 @MainActor
 enum AppTelemetry {
     private static let appIDInfoKey = "MuesliTelemetryDeckAppID"
+    private static let telemetryEnabledInfoKey = "MuesliTelemetryEnabled"
     private static let fallbackAppID = "A851C6BD-4F55-41ED-A6BC-DA43C850B069"
     private static var isInitialized = false
 
@@ -121,6 +122,7 @@ enum AppTelemetry {
     @discardableResult
     private static func initializeIfNeeded() -> Bool {
         if isInitialized { return true }
+        guard telemetryIsEnabled else { return false }
 
         let configuredAppID = Bundle.main.object(forInfoDictionaryKey: appIDInfoKey) as? String
         let trimmedAppID = configuredAppID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -131,6 +133,16 @@ enum AppTelemetry {
         TelemetryDeck.initialize(config: .init(appID: appID))
         isInitialized = true
         return true
+    }
+
+    private static var telemetryIsEnabled: Bool {
+        if let enabled = Bundle.main.object(forInfoDictionaryKey: telemetryEnabledInfoKey) as? Bool {
+            return enabled
+        }
+        guard let configured = Bundle.main.object(forInfoDictionaryKey: telemetryEnabledInfoKey) as? String else {
+            return true
+        }
+        return !["false", "no", "0"].contains(configured.lowercased())
     }
 
     private static func runtimeParameters() -> [String: String] {

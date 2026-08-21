@@ -10,7 +10,7 @@ enum CrossProcessEvent: String, CaseIterable, Sendable {
     case ownershipChanged = "ownership.changed"
 
     var notificationName: String {
-        "com.phequals7.muesli.\(rawValue).v1"
+        "\(MuesliAppConstants.crossProcessPrefix).\(rawValue).v1"
     }
 
     init?(notificationName: String) {

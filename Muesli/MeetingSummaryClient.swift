@@ -26,7 +26,7 @@ enum MeetingSummaryClient {
     private static let openRouterURL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
     private static let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/responses")!
     private static let maxOutputTokens = 2500
-    private static let keychain = KeychainStore(service: "com.phequals7.muesli.ios.summary")
+    private static let keychain = KeychainStore(service: "\(MuesliAppConstants.bundleIdentifier).summary")
 
     private static let baseSummaryInstructions = """
     You are a meeting notes assistant. Given a raw meeting transcript, produce concise, professional markdown notes.

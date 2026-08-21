@@ -8,13 +8,15 @@ set -euo pipefail
 #
 # Usage:
 #   ./scripts/ios-dev-test.sh
+#   ./scripts/ios-dev-test.sh --dev
 #   ./scripts/ios-dev-test.sh --reset
 #   ./scripts/ios-dev-test.sh --reset --reset-permissions
 #   ./scripts/ios-dev-test.sh --device-id 00008140-001C6D2C11FA801C --reset
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCHEME="${MUESLI_IOS_SCHEME:-Muesli}"
+CONFIGURATION="${MUESLI_IOS_CONFIGURATION:-Debug}"
 BUNDLE_ID="${MUESLI_IOS_BUNDLE_ID:-com.phequals7.muesli.ios}"
+PRODUCT_NAME="${MUESLI_IOS_PRODUCT_NAME:-Muesli}"
 SIMULATOR_NAME="${MUESLI_IOS_SIMULATOR_NAME:-iPhone 17 Pro}"
 SIMULATOR_OS="${MUESLI_IOS_SIMULATOR_OS:-26.5}"
 DEVICE_ID="${MUESLI_IOS_DEVICE_ID:-}"
@@ -32,6 +34,7 @@ Options:
   --simulator-name NAME   Simulator name. Default: iPhone 17 Pro
   --simulator-os VERSION  Simulator OS. Default: 26.5
   --device-id ID          Install on a connected iPhone instead of simulator.
+  --dev                   Use the isolated, Development-CloudKit MuesliDev app.
   --reset                 Reset onboarding progress via debug launch argument.
   --reset-permissions     Reset simulator privacy permissions. Physical iPhone
                           privacy permissions cannot be reset non-destructively.
@@ -66,6 +69,13 @@ while [[ $# -gt 0 ]]; do
       DEVICE_ID="$2"
       shift 2
       ;;
+    --dev)
+      SCHEME="MuesliDev"
+      CONFIGURATION="MuesliDev"
+      BUNDLE_ID="com.phequals7.muesli.ios.dev"
+      PRODUCT_NAME="MuesliDev"
+      shift
+      ;;
     --reset)
       RESET_ONBOARDING=1
       shift
@@ -93,12 +103,12 @@ command -v xcrun >/dev/null 2>&1 || die "xcrun is required."
 
 if [[ -z "$DEVICE_ID" ]]; then
   DESTINATION="platform=iOS Simulator,name=${SIMULATOR_NAME},OS=${SIMULATOR_OS}"
-  PRODUCT_DIR="$DERIVED_DATA/Build/Products/Debug-iphonesimulator"
-  APP_PATH="$PRODUCT_DIR/Muesli.app"
+  PRODUCT_DIR="$DERIVED_DATA/Build/Products/$CONFIGURATION-iphonesimulator"
+  APP_PATH="$PRODUCT_DIR/$PRODUCT_NAME.app"
 
   if [[ "$SKIP_BUILD" -ne 1 ]]; then
     log "Building $SCHEME for simulator: $SIMULATOR_NAME ($SIMULATOR_OS)"
-    xcodebuild build -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA"
+    xcodebuild build -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA"
   fi
 
   [[ -d "$APP_PATH" ]] || die "App product not found at $APP_PATH"
@@ -121,12 +131,12 @@ if [[ -z "$DEVICE_ID" ]]; then
   fi
 else
   DESTINATION="id=${DEVICE_ID}"
-  PRODUCT_DIR="$DERIVED_DATA/Build/Products/Debug-iphoneos"
-  APP_PATH="$PRODUCT_DIR/Muesli.app"
+  PRODUCT_DIR="$DERIVED_DATA/Build/Products/$CONFIGURATION-iphoneos"
+  APP_PATH="$PRODUCT_DIR/$PRODUCT_NAME.app"
 
   if [[ "$SKIP_BUILD" -ne 1 ]]; then
     log "Building $SCHEME for device: $DEVICE_ID"
-    xcodebuild build -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA"
+    xcodebuild build -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA"
   fi
 
   [[ -d "$APP_PATH" ]] || die "App product not found at $APP_PATH"

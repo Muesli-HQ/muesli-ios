@@ -7,6 +7,11 @@ options:
   generateEmptyDirectories: true
   groupSortPosition: top
 
+configs:
+  Debug: debug
+  Release: release
+  MuesliDev: debug
+
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -18,6 +23,11 @@ settings:
     MARKETING_VERSION: "0.1.5"
     CURRENT_PROJECT_VERSION: "11"
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: true
+    MUESLI_APP_GROUP_IDENTIFIER: group.com.phequals7.muesli
+    MUESLI_CROSS_PROCESS_PREFIX: com.phequals7.muesli
+    MUESLI_DISPLAY_NAME: Muesli
+    MUESLI_TELEMETRY_ENABLED: YES
+    MUESLI_URL_SCHEME: muesli
 
 packages:
   FluidAudio:
@@ -49,6 +59,39 @@ targets:
     dependencies:
       - target: MuesliKeyboard
       - target: MuesliLiveActivityExtension
+      - package: FluidAudio
+      - package: TelemetryDeck
+      - package: WhisperKit
+      - sdk: libsqlite3.tbd
+
+  # Side-by-side physical-device lane for validating changes against the
+  # Development CloudKit environment without replacing the TestFlight app/data.
+  # Extensions stay out of this target because their separate dev App IDs and
+  # profiles are not required for app/sync validation.
+  MuesliDev:
+    type: application
+    platform: iOS
+    sources:
+      - path: Muesli
+      - path: Shared
+      - path: LiveActivityShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.dev
+        PRODUCT_NAME: MuesliDev
+        INFOPLIST_FILE: Muesli/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Muesli/MuesliDev.entitlements
+        CODE_SIGN_IDENTITY: Apple Development
+        CODE_SIGN_STYLE: Manual
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MUESLI_APP_GROUP_IDENTIFIER: group.com.phequals7.muesli.dev
+        MUESLI_CROSS_PROCESS_PREFIX: com.phequals7.muesli.dev
+        MUESLI_DISPLAY_NAME: MuesliDev
+        MUESLI_TELEMETRYDECK_APP_ID: disabled
+        MUESLI_TELEMETRY_ENABLED: NO
+        MUESLI_URL_SCHEME: mueslidev
+        PROVISIONING_PROFILE_SPECIFIER: muesli-ios-mueslidev-cloudkit-push
+    dependencies:
       - package: FluidAudio
       - package: TelemetryDeck
       - package: WhisperKit
@@ -140,6 +183,13 @@ schemes:
         - MuesliUITests
     archive:
       config: Release
+
+  MuesliDev:
+    build:
+      targets:
+        MuesliDev: all
+    run:
+      config: MuesliDev
 
   MuesliKeyboard:
     build:

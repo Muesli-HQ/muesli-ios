@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Muesli</string>
+	<string>$(MUESLI_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,10 +22,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.phequals7.muesli.ios</string>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>muesli</string>
+				<string>$(MUESLI_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
@@ -39,6 +39,14 @@
 	<true/>
 	<key>MuesliTelemetryDeckAppID</key>
 	<string>$(MUESLI_TELEMETRYDECK_APP_ID)</string>
+	<key>MuesliTelemetryEnabled</key>
+	<string>$(MUESLI_TELEMETRY_ENABLED)</string>
+	<key>MuesliAppGroupIdentifier</key>
+	<string>$(MUESLI_APP_GROUP_IDENTIFIER)</string>
+	<key>MuesliCrossProcessPrefix</key>
+	<string>$(MUESLI_CROSS_PROCESS_PREFIX)</string>
+	<key>MuesliURLScheme</key>
+	<string>$(MUESLI_URL_SCHEME)</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Muesli records your voice so it can transcribe speech into text on device.</string>
 	<key>NSCameraUsageDescription</key>

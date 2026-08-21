@@ -48,7 +48,7 @@ final class ChatGPTAuthManager: NSObject, ASWebAuthenticationPresentationContext
     private static let redirectURI = "http://localhost:1455/auth/callback"
     private static let scopes = "openid profile email offline_access"
     private static let callbackTimeoutSeconds: TimeInterval = 300
-    private static let keychainService = "com.phequals7.muesli.ios.chatgpt-auth"
+    private static let keychainService = "\(MuesliAppConstants.bundleIdentifier).chatgpt-auth"
 
     private let keychain = KeychainStore(service: keychainService)
     private var activeSession: ASWebAuthenticationSession?

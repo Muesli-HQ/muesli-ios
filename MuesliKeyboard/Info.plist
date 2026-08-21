@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Muesli</string>
+	<string>$(MUESLI_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -20,6 +20,12 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>MuesliAppGroupIdentifier</key>
+	<string>$(MUESLI_APP_GROUP_IDENTIFIER)</string>
+	<key>MuesliCrossProcessPrefix</key>
+	<string>$(MUESLI_CROSS_PROCESS_PREFIX)</string>
+	<key>MuesliURLScheme</key>
+	<string>$(MUESLI_URL_SCHEME)</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

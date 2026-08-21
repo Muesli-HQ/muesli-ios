@@ -13,7 +13,6 @@ set -euo pipefail
 #   ./scripts/ios-dev-test.sh --reset --reset-permissions
 #   ./scripts/ios-dev-test.sh --device-id 00008140-001C6D2C11FA801C --reset
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCHEME="${MUESLI_IOS_SCHEME:-Muesli}"
 CONFIGURATION="${MUESLI_IOS_CONFIGURATION:-Debug}"
 BUNDLE_ID="${MUESLI_IOS_BUNDLE_ID:-com.phequals7.muesli.ios}"

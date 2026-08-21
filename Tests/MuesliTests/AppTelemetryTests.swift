@@ -2,6 +2,27 @@ import XCTest
 @testable import Muesli
 
 final class AppTelemetryTests: XCTestCase {
+    func testTelemetryDefaultsToEnabledWhenConfigurationIsAbsent() {
+        XCTAssertTrue(AppTelemetryConfiguration.isEnabled(nil))
+    }
+
+    func testTelemetryRecognizesExplicitTruthyValues() {
+        XCTAssertTrue(AppTelemetryConfiguration.isEnabled(true))
+        XCTAssertTrue(AppTelemetryConfiguration.isEnabled("YES"))
+        XCTAssertTrue(AppTelemetryConfiguration.isEnabled(" true "))
+        XCTAssertTrue(AppTelemetryConfiguration.isEnabled("1"))
+    }
+
+    func testTelemetryFailsClosedForFalseAndMalformedValues() {
+        XCTAssertFalse(AppTelemetryConfiguration.isEnabled(false))
+        XCTAssertFalse(AppTelemetryConfiguration.isEnabled("NO"))
+        XCTAssertFalse(AppTelemetryConfiguration.isEnabled("false"))
+        XCTAssertFalse(AppTelemetryConfiguration.isEnabled("0"))
+        XCTAssertFalse(AppTelemetryConfiguration.isEnabled("$(MUESLI_TELEMETRY_ENABLED)"))
+        XCTAssertFalse(AppTelemetryConfiguration.isEnabled("typo"))
+        XCTAssertFalse(AppTelemetryConfiguration.isEnabled(1))
+    }
+
     func testParameterKeysAreLowercasedSanitizedAndTruncated() {
         let rawKey = "Error Type / With Spaces / And Symbols " + String(repeating: "x", count: 80)
 

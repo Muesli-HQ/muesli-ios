@@ -61,6 +61,19 @@ enum AppTelemetryParameterSanitizer {
     }
 }
 
+enum AppTelemetryConfiguration {
+    static func isEnabled(_ configuredValue: Any?) -> Bool {
+        if let enabled = configuredValue as? Bool {
+            return enabled
+        }
+        guard let configured = configuredValue as? String else {
+            return configuredValue == nil
+        }
+        let normalized = configured.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["true", "yes", "1"].contains(normalized)
+    }
+}
+
 @MainActor
 enum AppTelemetry {
     private static let appIDInfoKey = "MuesliTelemetryDeckAppID"
@@ -136,13 +149,9 @@ enum AppTelemetry {
     }
 
     private static var telemetryIsEnabled: Bool {
-        if let enabled = Bundle.main.object(forInfoDictionaryKey: telemetryEnabledInfoKey) as? Bool {
-            return enabled
-        }
-        guard let configured = Bundle.main.object(forInfoDictionaryKey: telemetryEnabledInfoKey) as? String else {
-            return true
-        }
-        return !["false", "no", "0"].contains(configured.lowercased())
+        AppTelemetryConfiguration.isEnabled(
+            Bundle.main.object(forInfoDictionaryKey: telemetryEnabledInfoKey)
+        )
     }
 
     private static func runtimeParameters() -> [String: String] {

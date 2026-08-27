@@ -43,6 +43,7 @@ struct NotepadView: View {
     @State private var pendingReplacementSessionID: UUID?
     @State private var processedSessionIDs = Set<UUID>()
     @State private var isStartingBurst = false
+    @State private var isDiscarding = false
     @State private var isDiscardConfirmationPresented = false
     @State private var isDeleteAudioConfirmationPresented = false
 
@@ -109,9 +110,19 @@ struct NotepadView: View {
             titleVisibility: .visible
         ) {
             Button("Discard Notepad", role: .destructive) {
+                isDiscarding = true
                 documentSaveTask?.cancel()
-                coordinator.cancelActiveRecording()
-                coordinator.dismissLongVoiceNote()
+                documentSaveTask = nil
+                var sessionIDs = Set([sessionID])
+                if let canonicalSessionID {
+                    sessionIDs.insert(canonicalSessionID)
+                }
+                if let pendingReplacementSessionID {
+                    sessionIDs.insert(pendingReplacementSessionID)
+                }
+                Task {
+                    await coordinator.discardNotepad(sessionIDs: sessionIDs)
+                }
             }
             Button("Keep Writing", role: .cancel) {}
         } message: {
@@ -433,7 +444,7 @@ struct NotepadView: View {
         documentSaveTask?.cancel()
         documentSaveTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(450))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !isDiscarding else { return }
             coordinator.saveNotepadDocument(sessionID: sessionID, text: text)
         }
     }
@@ -441,6 +452,7 @@ struct NotepadView: View {
     private func flushDocument() {
         documentSaveTask?.cancel()
         documentSaveTask = nil
+        guard !isDiscarding else { return }
         coordinator.saveNotepadDocument(sessionID: sessionID, text: documentText)
     }
 }

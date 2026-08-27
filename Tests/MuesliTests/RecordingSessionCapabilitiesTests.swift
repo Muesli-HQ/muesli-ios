@@ -51,7 +51,7 @@ final class RecordingSessionCapabilitiesTests: XCTestCase {
             kind: .quickDictation,
             startedAt: startedAt,
             isLongForm: true,
-            longFormActivatedAt: startedAt.addingTimeInterval(1),
+            longFormActivatedAt: startedAt,
             longFormThresholdSeconds: 60,
             scratchpadText: ""
         )
@@ -66,6 +66,20 @@ final class RecordingSessionCapabilitiesTests: XCTestCase {
 
         XCTAssertTrue(notepad.startedAsNotepad)
         XCTAssertFalse(longVoiceNoteWithEditedText.startedAsNotepad)
+    }
+
+    func testStableNotepadActivationSurvivesSlowPermissionApproval() {
+        let requestedAt = Date.now.addingTimeInterval(-90)
+        let notepad = RecordingSession(
+            kind: .quickDictation,
+            startedAt: requestedAt,
+            isLongForm: true,
+            longFormActivatedAt: requestedAt,
+            longFormThresholdSeconds: 60,
+            scratchpadText: ""
+        )
+
+        XCTAssertTrue(notepad.startedAsNotepad)
     }
 
     /// The widget target cannot see RecordingSessionKind, so capabilities have

@@ -871,8 +871,8 @@ private struct LongVoiceNoteSettingsRow: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             SettingsToggleRow(
                 icon: "waveform.path.ecg",
-                title: "Notepad Mode",
-                detail: "Switch to Notepad after longer recordings.",
+                title: "Long Voice Note Mode",
+                detail: "Open Long Voice Note after longer recordings.",
                 isOn: $isEnabled
             )
 

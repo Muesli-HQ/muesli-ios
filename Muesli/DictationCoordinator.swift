@@ -876,7 +876,8 @@ final class DictationCoordinator {
         let isFirstActivation = !session.isLongForm
         let startedAsNotepad = session.scratchpadText != nil
         session.isLongForm = true
-        session.longFormActivatedAt = session.longFormActivatedAt ?? .now
+        session.longFormActivatedAt = session.longFormActivatedAt
+            ?? (startedAsNotepad ? session.startedAt ?? .now : .now)
         // A Notepad is a text document assembled from transient dictated
         // bursts. Duration-based long voice notes retain their continuous
         // recording because playback is part of that mode's contract.
@@ -2466,6 +2467,59 @@ final class DictationCoordinator {
             saveNotepadDocument(sessionID: sessionID, text: text)
         }
         dismissLongVoiceNote()
+    }
+
+    /// Discards every persisted segment belonging to the Notepad currently
+    /// being edited. A new dictation burst temporarily coexists with the last
+    /// completed segment, so cancelling only the recorder would leave the
+    /// earlier document visible in history.
+    func discardNotepad(sessionIDs: Set<UUID>) async {
+        guard !sessionIDs.isEmpty else {
+            presentedLongVoiceNoteSessionID = nil
+            return
+        }
+
+        if let activeSessionID = activeSession?.id,
+           sessionIDs.contains(activeSessionID) {
+            cancelActiveRecording()
+        }
+
+        var didFail = false
+        for sessionID in sessionIDs {
+            do {
+                let persistedResults = try store.resultsHistory().filter {
+                    $0.sessionID == sessionID
+                }
+                for result in persistedResults {
+                    try store.deleteResult(result)
+                    dictationHistory.removeAll {
+                        $0.id == result.id || $0.requestID == result.requestID
+                    }
+                }
+
+                if let session = try store.activeRecordingSession(id: sessionID) {
+                    try await discardVoiceNoteSession(session)
+                }
+                removeCachedTranscript(for: sessionID)
+            } catch {
+                didFail = true
+                AppTelemetry.failure(
+                    "notepad_discard_failed",
+                    domain: .persistence,
+                    stage: "discard_segment",
+                    error: error,
+                    parameters: ["session_id": sessionID.uuidString]
+                )
+            }
+        }
+
+        presentedLongVoiceNoteSessionID = nil
+        clipboardStatusText = didFail ? "Notepad delete failed" : "Notepad deleted"
+        clearClipboardStatusSoon()
+        if !didFail {
+            scheduleICloudSyncAfterLocalChange(reason: "notepad_deleted")
+            AppTelemetry.signal("notepad_deleted")
+        }
     }
 
     private func upsertNotepadResult(for session: RecordingSession, text: String) {

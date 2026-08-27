@@ -3,6 +3,51 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    @MainActor
+    func testDiscardNotepadRemovesEveryBurstAndPersistedDocument() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = Muesli.SharedStore(containerURL: directory)
+        let firstRequestID = UUID()
+        let secondRequestID = UUID()
+        let firstSession = Muesli.RecordingSession(
+            requestID: firstRequestID,
+            kind: .quickDictation,
+            phase: .completed,
+            isLongForm: true,
+            scratchpadText: "First burst"
+        )
+        let secondSession = Muesli.RecordingSession(
+            requestID: secondRequestID,
+            kind: .quickDictation,
+            phase: .cancelled,
+            isLongForm: true,
+            scratchpadText: "First burst"
+        )
+        try store.saveSession(firstSession)
+        try store.saveSession(secondSession)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: firstRequestID,
+            sessionID: firstSession.id,
+            text: "First burst",
+            engineIdentifier: "test"
+        ))
+        try store.saveResult(Muesli.DictationResult(
+            requestID: secondRequestID,
+            sessionID: secondSession.id,
+            text: "First burst",
+            engineIdentifier: "test"
+        ))
+
+        let coordinator = DictationCoordinator(store: store)
+        await coordinator.discardNotepad(sessionIDs: [firstSession.id, secondSession.id])
+
+        XCTAssertNil(try store.activeRecordingSession(id: firstSession.id))
+        XCTAssertNil(try store.activeRecordingSession(id: secondSession.id))
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+    }
+
     func testEventStreamBuffersEventPostedAfterSubscriptionBeforeConsumption() async {
         let bus = TestCrossProcessEventBus()
         let stream = bus.events()

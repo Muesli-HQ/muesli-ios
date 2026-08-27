@@ -34,4 +34,6 @@ Clarify the non-meeting dictation experience without requiring a new backend or 
 
 - The model picker is intentionally backed by existing shared preferences and event primitives rather than a new backend model.
 - Generated ImageGen mockups under `output/` and the local `design-qa.md` report were intentionally excluded from the PR.
+- Review follow-up addressed Greptile/CodeRabbit findings by restoring Long Voice Note settings copy, anchoring the Notepad discriminator to the recording start time, and deleting both active and canonical Notepad segments while suppressing autosave during discard.
+- The review follow-up passed 72 capability/shared-store tests and 38 Notepad/voice-note lifecycle tests.
 - CI should be reviewed on PR #37 before merge.

@@ -66,7 +66,14 @@ struct KeyboardRootView: View {
     }
 
     private var header: some View {
-        HStack(spacing: MuesliTheme.spacing8) {
+        ViewThatFits(in: .horizontal) {
+            headerContent(showsWordmark: true)
+            headerContent(showsWordmark: false)
+        }
+    }
+
+    private func headerContent(showsWordmark: Bool) -> some View {
+        HStack(spacing: showsWordmark ? MuesliTheme.spacing8 : MuesliTheme.spacing4) {
             Image("MuesliAppIcon")
                 .resizable()
                 .scaledToFit()
@@ -74,11 +81,16 @@ struct KeyboardRootView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .accessibilityHidden(true)
 
-            Text("muesli")
-                .font(.system(size: 20, weight: .bold))
-                .foregroundStyle(MuesliTheme.textPrimary)
+            if showsWordmark {
+                Text("muesli")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .fixedSize()
+            }
 
             Spacer()
+
+            transcriptionModelMenu
 
             if let settingsURL = controller.settingsURL {
                 Link(destination: settingsURL) {
@@ -92,6 +104,63 @@ struct KeyboardRootView: View {
                 controller.dismissKeyboard()
             }
         }
+    }
+
+    private var transcriptionModelMenu: some View {
+        Menu {
+            Section("Transcription model") {
+                ForEach(controller.readyTranscriptionModels) { model in
+                    Button {
+                        controller.selectTranscriptionModel(model)
+                    } label: {
+                        Label(
+                            "\(model.displayName) · \(model.capabilityLabel)",
+                            systemImage: model.rawValue == controller.modelCatalog?.selectedRawValue
+                                ? "checkmark"
+                                : "circle"
+                        )
+                    }
+                    .disabled(!controller.canSelectTranscriptionModel)
+                }
+            }
+
+            if let settingsURL = controller.settingsURL {
+                Divider()
+                Link(destination: settingsURL) {
+                    Label("Manage downloaded models…", systemImage: "gearshape")
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                if controller.isModelSelectionPending {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(MuesliTheme.syncGreen)
+                } else {
+                    Circle()
+                        .fill(MuesliTheme.syncGreen)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: MuesliTheme.syncGreen.opacity(0.45), radius: 3)
+                }
+
+                Text(controller.modelChipTitle)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(MuesliTheme.textPrimary)
+            .padding(.horizontal, 9)
+            .frame(height: 32)
+            .background(MuesliTheme.accent.opacity(0.10), in: Capsule())
+            .overlay(Capsule().strokeBorder(MuesliTheme.accent.opacity(0.30), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .menuOrder(.fixed)
+        .accessibilityLabel("Transcription model")
+        .accessibilityValue(controller.modelChipTitle)
     }
 
     private var readyRecorder: some View {
@@ -165,6 +234,7 @@ struct KeyboardRootView: View {
                     mode: controller.waveformMode,
                     color: activeStatusColor,
                     level: controller.waveformLevel,
+                    style: .electricSpectrum,
                     barCount: Self.activeWaveformBarCount,
                     spacing: 2.2,
                     framesPerSecond: 18,

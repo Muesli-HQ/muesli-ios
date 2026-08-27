@@ -2,6 +2,34 @@ import XCTest
 @testable import Muesli
 
 final class LongVoiceNotePersistenceTests: XCTestCase {
+    func testNotepadComposerAppendsBurstsWithoutDuplicatingCompletedText() {
+        let first = NotepadDocumentComposer.appending(
+            segment: "This is the first thought.",
+            to: ""
+        )
+        XCTAssertEqual(first, "This is the first thought.")
+
+        let second = NotepadDocumentComposer.appending(
+            segment: "Here is the next one.",
+            to: first
+        )
+        XCTAssertEqual(second, "This is the first thought. Here is the next one.")
+        XCTAssertEqual(
+            NotepadDocumentComposer.appending(segment: "Here is the next one.", to: second),
+            second
+        )
+    }
+
+    func testNotepadComposerUsesFirstLineAsCompactTitle() {
+        XCTAssertEqual(
+            NotepadDocumentComposer.title(
+                for: "Launch plan\nFollow up tomorrow",
+                fallbackDate: Date(timeIntervalSince1970: 0)
+            ),
+            "Launch plan"
+        )
+    }
+
     func testLongVoiceNoteMetadataAndScratchpadPersist() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-long-note-\(UUID().uuidString)", isDirectory: true)

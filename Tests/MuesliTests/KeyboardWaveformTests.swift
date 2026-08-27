@@ -78,6 +78,9 @@ final class KeyboardWaveformTests: XCTestCase {
 
     func testInAppWaveformUsesInputAsItsOnlyLiveClock() {
         XCTAssertFalse(
+            MuesliInlineWaveformRefreshDriver.timeline.usesTimeline(for: .idle)
+        )
+        XCTAssertFalse(
             MuesliInlineWaveformRefreshDriver.inputLevel.usesTimeline(for: .level)
         )
         XCTAssertTrue(

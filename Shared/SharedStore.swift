@@ -151,6 +151,33 @@ struct SharedStore: Sendable {
         eventPoster.post(.liveTranscriptChanged)
     }
 
+    func saveKeyboardModelCatalog(_ catalog: KeyboardTranscriptionModelCatalog) throws {
+        try database().saveValue(catalog, key: .keyboardModelCatalog)
+        eventPoster.post(.modelCatalogChanged)
+    }
+
+    func keyboardModelCatalog() throws -> KeyboardTranscriptionModelCatalog? {
+        try database().value(KeyboardTranscriptionModelCatalog.self, key: .keyboardModelCatalog)
+    }
+
+    func saveKeyboardModelSelectionRequest(
+        _ request: KeyboardTranscriptionModelSelectionRequest
+    ) throws {
+        try database().saveValue(request, key: .keyboardModelSelectionRequest)
+        eventPoster.post(.modelSelectionRequested)
+    }
+
+    func keyboardModelSelectionRequest() throws -> KeyboardTranscriptionModelSelectionRequest? {
+        try database().value(
+            KeyboardTranscriptionModelSelectionRequest.self,
+            key: .keyboardModelSelectionRequest
+        )
+    }
+
+    func clearKeyboardModelSelectionRequest() throws {
+        try database().clearValue(key: .keyboardModelSelectionRequest)
+    }
+
     func saveSession(_ session: RecordingSession) throws {
         try database().saveSession(session)
     }
@@ -553,6 +580,8 @@ private enum SharedStoreKey: String {
     case keyboardExtensionStatus = "keyboard_extension_status"
     case keyboardRuntimeStatus = "keyboard_runtime_status"
     case keyboardLiveTranscript = "keyboard_live_transcript"
+    case keyboardModelCatalog = "keyboard_model_catalog"
+    case keyboardModelSelectionRequest = "keyboard_model_selection_request"
     case legacyJSONMigrated = "legacy_json_migrated_v1"
     case customWordsInitialized = "custom_words_initialized"
 }

@@ -974,6 +974,42 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertNil(try store.keyboardLiveTranscript())
     }
 
+    func testKeyboardModelCatalogAndSelectionRequestRoundTrip() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bus = TestCrossProcessEventBus()
+        let store = SharedStore(containerURL: directory, eventPoster: bus)
+        let parakeet = KeyboardTranscriptionModelOption(
+            rawValue: "parakeet-tdt-ctc-110m",
+            displayName: "Parakeet 110M",
+            shortName: "Parakeet 110M",
+            capabilityLabel: "English only",
+            isReady: true
+        )
+        let catalog = KeyboardTranscriptionModelCatalog(
+            selectedRawValue: parakeet.rawValue,
+            models: [parakeet],
+            canSelectModels: true,
+            updatedAt: Date(timeIntervalSince1970: 800)
+        )
+        let request = KeyboardTranscriptionModelSelectionRequest(
+            modelRawValue: parakeet.rawValue,
+            createdAt: Date(timeIntervalSince1970: 801)
+        )
+
+        try store.saveKeyboardModelCatalog(catalog)
+        try store.saveKeyboardModelSelectionRequest(request)
+
+        XCTAssertEqual(try store.keyboardModelCatalog(), catalog)
+        XCTAssertEqual(try store.keyboardModelSelectionRequest(), request)
+        XCTAssertTrue(bus.postedEvents.contains(.modelCatalogChanged))
+        XCTAssertTrue(bus.postedEvents.contains(.modelSelectionRequested))
+
+        try store.clearKeyboardModelSelectionRequest()
+        XCTAssertNil(try store.keyboardModelSelectionRequest())
+    }
+
     func testSavingPendingRequestDoesNotOverwriteStatus() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)

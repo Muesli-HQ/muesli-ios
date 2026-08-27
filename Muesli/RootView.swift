@@ -44,8 +44,13 @@ struct RootView: View {
                 }
             )
         ) {
-            if let sessionID = coordinator.presentedLongVoiceNoteSessionID {
-                LongVoiceNoteView(coordinator: coordinator, sessionID: sessionID)
+            if let sessionID = coordinator.presentedLongVoiceNoteSessionID,
+               let session = coordinator.presentedLongVoiceNoteSession {
+                if session.startedAsNotepad {
+                    NotepadView(coordinator: coordinator, sessionID: sessionID)
+                } else {
+                    LongVoiceNoteView(coordinator: coordinator, sessionID: sessionID)
+                }
             }
         }
     }

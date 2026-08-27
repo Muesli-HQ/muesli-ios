@@ -45,6 +45,29 @@ final class RecordingSessionCapabilitiesTests: XCTestCase {
         XCTAssertTrue(RecordingSessionKind.keyboardDictation.supportsLongFormCapture)
     }
 
+    func testNotepadIsDistinguishedFromDurationBasedLongVoiceNoteWithoutNewStorage() {
+        let startedAt = Date.now
+        let notepad = RecordingSession(
+            kind: .quickDictation,
+            startedAt: startedAt,
+            isLongForm: true,
+            longFormActivatedAt: startedAt.addingTimeInterval(1),
+            longFormThresholdSeconds: 60,
+            scratchpadText: ""
+        )
+        let longVoiceNoteWithEditedText = RecordingSession(
+            kind: .quickDictation,
+            startedAt: startedAt,
+            isLongForm: true,
+            longFormActivatedAt: startedAt.addingTimeInterval(60),
+            longFormThresholdSeconds: 60,
+            scratchpadText: "Edited after recording"
+        )
+
+        XCTAssertTrue(notepad.startedAsNotepad)
+        XCTAssertFalse(longVoiceNoteWithEditedText.startedAsNotepad)
+    }
+
     /// The widget target cannot see RecordingSessionKind, so capabilities have
     /// to survive the trip through the attributes rather than being re-derived
     /// from a display string on the far side.

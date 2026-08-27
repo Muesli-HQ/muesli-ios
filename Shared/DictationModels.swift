@@ -479,6 +479,22 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
         }
     }
 
+    /// Notepad capture promotes to long form immediately, before the normal
+    /// duration threshold. This keeps that distinction recoverable from the
+    /// existing persisted fields without adding a new storage column.
+    var startedAsNotepad: Bool {
+        guard kind == .quickDictation,
+              isLongForm,
+              scratchpadText != nil,
+              let startedAt,
+              let longFormActivatedAt,
+              let longFormThresholdSeconds,
+              longFormThresholdSeconds > 0
+        else { return false }
+
+        return longFormActivatedAt.timeIntervalSince(startedAt) < Double(longFormThresholdSeconds)
+    }
+
     var isKeyboardOwnedVoiceNote: Bool {
         kind == .keyboardDictation
             || source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "keyboard"

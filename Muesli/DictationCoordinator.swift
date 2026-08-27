@@ -261,6 +261,7 @@ final class DictationCoordinator {
                 "transcription_model_selected",
                 parameters: ["engine": selectedTranscriptionModel.engineIdentifier]
             )
+            publishKeyboardModelCatalog()
             automaticallyPrepareSelectedModelIfNeeded()
         }
     }
@@ -497,6 +498,8 @@ final class DictationCoordinator {
             }
         }
         startSharedEventObservation()
+        publishKeyboardModelCatalog()
+        processPendingKeyboardModelSelection()
         MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
             self?.stopCaptureFromLiveActivity(sessionID: sessionID) ?? .unavailable
         }
@@ -545,6 +548,7 @@ final class DictationCoordinator {
 
     private func transitionKeyboardSession(_ event: KeyboardSessionEvent) {
         keyboardSessionState = KeyboardSessionReducer.reduce(keyboardSessionState, event: event)
+        publishKeyboardModelCatalog()
     }
 
     @discardableResult
@@ -552,6 +556,9 @@ final class DictationCoordinator {
         let previousState = meetingLifecycleState
         let transition = MeetingLifecycleReducer.transition(previousState, event: event)
         meetingLifecycleState = transition.state
+        if transition.accepted {
+            publishKeyboardModelCatalog()
+        }
         if !transition.accepted {
             AppTelemetry.failure(
                 "meeting_lifecycle_transition_rejected",
@@ -571,6 +578,9 @@ final class DictationCoordinator {
         let previousState = voiceNoteLifecycleState
         let transition = VoiceNoteLifecycleReducer.transition(previousState, event: event)
         voiceNoteLifecycleState = transition.state
+        if transition.accepted {
+            publishKeyboardModelCatalog()
+        }
         if !transition.accepted {
             AppTelemetry.failure(
                 "voice_note_lifecycle_transition_rejected",
@@ -864,8 +874,13 @@ final class DictationCoordinator {
         }
 
         let isFirstActivation = !session.isLongForm
+        let startedAsNotepad = session.scratchpadText != nil
         session.isLongForm = true
         session.longFormActivatedAt = session.longFormActivatedAt ?? .now
+        // A Notepad is a text document assembled from transient dictated
+        // bursts. Duration-based long voice notes retain their continuous
+        // recording because playback is part of that mode's contract.
+        session.keepsAudioRecording = !startedAsNotepad
         session.protectedAudioUntilTranscriptCompletes = session.hasDurableAudioCheckpoint
         session.lastTranscriptionFailureReason = nil
         activeSession = session
@@ -900,7 +915,7 @@ final class DictationCoordinator {
             : "Securing audio"
         Task {
             await liveActivityController.update(
-                phase: "Long voice note",
+                phase: startedAsNotepad ? "Notepad" : "Long voice note",
                 detail: durabilityDetail,
                 session: session
             )
@@ -1588,6 +1603,10 @@ final class DictationCoordinator {
             configureInterruptedMeetingRecoveryUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.missingActiveMeetingHistoryUITestLaunchArgument) {
             configureMissingActiveMeetingHistoryUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.activeQuickNoteUITestLaunchArgument) {
+            configureActiveQuickNoteUITestFixture()
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.emptyNotepadUITestLaunchArgument) {
+            configureEmptyNotepadUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.completedLongVoiceNoteUITestLaunchArgument) {
             configureCompletedLongVoiceNoteUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.longVoiceNoteUITestLaunchArgument) {
@@ -1754,6 +1773,90 @@ final class DictationCoordinator {
         statusText = "Audio saved locally"
     }
 
+    private func configureActiveQuickNoteUITestFixture() {
+        let request = DictationRequest()
+        let session = RecordingSession(
+            requestID: request.id,
+            kind: .quickDictation,
+            startedAt: Date.now.addingTimeInterval(-18),
+            phase: .recording,
+            source: "app",
+            longFormThresholdSeconds: 60
+        )
+
+        activeRequest = request
+        activeSession = session
+        recordingSessions = [session]
+        isRecording = true
+        recordingElapsedTime = 18
+        voiceNoteLifecycleRunner = VoiceNoteLifecycleRunner(
+            sessionID: session.id,
+            requestID: request.id
+        )
+        voiceNoteLifecycleState = VoiceNoteLifecycleReducer.reduce(
+            voiceNoteLifecycleState,
+            event: .recordingStarted(session.id)
+        )
+        statusText = "Recording"
+    }
+
+    private func configureEmptyNotepadUITestFixture() {
+        let request = DictationRequest()
+        let session = RecordingSession(
+            requestID: request.id,
+            kind: .quickDictation,
+            startedAt: Date.now.addingTimeInterval(-1),
+            phase: .completed,
+            source: "app",
+            isLongForm: true,
+            longFormActivatedAt: .now,
+            longFormThresholdSeconds: VoiceNoteRecordingSchedule.checkpointIntervalSeconds,
+            scratchpadText: ""
+        )
+        recordingSessions = [session]
+        presentedLongVoiceNoteSessionID = session.id
+        statusText = "Ready"
+    }
+
+    private func configureActiveNotepadUITestFixture() {
+        let request = DictationRequest()
+        let session = RecordingSession(
+            requestID: request.id,
+            kind: .quickDictation,
+            startedAt: Date.now.addingTimeInterval(-1),
+            phase: .recording,
+            keepsAudioRecording: false,
+            source: "app",
+            isLongForm: true,
+            longFormActivatedAt: .now,
+            longFormThresholdSeconds: VoiceNoteRecordingSchedule.checkpointIntervalSeconds,
+            protectedAudioUntilTranscriptCompletes: true,
+            scratchpadText: ""
+        )
+
+        activeRequest = request
+        activeSession = session
+        recordingSessions = [session]
+        isRecording = true
+        recordingElapsedTime = 1
+        longVoiceNoteCheckpointCount = 1
+        longVoiceNoteAudioIsSecured = false
+        voiceNoteLifecycleRunner = VoiceNoteLifecycleRunner(
+            sessionID: session.id,
+            requestID: request.id
+        )
+        voiceNoteLifecycleState = VoiceNoteLifecycleReducer.reduce(
+            voiceNoteLifecycleState,
+            event: .recordingStarted(session.id)
+        )
+        voiceNoteLifecycleState = VoiceNoteLifecycleReducer.reduce(
+            voiceNoteLifecycleState,
+            event: .longFormActivated(session.id)
+        )
+        presentedLongVoiceNoteSessionID = session.id
+        statusText = "Recording"
+    }
+
     private func configureCompletedLongVoiceNoteUITestFixture() {
         let request = DictationRequest()
         let session = RecordingSession(
@@ -1821,6 +1924,23 @@ final class DictationCoordinator {
             MuesliHaptics.dictationStart()
             startRecording(for: DictationRequest(), source: "app")
         }
+    }
+
+    func startNotepadRecording(seedText: String = "") {
+        guard !isRecording, statusText != "Transcribing" else { return }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.directStartNotepadUITestLaunchArgument) {
+            configureActiveNotepadUITestFixture()
+            return
+        }
+        #endif
+        MuesliHaptics.dictationStart()
+        startRecording(
+            for: DictationRequest(),
+            source: "app",
+            startsAsNotepad: true,
+            initialScratchpadText: seedText
+        )
     }
 
     func cancelActiveRecording() {
@@ -2286,6 +2406,100 @@ final class DictationCoordinator {
         }
     }
 
+    func saveNotepadDocument(sessionID: UUID, text: String) {
+        updateVoiceNoteScratchpad(sessionID: sessionID, text: text)
+        guard let session = try? store.activeRecordingSession(id: sessionID),
+              session.kind != .meeting,
+              session.phase == .completed
+        else { return }
+
+        upsertNotepadResult(for: session, text: text)
+    }
+
+    func commitNotepadDocument(
+        sessionID: UUID,
+        text: String,
+        replacing previousSessionID: UUID?
+    ) {
+        saveNotepadDocument(sessionID: sessionID, text: text)
+
+        guard let previousSessionID,
+              previousSessionID != sessionID,
+              let previousSession = try? store.activeRecordingSession(id: previousSessionID)
+        else { return }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                if let previousResult = self.dictationHistory.first(where: {
+                    $0.sessionID == previousSessionID
+                }) {
+                    try self.store.deleteResult(previousResult)
+                    self.dictationHistory.removeAll {
+                        $0.id == previousResult.id || $0.requestID == previousResult.requestID
+                    }
+                }
+                try await self.discardVoiceNoteSession(previousSession)
+                self.scheduleICloudSyncAfterLocalChange(reason: "notepad_segment_merged")
+                AppTelemetry.signal("notepad_segment_merged")
+            } catch {
+                AppTelemetry.failure(
+                    "notepad_segment_merge_failed",
+                    domain: .persistence,
+                    stage: "replace_previous_segment",
+                    error: error
+                )
+            }
+        }
+    }
+
+    func finishNotepad(sessionID: UUID, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty,
+           let session = try? store.activeRecordingSession(id: sessionID),
+           session.audioFileName == nil,
+           transcript(for: session) == nil,
+           !dictationHistory.contains(where: { $0.sessionID == sessionID }) {
+            try? store.deleteRecordingSession(id: sessionID)
+            recordingSessions.removeAll { $0.id == sessionID }
+        } else {
+            saveNotepadDocument(sessionID: sessionID, text: text)
+        }
+        dismissLongVoiceNote()
+    }
+
+    private func upsertNotepadResult(for session: RecordingSession, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let requestID = session.requestID else { return }
+
+        let existing = dictationHistory.first(where: { $0.sessionID == session.id })
+        let result = DictationResult(
+            id: existing?.id ?? UUID(),
+            requestID: requestID,
+            sessionID: session.id,
+            text: text,
+            createdAt: existing?.createdAt ?? session.createdAt,
+            engineIdentifier: existing?.engineIdentifier
+                ?? session.engineIdentifier
+                ?? selectedTranscriptionModel.engineIdentifier,
+            source: existing?.source ?? session.source
+        )
+
+        do {
+            try store.saveResult(result)
+            if let index = dictationHistory.firstIndex(where: { $0.id == result.id }) {
+                dictationHistory[index] = result
+            } else {
+                dictationHistory.insert(result, at: 0)
+            }
+            lastTranscript = text
+            scheduleICloudSyncAfterLocalChange(reason: "notepad_document_saved")
+        } catch {
+            clipboardStatusText = "Notepad save failed"
+            clearClipboardStatusSoon()
+        }
+    }
+
     func keepVoiceNoteAudio(sessionID: UUID) {
         guard var session = try? store.activeRecordingSession(id: sessionID),
               session.kind != .meeting,
@@ -2677,8 +2891,11 @@ final class DictationCoordinator {
     }
 
     func audioFileURL(for session: RecordingSession) -> URL? {
-        guard let audioFileName = session.audioFileName else { return nil }
-        return try? store.audioFileURL(fileName: audioFileName)
+        guard let audioFileName = session.audioFileName,
+              let audioURL = try? store.audioFileURL(fileName: audioFileName),
+              FileManager.default.fileExists(atPath: audioURL.path)
+        else { return nil }
+        return audioURL
     }
 
     func recordingSession(for result: DictationResult) -> RecordingSession? {
@@ -2709,9 +2926,12 @@ final class DictationCoordinator {
     func audioFileURL(for result: DictationResult) -> URL? {
         guard let session = recordingSession(for: result),
               session.keepsAudioRecording,
-              let audioFileName = session.audioFileName
+              !session.startedAsNotepad,
+              let audioFileName = session.audioFileName,
+              let audioURL = try? store.audioFileURL(fileName: audioFileName),
+              FileManager.default.fileExists(atPath: audioURL.path)
         else { return nil }
-        return try? store.audioFileURL(fileName: audioFileName)
+        return audioURL
     }
 
     private func clearClipboardStatusSoon() {
@@ -3100,6 +3320,50 @@ final class DictationCoordinator {
         selectedTranscriptionModel = model
     }
 
+    private var canSelectTranscriptionModelsFromKeyboard: Bool {
+        !isRecording
+            && !hasMeetingRecordingInProgress
+            && !isMeetingTranscribing
+            && !voiceNoteLifecycleState.isWorkActive
+            && !keyboardSessionState.isWorkflowActive
+            && activeRequest == nil
+            && statusText != "Transcribing"
+            && !isRemovingTranscriptionModel
+    }
+
+    private func publishKeyboardModelCatalog() {
+        let catalog = KeyboardTranscriptionModelCatalog(
+            selectedRawValue: selectedTranscriptionModel.rawValue,
+            models: LocalTranscriptionModel.allCases.map(\.keyboardCatalogOption),
+            canSelectModels: canSelectTranscriptionModelsFromKeyboard
+        )
+        try? store.saveKeyboardModelCatalog(catalog)
+    }
+
+    private func processPendingKeyboardModelSelection() {
+        guard let request = try? store.keyboardModelSelectionRequest() else { return }
+        try? store.clearKeyboardModelSelectionRequest()
+
+        guard Date.now.timeIntervalSince(request.createdAt) < 300,
+              let model = LocalTranscriptionModel(rawValue: request.modelRawValue),
+              model.isDownloaded,
+              canSelectTranscriptionModelsFromKeyboard
+        else {
+            publishKeyboardModelCatalog()
+            return
+        }
+
+        if selectedTranscriptionModel != model {
+            AppTelemetry.signal(
+                "keyboard_transcription_model_selected",
+                parameters: ["engine": model.engineIdentifier]
+            )
+            selectTranscriptionModel(model)
+        } else {
+            publishKeyboardModelCatalog()
+        }
+    }
+
     func removeDownloadedModel(_ model: LocalTranscriptionModel) async throws {
         guard canRemoveDownloadedModels else {
             throw TranscriptionModelRemovalError.modelInUse
@@ -3138,6 +3402,7 @@ final class DictationCoordinator {
                 "was_active": selectedTranscriptionModel == model ? "true" : "false",
             ]
         )
+        publishKeyboardModelCatalog()
     }
 
     private func automaticallyPrepareSelectedModelIfNeeded() {
@@ -3626,7 +3891,12 @@ final class DictationCoordinator {
         saveKeyboardLiveTranscript(text: liveDictationTranscript, isFinal: false)
     }
 
-    private func startRecording(for request: DictationRequest, source: String) {
+    private func startRecording(
+        for request: DictationRequest,
+        source: String,
+        startsAsNotepad: Bool = false,
+        initialScratchpadText: String? = nil
+    ) {
         guard selectedTranscriptionModel.isDownloaded else {
             let message = "\(selectedTranscriptionModel.shortName) is still downloading"
             statusText = message
@@ -3680,13 +3950,18 @@ final class DictationCoordinator {
         realtimeDictationCommittedText = ""
         clearKeyboardLiveTranscript()
         let kind: RecordingSessionKind = source == "keyboard" ? .keyboardDictation : .quickDictation
-        let longModeThreshold = configuredLongVoiceNoteThreshold()
+        let longModeThreshold = startsAsNotepad
+            ? VoiceNoteRecordingSchedule.checkpointIntervalSeconds
+            : configuredLongVoiceNoteThreshold()
         var session = RecordingSession(
             requestID: request.id,
             kind: kind,
-            keepsAudioRecording: MuesliPreferences.keepDictationAudioRecordingsEnabled,
+            keepsAudioRecording: startsAsNotepad
+                ? false
+                : MuesliPreferences.keepDictationAudioRecordingsEnabled,
             source: source,
-            longFormThresholdSeconds: longModeThreshold
+            longFormThresholdSeconds: longModeThreshold,
+            scratchpadText: initialScratchpadText
         )
         if source == "keyboard" {
             saveKeyboardHandoff(
@@ -3753,6 +4028,12 @@ final class DictationCoordinator {
                 ) else {
                     throw VoiceNoteCaptureFailure.invalidLifecycleTransition
                 }
+                if startsAsNotepad {
+                    guard let promotedSession = promoteActiveVoiceNoteToLongForm(sessionID: session.id) else {
+                        throw VoiceNoteCaptureFailure.invalidLifecycleTransition
+                    }
+                    session = promotedSession
+                }
                 if source == "keyboard", !usesPersistentKeyboardSession {
                     transitionKeyboardSession(.recordingStarted(request.id))
                 }
@@ -3789,8 +4070,8 @@ final class DictationCoordinator {
                     await liveActivityController.start(
                         session: session,
                         requestID: request.id,
-                        phase: "Listening",
-                        detail: "Recording voice note"
+                        phase: startsAsNotepad ? "Notepad" : "Listening",
+                        detail: startsAsNotepad ? "Securing audio locally" : "Recording voice note"
                     )
                 }
             } catch {
@@ -5757,8 +6038,15 @@ final class DictationCoordinator {
         sharedEventObservationTask = Task { @MainActor [weak self, eventBus] in
             for await event in eventBus.events() {
                 guard !Task.isCancelled, let self else { return }
-                guard event == .commandChanged else { continue }
-                await self.processPendingKeyboardCommand()
+                switch event {
+                case .commandChanged:
+                    await self.processPendingKeyboardCommand()
+                case .modelSelectionRequested:
+                    self.processPendingKeyboardModelSelection()
+                case .handoffStatusChanged, .runtimeStatusChanged, .liveTranscriptChanged,
+                     .modelCatalogChanged, .resultChanged, .ownershipChanged:
+                    continue
+                }
             }
         }
     }
@@ -6443,6 +6731,7 @@ extension DictationCoordinator: ModelBackgroundDownloadServiceDelegate {
     }
 
     func modelBackgroundDownloadDidFinish(model: LocalTranscriptionModel) {
+        publishKeyboardModelCatalog()
         guard selectedTranscriptionModel == model else { return }
         modelPreparation = ModelPreparationState(
             phase: .preparing,
@@ -6454,6 +6743,7 @@ extension DictationCoordinator: ModelBackgroundDownloadServiceDelegate {
     }
 
     func modelBackgroundDownloadDidFail(model: LocalTranscriptionModel, message: String) {
+        publishKeyboardModelCatalog()
         guard selectedTranscriptionModel == model else { return }
         modelPreparationTask = nil
         modelPreparation = ModelPreparationState(

@@ -6,6 +6,8 @@ enum CrossProcessEvent: String, CaseIterable, Sendable {
     case handoffStatusChanged = "handoff-status.changed"
     case runtimeStatusChanged = "runtime-status.changed"
     case liveTranscriptChanged = "live-transcript.changed"
+    case modelCatalogChanged = "model-catalog.changed"
+    case modelSelectionRequested = "model-selection.requested"
     case resultChanged = "result.changed"
     case ownershipChanged = "ownership.changed"
 

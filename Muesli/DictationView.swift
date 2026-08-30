@@ -404,42 +404,60 @@ struct DictationView: View {
                     VoiceNoteLiveTranscriptRegion(liveState: coordinator.voiceNoteLiveState)
                 }
 
-                ZStack(alignment: .trailing) {
-                    Button {
-                        toggleCapture()
-                    } label: {
-                        VoiceNoteRecordButtonLabel(
-                            title: dictationButtonTitle,
-                            systemImage: dictationButtonIcon,
-                            color: statusColor,
-                            isStopState: coordinator.isRecording,
-                            isDisabled: isDictationButtonDisabled
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isDictationButtonDisabled)
-                    .sensoryFeedback(.impact, trigger: coordinator.isRecording)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(dictationButtonTitle)
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityIdentifier("dictation.primaryButton")
-
+                Group {
                     if coordinator.isRecording {
-                        Button(role: .destructive) {
-                            coordinator.cancelActiveRecording()
+                        HStack(spacing: MuesliTheme.spacing24) {
+                            Button(role: .destructive) {
+                                coordinator.cancelActiveRecording()
+                            } label: {
+                                VoiceNoteRecordingActionLabel(
+                                    title: "Discard",
+                                    systemImage: "xmark",
+                                    color: MuesliTheme.destructive
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Discard Recording")
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityIdentifier("dictation.cancelButton")
+
+                            Button {
+                                toggleCapture()
+                            } label: {
+                                VoiceNoteRecordingActionLabel(
+                                    title: "Stop Recording",
+                                    systemImage: "stop.fill",
+                                    color: MuesliTheme.recordingStop
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .sensoryFeedback(.impact, trigger: coordinator.isRecording)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Stop Recording")
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityIdentifier("dictation.primaryButton")
+                        }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Button {
+                            toggleCapture()
                         } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .background(MuesliTheme.destructive, in: Circle())
-                                .shadow(color: MuesliTheme.destructive.opacity(0.24), radius: 10, x: 0, y: 5)
-                                .contentShape(Circle())
+                            VoiceNoteRecordButtonLabel(
+                                title: dictationButtonTitle,
+                                systemImage: dictationButtonIcon,
+                                color: statusColor,
+                                isStopState: false,
+                                isDisabled: isDictationButtonDisabled
+                            )
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Discard Recording")
-                        .accessibilityIdentifier("dictation.cancelButton")
-                        .padding(.trailing, MuesliTheme.spacing4)
+                        .disabled(isDictationButtonDisabled)
+                        .sensoryFeedback(.impact, trigger: coordinator.isRecording)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(dictationButtonTitle)
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityIdentifier("dictation.primaryButton")
                     }
                 }
                 .padding(.top, 0)
@@ -1262,6 +1280,34 @@ private struct VoiceNoteRecordButtonLabel: View {
         } else {
             MuesliTheme.textPrimary
         }
+    }
+}
+
+private struct VoiceNoteRecordingActionLabel: View {
+    let title: String
+    let systemImage: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: MuesliTheme.spacing8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 64, height: 64)
+                .background(color, in: Circle())
+                .overlay {
+                    Circle()
+                        .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+                }
+                .shadow(color: color.opacity(0.28), radius: 12, x: 0, y: 7)
+
+            Text(title)
+                .font(MuesliTheme.captionMedium())
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .lineLimit(1)
+        }
+        .frame(width: 128, height: 92)
+        .contentShape(Rectangle())
     }
 }
 

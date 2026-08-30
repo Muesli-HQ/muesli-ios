@@ -21,6 +21,8 @@ Clarify the non-meeting dictation experience without requiring a new backend or 
 - Reused existing persisted session fields to distinguish Notepad from duration-promoted Long Voice Notes; no schema migration was added.
 - Restored the standard single-color in-app waveform and added a dedicated timer lane so the timer cannot overlap it.
 - Updated active recording controls to use a dark-green stop control with a white stop glyph and a solid-red discard control.
+- Balanced Quick Note discard and stop actions as an equal-sized, centered pair on the same baseline.
+- Added a Notepad burst-discard action beside the live waveform; it cancels only the passage currently being recorded and preserves the accumulated Notepad document.
 - Aligned the history playback control with the remaining metadata badges and omitted it for Notepad entries.
 
 ## Verification
@@ -28,6 +30,7 @@ Clarify the non-meeting dictation experience without requiring a new backend or 
 - 37 tests passed across `RecordingSessionCapabilitiesTests` and `VoiceNoteLifecycleTests`.
 - 87 tests passed across `KeyboardControllerTests`, `KeyboardWaveformTests`, `LongVoiceNotePersistenceTests`, and `SharedStoreTests`.
 - Focused UI regression tests passed for Quick Note recording, direct-start and empty Notepad, active and completed Long Voice Note states, waveform rendering, discard controls, and expanded history metadata.
+- Focused UI assertions verify Quick Note action symmetry and that discarding a Notepad burst keeps the editor open and ready for another passage.
 - `./scripts/ios-dev-test.sh --dev --device-id 8FAE4F9F-4C53-5DFD-9C28-BBF0973DA3D3` built, installed, and launched MuesliDev on Picophone while preserving app data.
 
 ## Notes and follow-up

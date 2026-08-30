@@ -51,11 +51,19 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.textViews["notepad.editor"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["notepad.stopButton"].exists)
         XCTAssertTrue(app.otherElements["notepad.waveform"].exists)
+        let discardBurst = app.buttons["notepad.discardBurstButton"]
+        XCTAssertTrue(discardBurst.exists)
+        XCTAssertLessThan(discardBurst.frame.maxX, app.otherElements["notepad.waveform"].frame.minX)
         XCTAssertFalse(app.staticTexts["notepad.recordingStatus"].exists)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Notepad direct-start active state"
         screenshot.lifetime = .keepAlways
         add(screenshot)
+
+        discardBurst.tap()
+        XCTAssertTrue(app.textViews["notepad.editor"].exists)
+        XCTAssertTrue(app.buttons["notepad.microphoneButton"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["notepad.stopButton"].exists)
     }
 
     func testActiveCapturePreviewReplacesModelControlWithWaveform() {
@@ -80,8 +88,19 @@ final class MuesliSmokeUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Stop Recording"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["Discard Recording"].exists)
+        let discard = app.buttons["Discard Recording"]
+        let stop = app.buttons["dictation.primaryButton"]
+        XCTAssertTrue(discard.exists)
+        XCTAssertTrue(stop.exists)
         XCTAssertFalse(app.buttons["Transcription model"].exists)
+        XCTAssertEqual(discard.frame.midY, stop.frame.midY, accuracy: 1)
+        XCTAssertEqual(discard.frame.width, stop.frame.width, accuracy: 1)
+        XCTAssertEqual(discard.frame.height, stop.frame.height, accuracy: 1)
+        XCTAssertEqual(
+            (discard.frame.midX + stop.frame.midX) / 2,
+            app.otherElements["dictation.recorderPanel"].frame.midX,
+            accuracy: 2
+        )
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Active Quick Note with unobstructed elapsed timer"

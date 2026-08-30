@@ -1952,6 +1952,54 @@ final class DictationCoordinator {
         AppTelemetry.signal("dictation_cancelled", parameters: ["source": source])
     }
 
+    /// Cancels only the active spoken passage in a Notepad. The accumulated
+    /// document remains available, and a temporary segment created for a
+    /// resumed burst is removed once recording has stopped.
+    func discardCurrentNotepadBurst(
+        sessionID: UUID,
+        restoring restoreSessionID: UUID?,
+        documentText: String
+    ) {
+        guard let activeSession,
+              activeSession.id == sessionID,
+              activeSession.startedAsNotepad
+        else { return }
+
+        let restoredSessionID = restoreSessionID ?? sessionID
+        cancelActiveRecording()
+        saveNotepadDocument(sessionID: restoredSessionID, text: documentText)
+        presentedLongVoiceNoteSessionID = restoredSessionID
+
+        guard restoredSessionID != sessionID else {
+            AppTelemetry.signal("notepad_burst_discarded", parameters: [
+                "restored_previous_segment": "false",
+            ])
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self,
+                  let discardedSession = try? self.store.activeRecordingSession(id: sessionID)
+            else { return }
+
+            do {
+                try await self.discardVoiceNoteSession(discardedSession)
+                self.scheduleICloudSyncAfterLocalChange(reason: "notepad_burst_discarded")
+                AppTelemetry.signal("notepad_burst_discarded", parameters: [
+                    "restored_previous_segment": "true",
+                ])
+            } catch {
+                AppTelemetry.failure(
+                    "notepad_burst_discard_failed",
+                    domain: .persistence,
+                    stage: "discard_current_segment",
+                    error: error,
+                    parameters: ["session_id": sessionID.uuidString]
+                )
+            }
+        }
+    }
+
     func refreshHistory() {
         #if DEBUG
         guard !Self.shouldConfigureForUITestingFromLaunchArguments() else { return }

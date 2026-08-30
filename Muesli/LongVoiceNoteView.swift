@@ -290,8 +290,32 @@ struct NotepadView: View {
     private var voiceControl: some View {
         Group {
             if isActivelyRecording {
-                HStack {
+                HStack(spacing: MuesliTheme.spacing12) {
                     Spacer()
+
+                    Button(role: .destructive, action: discardDictationBurst) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 52)
+                            .background(MuesliTheme.destructive, in: Circle())
+                            .overlay {
+                                Circle()
+                                    .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+                            }
+                            .shadow(
+                                color: MuesliTheme.destructive.opacity(0.26),
+                                radius: 12,
+                                x: 0,
+                                y: 7
+                            )
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Discard current dictation")
+                    .accessibilityHint("Removes only the passage currently being recorded")
+                    .accessibilityIdentifier("notepad.discardBurstButton")
+
                     activeVoicePill
                     Spacer()
                 }
@@ -416,6 +440,19 @@ struct NotepadView: View {
     private func stopDictationBurst() {
         flushDocument()
         coordinator.toggleRecording()
+    }
+
+    private func discardDictationBurst() {
+        flushDocument()
+        let discardedSessionID = sessionID
+        let restoreSessionID = canonicalSessionID
+        pendingReplacementSessionID = nil
+        isStartingBurst = false
+        coordinator.discardCurrentNotepadBurst(
+            sessionID: discardedSessionID,
+            restoring: restoreSessionID,
+            documentText: documentText
+        )
     }
 
     private func handleCompletedSegment() {

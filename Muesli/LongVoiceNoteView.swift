@@ -290,17 +290,10 @@ struct NotepadView: View {
     private var voiceControl: some View {
         Group {
             if isActivelyRecording {
-                VStack(spacing: MuesliTheme.spacing4) {
-                    HStack {
-                        Spacer()
-                        activeVoicePill
-                    }
-
-                    Text(coordinator.longVoiceNoteAudioIsSecured ? "Audio saved locally" : "Listening")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .accessibilityIdentifier("notepad.recordingStatus")
+                HStack {
+                    Spacer()
+                    activeVoicePill
+                    Spacer()
                 }
             } else {
                 HStack {

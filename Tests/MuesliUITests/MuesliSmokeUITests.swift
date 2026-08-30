@@ -51,7 +51,7 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.textViews["notepad.editor"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["notepad.stopButton"].exists)
         XCTAssertTrue(app.otherElements["notepad.waveform"].exists)
-        XCTAssertTrue(app.staticTexts["notepad.recordingStatus"].exists)
+        XCTAssertFalse(app.staticTexts["notepad.recordingStatus"].exists)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Notepad direct-start active state"
         screenshot.lifetime = .keepAlways

@@ -23,6 +23,8 @@ Clarify the non-meeting dictation experience without requiring a new backend or 
 - Updated active recording controls to use a dark-green stop control with a white stop glyph and a solid-red discard control.
 - Balanced Quick Note discard and stop actions as an equal-sized, centered pair on the same baseline.
 - Added a Notepad burst-discard action beside the live waveform; it cancels only the passage currently being recorded and preserves the accumulated Notepad document.
+- Kept the idle and processing Notepad controls centered instead of letting the microphone drift back to the trailing edge after transcription.
+- Moved the Notepad burst-discard action inside the recording capsule, after the stop control at the capsule's right edge.
 - Aligned the history playback control with the remaining metadata badges and omitted it for Notepad entries.
 
 ## Verification
@@ -31,6 +33,7 @@ Clarify the non-meeting dictation experience without requiring a new backend or 
 - 87 tests passed across `KeyboardControllerTests`, `KeyboardWaveformTests`, `LongVoiceNotePersistenceTests`, and `SharedStoreTests`.
 - Focused UI regression tests passed for Quick Note recording, direct-start and empty Notepad, active and completed Long Voice Note states, waveform rendering, discard controls, and expanded history metadata.
 - Focused UI assertions verify Quick Note action symmetry and that discarding a Notepad burst keeps the editor open and ready for another passage.
+- Focused UI assertions verify the idle Notepad microphone is centered and the active capsule orders waveform, stop, and burst discard on one baseline.
 - `./scripts/ios-dev-test.sh --dev --device-id 8FAE4F9F-4C53-5DFD-9C28-BBF0973DA3D3` built, installed, and launched MuesliDev on Picophone while preserving app data.
 
 ## Notes and follow-up

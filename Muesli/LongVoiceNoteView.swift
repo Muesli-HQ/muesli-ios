@@ -290,32 +290,8 @@ struct NotepadView: View {
     private var voiceControl: some View {
         Group {
             if isActivelyRecording {
-                HStack(spacing: MuesliTheme.spacing12) {
+                HStack {
                     Spacer()
-
-                    Button(role: .destructive, action: discardDictationBurst) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 52, height: 52)
-                            .background(MuesliTheme.destructive, in: Circle())
-                            .overlay {
-                                Circle()
-                                    .strokeBorder(.white.opacity(0.16), lineWidth: 1)
-                            }
-                            .shadow(
-                                color: MuesliTheme.destructive.opacity(0.26),
-                                radius: 12,
-                                x: 0,
-                                y: 7
-                            )
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Discard current dictation")
-                    .accessibilityHint("Removes only the passage currently being recorded")
-                    .accessibilityIdentifier("notepad.discardBurstButton")
-
                     activeVoicePill
                     Spacer()
                 }
@@ -328,6 +304,8 @@ struct NotepadView: View {
                     } else {
                         microphoneButton
                     }
+
+                    Spacer()
                 }
             }
         }
@@ -368,18 +346,37 @@ struct NotepadView: View {
             .accessibilityLabel("Live audio waveform")
             .accessibilityIdentifier("notepad.waveform")
 
-            Button(action: stopDictationBurst) {
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(MuesliTheme.accent)
-                    .frame(width: 42, height: 42)
-                    .background(.white, in: Circle())
-                    .contentShape(Circle())
+            HStack(spacing: MuesliTheme.spacing8) {
+                Button(action: stopDictationBurst) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .frame(width: 42, height: 42)
+                        .background(.white, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop dictation")
+                .accessibilityHint("Transcribes this passage and keeps the Notepad open")
+                .accessibilityIdentifier("notepad.stopButton")
+
+                Button(role: .destructive, action: discardDictationBurst) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 42, height: 42)
+                        .background(MuesliTheme.destructive, in: Circle())
+                        .overlay {
+                            Circle()
+                                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+                        }
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Discard current dictation")
+                .accessibilityHint("Removes only the passage currently being recorded")
+                .accessibilityIdentifier("notepad.discardBurstButton")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stop dictation")
-            .accessibilityHint("Transcribes this passage and keeps the Notepad open")
-            .accessibilityIdentifier("notepad.stopButton")
         }
         .padding(.leading, MuesliTheme.spacing16)
         .padding(.trailing, MuesliTheme.spacing8)

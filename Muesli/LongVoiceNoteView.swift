@@ -328,11 +328,14 @@ struct NotepadView: View {
                 VoiceNoteWaveformLeaf(
                     liveState: coordinator.voiceNoteLiveState,
                     mode: .level,
-                    color: MuesliTheme.accent,
+                    color: .white,
                     isActive: true,
                     barCount: 28
                 )
                 .frame(width: 116, height: 30)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Live audio waveform")
+                .accessibilityIdentifier("notepad.waveform")
 
                 Text(coordinator.longVoiceNoteAudioIsSecured ? "Audio saved locally" : "Listening")
                     .font(.system(size: 10, weight: .medium))

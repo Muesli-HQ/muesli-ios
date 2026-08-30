@@ -288,15 +288,30 @@ struct NotepadView: View {
     }
 
     private var voiceControl: some View {
-        HStack {
-            Spacer()
-
+        Group {
             if isActivelyRecording {
-                activeVoicePill
-            } else if isTranscribing || isStartingBurst {
-                processingPill
+                VStack(spacing: MuesliTheme.spacing4) {
+                    HStack {
+                        Spacer()
+                        activeVoicePill
+                    }
+
+                    Text(coordinator.longVoiceNoteAudioIsSecured ? "Audio saved locally" : "Listening")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .accessibilityIdentifier("notepad.recordingStatus")
+                }
             } else {
-                microphoneButton
+                HStack {
+                    Spacer()
+
+                    if isTranscribing || isStartingBurst {
+                        processingPill
+                    } else {
+                        microphoneButton
+                    }
+                }
             }
         }
         .padding(.horizontal, MuesliTheme.spacing20)
@@ -324,23 +339,17 @@ struct NotepadView: View {
 
     private var activeVoicePill: some View {
         HStack(spacing: MuesliTheme.spacing12) {
-            VStack(alignment: .leading, spacing: 2) {
-                VoiceNoteWaveformLeaf(
-                    liveState: coordinator.voiceNoteLiveState,
-                    mode: .level,
-                    color: .white,
-                    isActive: true,
-                    barCount: 28
-                )
-                .frame(width: 116, height: 30)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Live audio waveform")
-                .accessibilityIdentifier("notepad.waveform")
-
-                Text(coordinator.longVoiceNoteAudioIsSecured ? "Audio saved locally" : "Listening")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.78))
-            }
+            VoiceNoteWaveformLeaf(
+                liveState: coordinator.voiceNoteLiveState,
+                mode: .level,
+                color: .white,
+                isActive: true,
+                barCount: 28
+            )
+            .frame(width: 116, height: 30)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Live audio waveform")
+            .accessibilityIdentifier("notepad.waveform")
 
             Button(action: stopDictationBurst) {
                 Image(systemName: "stop.fill")

@@ -24,7 +24,7 @@ Clarify the non-meeting dictation experience without requiring a new backend or 
 - Balanced Quick Note discard and stop actions as an equal-sized, centered pair on the same baseline.
 - Added a Notepad burst-discard action beside the live waveform; it cancels only the passage currently being recorded and preserves the accumulated Notepad document.
 - Kept the idle and processing Notepad controls centered instead of letting the microphone drift back to the trailing edge after transcription.
-- Moved the Notepad burst-discard action inside the recording capsule, after the stop control at the capsule's right edge.
+- Moved both Notepad recording actions inside the capsule so discard sits left of the centered waveform and stop sits at its right edge.
 - Aligned the history playback control with the remaining metadata badges and omitted it for Notepad entries.
 
 ## Verification

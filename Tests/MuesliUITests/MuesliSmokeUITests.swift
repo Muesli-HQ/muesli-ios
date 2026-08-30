@@ -55,9 +55,14 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(waveform.exists)
         let discardBurst = app.buttons["notepad.discardBurstButton"]
         XCTAssertTrue(discardBurst.exists)
+        XCTAssertLessThan(discardBurst.frame.maxX, waveform.frame.minX)
         XCTAssertLessThan(waveform.frame.maxX, stopBurst.frame.minX)
-        XCTAssertLessThan(stopBurst.frame.maxX, discardBurst.frame.minX)
         XCTAssertEqual(stopBurst.frame.midY, discardBurst.frame.midY, accuracy: 1)
+        XCTAssertEqual(
+            waveform.frame.minX - discardBurst.frame.maxX,
+            stopBurst.frame.minX - waveform.frame.maxX,
+            accuracy: 1
+        )
         XCTAssertFalse(app.staticTexts["notepad.recordingStatus"].exists)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Notepad direct-start active state"

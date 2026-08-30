@@ -334,6 +334,23 @@ struct NotepadView: View {
 
     private var activeVoicePill: some View {
         HStack(spacing: MuesliTheme.spacing12) {
+            Button(role: .destructive, action: discardDictationBurst) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 42, height: 42)
+                    .background(MuesliTheme.destructive, in: Circle())
+                    .overlay {
+                        Circle()
+                            .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+                    }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Discard current dictation")
+            .accessibilityHint("Removes only the passage currently being recorded")
+            .accessibilityIdentifier("notepad.discardBurstButton")
+
             VoiceNoteWaveformLeaf(
                 liveState: coordinator.voiceNoteLiveState,
                 mode: .level,
@@ -346,40 +363,20 @@ struct NotepadView: View {
             .accessibilityLabel("Live audio waveform")
             .accessibilityIdentifier("notepad.waveform")
 
-            HStack(spacing: MuesliTheme.spacing8) {
-                Button(action: stopDictationBurst) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(MuesliTheme.accent)
-                        .frame(width: 42, height: 42)
-                        .background(.white, in: Circle())
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Stop dictation")
-                .accessibilityHint("Transcribes this passage and keeps the Notepad open")
-                .accessibilityIdentifier("notepad.stopButton")
-
-                Button(role: .destructive, action: discardDictationBurst) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 42, height: 42)
-                        .background(MuesliTheme.destructive, in: Circle())
-                        .overlay {
-                            Circle()
-                                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
-                        }
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Discard current dictation")
-                .accessibilityHint("Removes only the passage currently being recorded")
-                .accessibilityIdentifier("notepad.discardBurstButton")
+            Button(action: stopDictationBurst) {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .frame(width: 42, height: 42)
+                    .background(.white, in: Circle())
+                    .contentShape(Circle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop dictation")
+            .accessibilityHint("Transcribes this passage and keeps the Notepad open")
+            .accessibilityIdentifier("notepad.stopButton")
         }
-        .padding(.leading, MuesliTheme.spacing16)
-        .padding(.trailing, MuesliTheme.spacing8)
+        .padding(.horizontal, MuesliTheme.spacing8)
         .padding(.vertical, MuesliTheme.spacing8)
         .background(MuesliTheme.accent, in: Capsule())
         .shadow(color: MuesliTheme.accent.opacity(0.3), radius: 18, x: 0, y: 8)

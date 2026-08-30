@@ -1967,7 +1967,14 @@ final class DictationCoordinator {
 
         let restoredSessionID = restoreSessionID ?? sessionID
         cancelActiveRecording()
-        saveNotepadDocument(sessionID: restoredSessionID, text: documentText)
+        if restoredSessionID == sessionID {
+            preserveNotepadDocumentAfterDiscardingBurst(
+                sessionID: sessionID,
+                text: documentText
+            )
+        } else {
+            saveNotepadDocument(sessionID: restoredSessionID, text: documentText)
+        }
         presentedLongVoiceNoteSessionID = restoredSessionID
 
         guard restoredSessionID != sessionID else {
@@ -1997,6 +2004,50 @@ final class DictationCoordinator {
                     parameters: ["session_id": sessionID.uuidString]
                 )
             }
+        }
+    }
+
+    /// Keeps user-authored text from the first Notepad segment after its
+    /// recording is discarded. The spoken passage remains cancelled and its
+    /// audio is not retained, but the session becomes a completed text-only
+    /// document so it can be reopened from history.
+    func preserveNotepadDocumentAfterDiscardingBurst(sessionID: UUID, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            updateVoiceNoteScratchpad(sessionID: sessionID, text: text)
+            return
+        }
+
+        do {
+            guard var session = try store.activeRecordingSession(id: sessionID),
+                  session.startedAsNotepad,
+                  session.phase == .cancelled
+            else { return }
+
+            session.phase = .completed
+            session.endedAt = session.endedAt ?? .now
+            session.scratchpadText = text
+            session.audioFileName = nil
+            session.keepsAudioRecording = false
+            session.hasDurableAudioCheckpoint = false
+            session.protectedAudioUntilTranscriptCompletes = false
+            session.errorMessage = nil
+            try store.saveSession(session)
+
+            if let index = recordingSessions.firstIndex(where: { $0.id == sessionID }) {
+                recordingSessions[index] = session
+            }
+            upsertNotepadResult(for: session, text: text)
+        } catch {
+            clipboardStatusText = "Notepad save failed"
+            clearClipboardStatusSoon()
+            AppTelemetry.failure(
+                "notepad_document_save_failed",
+                domain: .persistence,
+                stage: "preserve_after_burst_discard",
+                error: error,
+                parameters: ["session_id": sessionID.uuidString]
+            )
         }
     }
 

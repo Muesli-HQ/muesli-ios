@@ -4,6 +4,80 @@ import SQLite3
 
 final class SharedStoreTests: XCTestCase {
     @MainActor
+    func testDiscardingFirstNotepadBurstPreservesManuallyTypedDocument() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = Muesli.SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let startedAt = Date(timeIntervalSinceReferenceDate: 1_000)
+        let session = Muesli.RecordingSession(
+            requestID: requestID,
+            kind: .quickDictation,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(2),
+            phase: .cancelled,
+            keepsAudioRecording: false,
+            engineIdentifier: "test",
+            source: "app",
+            isLongForm: true,
+            longFormActivatedAt: startedAt,
+            longFormThresholdSeconds: 60,
+            scratchpadText: ""
+        )
+        try store.saveSession(session)
+
+        let coordinator = DictationCoordinator(store: store)
+        coordinator.preserveNotepadDocumentAfterDiscardingBurst(
+            sessionID: session.id,
+            text: "Manually typed Notepad text"
+        )
+
+        let reopenedStore = Muesli.SharedStore(containerURL: directory)
+        let persistedSession = try XCTUnwrap(try reopenedStore.activeRecordingSession(id: session.id))
+        XCTAssertEqual(persistedSession.phase, .completed)
+        XCTAssertEqual(persistedSession.scratchpadText, "Manually typed Notepad text")
+        XCTAssertNil(persistedSession.audioFileName)
+        XCTAssertFalse(persistedSession.keepsAudioRecording)
+
+        let reopenedResult = try XCTUnwrap(try reopenedStore.resultsHistory().first)
+        XCTAssertEqual(reopenedResult.sessionID, session.id)
+        XCTAssertEqual(reopenedResult.requestID, requestID)
+        XCTAssertEqual(reopenedResult.text, "Manually typed Notepad text")
+    }
+
+    @MainActor
+    func testDiscardingEmptyFirstNotepadBurstDoesNotCreateDocument() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = Muesli.SharedStore(containerURL: directory)
+        let startedAt = Date(timeIntervalSinceReferenceDate: 2_000)
+        let session = Muesli.RecordingSession(
+            requestID: UUID(),
+            kind: .quickDictation,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(2),
+            phase: .cancelled,
+            isLongForm: true,
+            longFormActivatedAt: startedAt,
+            longFormThresholdSeconds: 60,
+            scratchpadText: ""
+        )
+        try store.saveSession(session)
+
+        let coordinator = DictationCoordinator(store: store)
+        coordinator.preserveNotepadDocumentAfterDiscardingBurst(
+            sessionID: session.id,
+            text: "  \n"
+        )
+
+        let persistedSession = try XCTUnwrap(try store.activeRecordingSession(id: session.id))
+        XCTAssertEqual(persistedSession.phase, .cancelled)
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+    }
+
+    @MainActor
     func testDiscardNotepadRemovesEveryBurstAndPersistedDocument() async throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

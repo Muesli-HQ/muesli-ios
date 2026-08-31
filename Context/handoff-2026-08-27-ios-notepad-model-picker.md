@@ -27,6 +27,10 @@ Clarify the non-meeting dictation experience without requiring a new backend or 
 - Moved both Notepad recording actions inside the capsule so discard sits left of the centered waveform and stop sits at its right edge.
 - Preserved manually typed Notepad text when the user discards the first spoken burst by completing a text-only history item while still cancelling its audio.
 - Aligned the history playback control with the remaining metadata badges and omitted it for Notepad entries.
+- Connected Notepad to the existing Keep Mic Ready audio engine. With the toggle enabled, stopping a burst leaves the microphone session warm instead of tearing down and rebuilding AVAudioEngine.
+- Decoupled Notepad capture from transcription: the next burst can start immediately while completed bursts transcribe serially in the background, preserving spoken order in one stable Notepad session.
+- Merged completed speech into the latest saved document and then into the live editor, so text typed while transcription is pending is retained.
+- Kept each Notepad burst's audio transient and removed it after transcription; the persistence schema remains unchanged.
 
 ## Verification
 
@@ -36,6 +40,10 @@ Clarify the non-meeting dictation experience without requiring a new backend or 
 - Focused UI assertions verify Quick Note action symmetry and that discarding a Notepad burst keeps the editor open and ready for another passage.
 - Focused UI assertions verify the idle Notepad microphone is centered and the active capsule orders waveform, stop, and burst discard on one baseline.
 - Persistence coverage verifies that discarding the first burst retains manually typed text as a reopenable Notepad without audio.
+- The full unit suite passed: 280 tests, 0 failures.
+- Focused Keep Mic Ready / Notepad persistence coverage passed: 11 tests, 0 failures.
+- Focused Notepad UI coverage passed: 2 tests, 0 failures (`testStartNotepadBeginsRecordingWithoutASecondMicTap` and `testEmptyNotepadIsAnEditorWithAReusableMicrophone`).
+- A generic iOS device build completed successfully with code signing disabled.
 - `./scripts/ios-dev-test.sh --dev --device-id 8FAE4F9F-4C53-5DFD-9C28-BBF0973DA3D3` built, installed, and launched MuesliDev on Picophone while preserving app data.
 
 ## Notes and follow-up

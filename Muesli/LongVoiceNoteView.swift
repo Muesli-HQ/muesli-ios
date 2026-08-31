@@ -96,6 +96,9 @@ struct NotepadView: View {
                 handleCompletedSegment()
             }
         }
+        .onChange(of: coordinator.notepadBurstCompletions) { _, _ in
+            applyPipelinedNotepadCompletions()
+        }
         .onChange(of: coordinator.isRecording) { _, recording in
             if recording { isStartingBurst = false }
         }
@@ -299,7 +302,8 @@ struct NotepadView: View {
                 HStack {
                     Spacer()
 
-                    if isTranscribing || isStartingBurst {
+                    if isStartingBurst
+                        || (isTranscribing && !coordinator.canStartNotepadBurst(sessionID: sessionID)) {
                         processingPill
                     } else {
                         microphoneButton
@@ -408,6 +412,7 @@ struct NotepadView: View {
         } else {
             documentText = saved
         }
+        applyPipelinedNotepadCompletions()
 
     }
 
@@ -420,9 +425,11 @@ struct NotepadView: View {
     private func beginDictationBurst() {
         isEditorFocused = false
         flushDocument()
-        pendingReplacementSessionID = canonicalSessionID
+        pendingReplacementSessionID = coordinator.usesPipelinedNotepadCapture(sessionID: sessionID)
+            ? nil
+            : canonicalSessionID
         isStartingBurst = true
-        coordinator.startNotepadRecording(seedText: documentText)
+        coordinator.startNotepadRecording(seedText: documentText, sessionID: sessionID)
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             if !coordinator.isRecording && !isTranscribing {
@@ -450,6 +457,10 @@ struct NotepadView: View {
     }
 
     private func handleCompletedSegment() {
+        if coordinator.usesPipelinedNotepadCapture(sessionID: sessionID) {
+            applyPipelinedNotepadCompletions()
+            return
+        }
         guard !processedSessionIDs.contains(sessionID),
               let transcript = currentTranscript
         else { return }
@@ -461,6 +472,22 @@ struct NotepadView: View {
             text: documentText,
             replacing: pendingReplacementSessionID
         )
+        canonicalSessionID = sessionID
+        pendingReplacementSessionID = nil
+        isStartingBurst = false
+    }
+
+    private func applyPipelinedNotepadCompletions() {
+        let completions = coordinator.consumeNotepadBurstCompletions(sessionID: sessionID)
+        guard !completions.isEmpty else { return }
+
+        for completion in completions {
+            documentText = NotepadDocumentComposer.appending(
+                segment: completion.text,
+                to: documentText
+            )
+        }
+        coordinator.saveNotepadDocument(sessionID: sessionID, text: documentText)
         canonicalSessionID = sessionID
         pendingReplacementSessionID = nil
         isStartingBurst = false

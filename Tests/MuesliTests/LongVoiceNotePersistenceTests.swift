@@ -20,6 +20,36 @@ final class LongVoiceNotePersistenceTests: XCTestCase {
         )
     }
 
+    func testNotepadComposerPreservesTextTypedWhileBurstTranscribes() {
+        let typedWhileWaiting = "Existing dictated text. Manually typed follow-up."
+
+        let completed = NotepadDocumentComposer.appending(
+            segment: "Next dictated passage.",
+            to: typedWhileWaiting
+        )
+
+        XCTAssertEqual(
+            completed,
+            "Existing dictated text. Manually typed follow-up. Next dictated passage."
+        )
+    }
+
+    func testNotepadComposerPreservesBurstCompletionOrder() {
+        let firstCompleted = NotepadDocumentComposer.appending(
+            segment: "First queued passage.",
+            to: "Typed heading"
+        )
+        let secondCompleted = NotepadDocumentComposer.appending(
+            segment: "Second queued passage.",
+            to: firstCompleted
+        )
+
+        XCTAssertEqual(
+            secondCompleted,
+            "Typed heading First queued passage. Second queued passage."
+        )
+    }
+
     func testNotepadComposerUsesFirstLineAsCompactTitle() {
         XCTAssertEqual(
             NotepadDocumentComposer.title(

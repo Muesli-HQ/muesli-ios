@@ -26,6 +26,7 @@ final class KeyboardController {
     /// there always says "unchanged".
     private var lastRecordedHandoff: (requestID: UUID, phase: KeyboardHandoffPhase)?
     private var lastLevelFreshness: Bool?
+    private var pendingModelRawValue: String?
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -38,6 +39,7 @@ final class KeyboardController {
     var liveTranscript = ""
     var inputLevel = 0.0
     var isLaunchSettled = false
+    var modelCatalog: KeyboardTranscriptionModelCatalog?
     private var lastInsertedCharacterCount = 0
     private var canUseRuntimeStart = false
 
@@ -154,6 +156,28 @@ final class KeyboardController {
         [.requested, .recording, .transcribing].contains(dictationPhase)
     }
 
+    var selectedTranscriptionModel: KeyboardTranscriptionModelOption? {
+        modelCatalog?.selectedModel
+    }
+
+    var readyTranscriptionModels: [KeyboardTranscriptionModelOption] {
+        modelCatalog?.readyModels ?? []
+    }
+
+    var canSelectTranscriptionModel: Bool {
+        modelCatalog?.canSelectModels == true
+            && !showsActiveWaveform
+            && pendingModelRawValue == nil
+    }
+
+    var modelChipTitle: String {
+        selectedTranscriptionModel?.shortName ?? "Model"
+    }
+
+    var isModelSelectionPending: Bool {
+        pendingModelRawValue != nil
+    }
+
     var settingsURL: URL? {
         var components = URLComponents()
         components.scheme = MuesliAppConstants.urlScheme
@@ -218,6 +242,23 @@ final class KeyboardController {
             hasLatestDictation = true
             statusText = "Inserted"
         } catch {
+            statusText = "Enable Full Access"
+        }
+    }
+
+    func selectTranscriptionModel(_ model: KeyboardTranscriptionModelOption) {
+        guard model.isReady,
+              model.rawValue != modelCatalog?.selectedRawValue,
+              canSelectTranscriptionModel
+        else { return }
+
+        do {
+            pendingModelRawValue = model.rawValue
+            try store.saveKeyboardModelSelectionRequest(.init(modelRawValue: model.rawValue))
+            statusText = "Switching to \(model.shortName)"
+            KeyboardDiagnosticsLog.record("model.select", ["model": model.rawValue])
+        } catch {
+            pendingModelRawValue = nil
             statusText = "Enable Full Access"
         }
     }
@@ -414,11 +455,13 @@ final class KeyboardController {
                 switch event {
                 case .runtimeStatusChanged:
                     self.refreshRuntimeStatus()
+                case .modelCatalogChanged:
+                    self.refreshModelCatalog()
                 case .liveTranscriptChanged:
                     self.refreshLiveTranscript()
                 case .handoffStatusChanged, .resultChanged, .ownershipChanged:
                     self.refreshLatestDictation()
-                case .commandChanged:
+                case .commandChanged, .modelSelectionRequested:
                     break
                 }
             }
@@ -455,6 +498,7 @@ final class KeyboardController {
 
     private func refreshLatestDictation() {
         do {
+            refreshModelCatalog()
             let runtimeStatus = try store.keyboardRuntimeStatus()
             latestRuntimeStatus = runtimeStatus
             apply(runtimeStatus: runtimeStatus)
@@ -503,6 +547,20 @@ final class KeyboardController {
         } catch {
             apply(runtimeStatus: latestRuntimeStatus)
             statusText = "Waiting for Full Access"
+        }
+    }
+
+    private func refreshModelCatalog() {
+        guard let catalog = try? store.keyboardModelCatalog() else { return }
+        modelCatalog = catalog
+        guard let pendingModelRawValue else { return }
+
+        if catalog.selectedRawValue == pendingModelRawValue {
+            self.pendingModelRawValue = nil
+            statusText = "\(catalog.selectedModel?.shortName ?? "Model") ready"
+        } else if (try? store.keyboardModelSelectionRequest()) == nil {
+            self.pendingModelRawValue = nil
+            statusText = catalog.canSelectModels ? "Model unchanged" : "Finish recording to switch"
         }
     }
 

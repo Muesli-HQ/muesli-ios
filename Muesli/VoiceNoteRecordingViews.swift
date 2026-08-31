@@ -5,6 +5,7 @@ struct VoiceNoteWaveformLeaf: View {
     let mode: MuesliFloatingWaveformMode
     let color: Color
     let isActive: Bool
+    var style: MuesliInlineWaveformStyle = .monochrome
     var barCount = 32
     var usesPreviewSignal = false
 
@@ -15,6 +16,7 @@ struct VoiceNoteWaveformLeaf: View {
             mode: mode,
             color: color,
             level: displayedLevel,
+            style: style,
             isActive: isActive,
             barCount: barCount,
             refreshDriver: .inputLevel
@@ -70,6 +72,7 @@ struct VoiceNoteElapsedBadge: View {
                 .clipShape(Capsule())
                 .accessibilityLabel("Recording elapsed time")
                 .accessibilityValue(value)
+                .accessibilityIdentifier("voiceNote.elapsedBadge")
         }
     }
 }

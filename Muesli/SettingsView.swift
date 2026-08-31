@@ -872,7 +872,7 @@ private struct LongVoiceNoteSettingsRow: View {
             SettingsToggleRow(
                 icon: "waveform.path.ecg",
                 title: "Long Voice Note Mode",
-                detail: "Switch to memo mode after longer recordings.",
+                detail: "Open Long Voice Note after longer recordings.",
                 isOn: $isEnabled
             )
 

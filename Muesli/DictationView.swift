@@ -5,6 +5,20 @@ import CoreText
 import UIKit
 #endif
 
+private enum DashboardCaptureMode: String, CaseIterable, Identifiable {
+    case quickNote
+    case notepad
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .quickNote: "Quick Note"
+        case .notepad: "Notepad"
+        }
+    }
+}
+
 struct DictationView: View {
     @Bindable var coordinator: DictationCoordinator
     var isActive = true
@@ -13,13 +27,12 @@ struct DictationView: View {
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
-    @AppStorage(MuesliPreferences.longVoiceNoteModeEnabledKey) private var longVoiceNoteModeEnabled = true
-    @AppStorage(MuesliPreferences.longVoiceNoteThresholdSecondsKey) private var longVoiceNoteThresholdSeconds = 60
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
     @State private var dashboardStats = DictationDashboardStats.empty
     @State private var navigationPath = NavigationPath()
+    @State private var captureMode: DashboardCaptureMode = .quickNote
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -312,130 +325,147 @@ struct DictationView: View {
             isInteractive: true
         ) {
             VStack(spacing: MuesliTheme.spacing12) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Voice Note")
-                            .font(MuesliTheme.title3())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                        Text(coordinator.statusText)
-                            .font(MuesliTheme.callout())
-                            .foregroundStyle(statusColor)
-                            .contentTransition(.identity)
-                            .transaction { transaction in
-                                transaction.animation = nil
+                Picker("Capture mode", selection: $captureMode) {
+                    ForEach(DashboardCaptureMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 240)
+                .disabled(coordinator.isRecording || isTranscribing)
+
+                Group {
+                    if isWaveformActive {
+                        VStack(spacing: MuesliTheme.spacing4) {
+                            HStack {
+                                Spacer(minLength: 0)
+
+                                if coordinator.isRecording {
+                                    VoiceNoteElapsedBadge(
+                                        liveState: coordinator.voiceNoteLiveState,
+                                        color: statusColor,
+                                        isActive: isActive
+                                    )
+                                    .accessibilityIdentifier("dictation.elapsedBadge")
+                                }
                             }
-                    }
+                            .frame(height: 22)
+                            .padding(.horizontal, MuesliTheme.spacing8)
 
-                    Spacer()
-
-                    VStack(alignment: .trailing, spacing: MuesliTheme.spacing8) {
-                        if coordinator.isRecording {
-                            VoiceNoteElapsedBadge(
+                            VoiceNoteWaveformLeaf(
                                 liveState: coordinator.voiceNoteLiveState,
+                                mode: recorderWaveformMode,
                                 color: statusColor,
-                                isActive: isActive
+                                isActive: isActive,
+                                barCount: 40,
+                                usesPreviewSignal: isPreviewWaveformActive
                             )
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 42)
+                            .padding(.horizontal, MuesliTheme.spacing12)
+                            .accessibilityIdentifier("dictation.waveformBars")
+
+                            Text(recorderWaveformStatus)
+                                .font(MuesliTheme.captionMedium())
+                                .foregroundStyle(MuesliTheme.textSecondary)
                         }
-
-                        microphoneMenu
-                            .disabled(coordinator.isRecording)
-                    }
-                }
-
-                if isWaveformActive {
-                    VStack(spacing: MuesliTheme.spacing8) {
-                        VoiceNoteWaveformLeaf(
-                            liveState: coordinator.voiceNoteLiveState,
-                            mode: isListeningWaveformActive ? .level : .waiting,
-                            color: statusColor,
-                            isActive: isActive,
-                            barCount: 32,
-                            usesPreviewSignal: isPreviewWaveformActive
-                        )
                         .frame(maxWidth: .infinity)
-                        .frame(height: 54)
-                        .padding(.horizontal, MuesliTheme.spacing16)
+                        .frame(height: 104)
+                        .muesliGlassSurface(
+                            cornerRadius: MuesliTheme.cornerMedium,
+                            tint: statusColor
+                        )
+                        .accessibilityIdentifier("dictation.waveform")
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    } else {
+                        VStack(spacing: MuesliTheme.spacing8) {
+                            HStack(spacing: MuesliTheme.spacing8) {
+                                transcriptionModelMenu
+                                Spacer(minLength: MuesliTheme.spacing8)
+                                microphoneMenu
+                            }
 
-                        Text(isListeningWaveformActive ? "Listening" : "Transcribing")
-                            .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(MuesliTheme.textSecondary)
+                            if let idleRecorderStatusMessage {
+                                Text(idleRecorderStatusMessage)
+                                    .font(MuesliTheme.caption())
+                                    .foregroundStyle(statusColor)
+                                    .multilineTextAlignment(.center)
+                                    .transition(.opacity)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 44)
+                        .transition(.opacity)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, MuesliTheme.spacing16)
-                    .muesliGlassSurface(cornerRadius: MuesliTheme.cornerMedium, tint: statusColor)
                 }
+                .animation(.easeInOut(duration: 0.20), value: isWaveformActive)
 
                 if shouldReserveRealtimeTranscript {
                     VoiceNoteLiveTranscriptRegion(liveState: coordinator.voiceNoteLiveState)
                 }
 
-                VStack(spacing: MuesliTheme.spacing8) {
-                    Button {
-                        coordinator.toggleRecording()
-                    } label: {
-                        VoiceNoteRecordButtonLabel(
-                            title: dictationButtonTitle,
-                            systemImage: dictationButtonIcon,
-                            color: statusColor,
-                            isStopState: coordinator.isRecording,
-                            isDisabled: isDictationButtonDisabled
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isDictationButtonDisabled)
-                    .sensoryFeedback(.impact, trigger: coordinator.isRecording)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(dictationButtonTitle)
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityIdentifier("dictation.primaryButton")
-
+                Group {
                     if coordinator.isRecording {
-                        Button(role: .destructive) {
-                            coordinator.cancelActiveRecording()
-                        } label: {
-                            Label("Discard Recording", systemImage: "xmark")
-                                .font(MuesliTheme.captionMedium())
-                                .foregroundStyle(MuesliTheme.destructive)
-                                .frame(maxWidth: .infinity)
-                                .frame(minHeight: 44)
-                                .background(MuesliTheme.destructive.opacity(0.07))
-                                .overlay(
-                                    Capsule()
-                                        .strokeBorder(MuesliTheme.destructive.opacity(0.22), lineWidth: 1)
+                        HStack(spacing: MuesliTheme.spacing24) {
+                            Button(role: .destructive) {
+                                coordinator.cancelActiveRecording()
+                            } label: {
+                                VoiceNoteRecordingActionLabel(
+                                    title: "Discard",
+                                    systemImage: "xmark",
+                                    color: MuesliTheme.destructive
                                 )
-                                .clipShape(Capsule())
-                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Discard Recording")
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityIdentifier("dictation.cancelButton")
+
+                            Button {
+                                toggleCapture()
+                            } label: {
+                                VoiceNoteRecordingActionLabel(
+                                    title: "Stop Recording",
+                                    systemImage: "stop.fill",
+                                    color: MuesliTheme.recordingStop
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .sensoryFeedback(.impact, trigger: coordinator.isRecording)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Stop Recording")
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityIdentifier("dictation.primaryButton")
+                        }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Button {
+                            toggleCapture()
+                        } label: {
+                            VoiceNoteRecordButtonLabel(
+                                title: dictationButtonTitle,
+                                systemImage: dictationButtonIcon,
+                                color: statusColor,
+                                isStopState: false,
+                                isDisabled: isDictationButtonDisabled
+                            )
                         }
                         .buttonStyle(.plain)
-                        .accessibilityIdentifier("dictation.cancelButton")
+                        .disabled(isDictationButtonDisabled)
+                        .sensoryFeedback(.impact, trigger: coordinator.isRecording)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(dictationButtonTitle)
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityIdentifier("dictation.primaryButton")
                     }
                 }
-                .padding(.top, isWaveformActive || shouldReserveRealtimeTranscript ? 0 : MuesliTheme.spacing4)
+                .padding(.top, 0)
 
-                if longVoiceNoteModeEnabled && !coordinator.isRecording {
-                    Button {
-                        coordinator.openLongVoiceNoteSettings()
-                    } label: {
-                        HStack(spacing: MuesliTheme.spacing8) {
-                            Image(systemName: "waveform.path.ecg")
-                                .foregroundStyle(MuesliTheme.accent)
-                            Text("Long mode after \(longModeThresholdLabel)")
-                                .font(MuesliTheme.captionMedium())
-                                .foregroundStyle(MuesliTheme.textSecondary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(MuesliTheme.textTertiary)
-                        }
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Opens Long Voice Note settings")
-                }
-
-                if shouldShowKeyboardSetupRow && !shouldHideKeyboardSetupRowForMockPreview && !coordinator.isRecording {
+                if shouldShowKeyboardSetupRow && !shouldHideKeyboardSetupRowForMockPreview {
                     keyboardShortcutRow
+                        .opacity(coordinator.isRecording ? 0 : 1)
+                        .allowsHitTesting(!coordinator.isRecording)
                 }
             }
             .padding(MuesliTheme.spacing16)
@@ -443,8 +473,54 @@ struct DictationView: View {
         .accessibilityIdentifier("dictation.recorderPanel")
     }
 
-    private var longModeThresholdLabel: String {
-        MuesliPreferences.longVoiceNoteThresholdLabel(longVoiceNoteThresholdSeconds)
+    private func toggleCapture() {
+        if coordinator.isRecording {
+            coordinator.toggleRecording()
+        } else if captureMode == .notepad {
+            coordinator.startNotepadRecording()
+        } else {
+            coordinator.toggleRecording()
+        }
+    }
+
+    private var transcriptionModelMenu: some View {
+        Menu {
+            Section("Ready models") {
+                ForEach(LocalTranscriptionModel.allCases.filter(\.isDownloaded)) { model in
+                    Button {
+                        coordinator.selectTranscriptionModel(model)
+                    } label: {
+                        Label(
+                            model.displayName,
+                            systemImage: model == coordinator.selectedTranscriptionModel
+                                ? "checkmark"
+                                : "circle"
+                        )
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(MuesliTheme.success)
+                    .frame(width: 7, height: 7)
+                Text(coordinator.selectedTranscriptionModel.shortName)
+                    .font(MuesliTheme.captionMedium())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(MuesliTheme.textPrimary)
+            .padding(.horizontal, MuesliTheme.spacing8)
+            .frame(height: 36)
+            .background(MuesliTheme.accent.opacity(0.10), in: Capsule())
+            .overlay(Capsule().strokeBorder(MuesliTheme.accent.opacity(0.28), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .menuOrder(.fixed)
+        .accessibilityLabel("Transcription model")
+        .accessibilityValue(coordinator.selectedTranscriptionModel.displayName)
     }
 
     private var microphoneMenu: some View {
@@ -465,13 +541,15 @@ struct DictationView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "mic")
+                    .font(.system(size: 13, weight: .semibold))
                 Text(coordinator.audioInputRouteText)
+                    .font(MuesliTheme.captionMedium())
                     .lineLimit(1)
+                    .minimumScaleFactor(0.72)
             }
-            .font(MuesliTheme.captionMedium())
             .foregroundStyle(MuesliTheme.textSecondary)
             .padding(.horizontal, MuesliTheme.spacing8)
-            .frame(minHeight: 44)
+            .frame(height: 36)
             .background(MuesliTheme.surfacePrimary)
             .clipShape(Capsule())
             .contentShape(Capsule())
@@ -580,20 +658,27 @@ struct DictationView: View {
                                 onDelete: { Task { await coordinator.deleteRecoverableVoiceNote(session) } }
                             )
                         case .completed(let result, let session):
-                            let hasRetainedAudio = session?.keepsAudioRecording == true
-                                && session.flatMap { coordinator.audioFileURL(for: $0) } != nil
-                            let canOpen = session?.isLongForm == true || hasRetainedAudio
+                            let isNotepad = session?.startedAsNotepad == true
+                            let hasPlayableAudio = !isNotepad
+                                && session?.keepsAudioRecording == true
+                                && (
+                                    session.flatMap { coordinator.audioFileURL(for: $0) } != nil
+                                    || shouldUseMockDictations
+                                )
+                            let canOpen = session?.isLongForm == true || hasPlayableAudio
 
                             DictationHistoryRow(
                                 result: result,
                                 session: session,
-                                hasRetainedAudio: hasRetainedAudio,
                                 onOpen: canOpen ? {
                                     openCompletedVoiceNote(
                                         result: result,
                                         session: session,
-                                        hasRetainedAudio: hasRetainedAudio
+                                        hasPlayableAudio: hasPlayableAudio
                                     )
+                                } : nil,
+                                onPlay: hasPlayableAudio ? {
+                                    navigationPath.append(result.id)
                                 } : nil,
                                 onCopy: { coordinator.copyToClipboard(result) },
                                 onDelete: { Task { await coordinator.deleteDictation(result) } }
@@ -626,11 +711,11 @@ struct DictationView: View {
     private func openCompletedVoiceNote(
         result: DictationResult,
         session: RecordingSession?,
-        hasRetainedAudio: Bool
+        hasPlayableAudio: Bool
     ) {
         if let session, session.isLongForm {
             coordinator.openLongVoiceNote(session)
-        } else if hasRetainedAudio {
+        } else if hasPlayableAudio {
             navigationPath.append(result.id)
         }
     }
@@ -664,7 +749,7 @@ struct DictationView: View {
     }
 
     private var shouldHideKeyboardSetupRowForMockPreview: Bool {
-        shouldUseMockDictations
+        shouldUseMockDictations || isPreviewWaveformActive
     }
 
     private var emptyHistory: some View {
@@ -721,6 +806,35 @@ struct DictationView: View {
         coordinator.statusText == "Transcribing"
     }
 
+    private var recorderWaveformMode: MuesliFloatingWaveformMode {
+        if isListeningWaveformActive {
+            .level
+        } else if isTranscribing {
+            .waiting
+        } else {
+            .idle
+        }
+    }
+
+    private var recorderWaveformStatus: String {
+        if isListeningWaveformActive {
+            "Listening"
+        } else if isTranscribing {
+            "Transcribing"
+        } else {
+            "Ready"
+        }
+    }
+
+    private var idleRecorderStatusMessage: String? {
+        let status = coordinator.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !status.isEmpty,
+              status != "Ready",
+              !status.lowercased().hasSuffix(" ready")
+        else { return nil }
+        return status
+    }
+
     private var shouldReserveRealtimeTranscript: Bool {
         isActive
             && coordinator.selectedTranscriptionModel.supportsRealtimeStreaming
@@ -737,7 +851,7 @@ struct DictationView: View {
         } else if isTranscribing {
             "Transcribing"
         } else {
-            "Start Voice Note"
+            captureMode == .notepad ? "Start Notepad" : "Start Quick Note"
         }
     }
 
@@ -837,6 +951,8 @@ struct DictationView: View {
                 startedAt: now.addingTimeInterval(-185),
                 endedAt: now,
                 phase: .completed,
+                audioFileName: "mock-long-voice-note.wav",
+                keepsAudioRecording: true,
                 source: "ios",
                 isLongForm: true,
                 longFormActivatedAt: now.addingTimeInterval(-125),
@@ -1062,7 +1178,7 @@ private struct VoiceNoteRecordButtonLabel: View {
                     .shadow(color: .black.opacity(0.20), radius: 7, x: 0, y: 5)
 
                 Image(systemName: systemImage)
-                    .font(.system(size: isStopState ? 26 : 24, weight: .semibold))
+                    .font(.system(size: 23, weight: .semibold))
                     .foregroundStyle(iconColor)
             }
 
@@ -1071,20 +1187,20 @@ private struct VoiceNoteRecordButtonLabel: View {
                 .foregroundStyle(titleColor)
         }
         .frame(maxWidth: .infinity)
-        .frame(minHeight: isStopState ? 112 : 98)
+        .frame(height: 92)
         .contentShape(Rectangle())
     }
 
     private var haloSize: CGFloat {
-        isStopState ? 96 : 84
+        78
     }
 
     private var outerRingSize: CGFloat {
-        isStopState ? 88 : 76
+        70
     }
 
     private var innerCircleSize: CGFloat {
-        isStopState ? 74 : 64
+        60
     }
 
     private var outerRingFill: Color {
@@ -1092,7 +1208,7 @@ private struct VoiceNoteRecordButtonLabel: View {
             return MuesliTheme.surfacePrimary.opacity(0.72)
         }
         if isStopState {
-            return MuesliTheme.destructive.opacity(0.20)
+            return MuesliTheme.recordingStop.opacity(0.24)
         }
         return color.opacity(0.18)
     }
@@ -1102,7 +1218,7 @@ private struct VoiceNoteRecordButtonLabel: View {
             return MuesliTheme.surfaceBorder
         }
         if isStopState {
-            return MuesliTheme.destructive.opacity(0.42)
+            return MuesliTheme.recordingStop.opacity(0.58)
         }
         return color.opacity(0.54)
     }
@@ -1116,8 +1232,8 @@ private struct VoiceNoteRecordButtonLabel: View {
         }
         if isStopState {
             return [
-                MuesliTheme.destructive.opacity(0.88),
-                MuesliTheme.destructive.opacity(0.52)
+                MuesliTheme.recordingStop,
+                MuesliTheme.recordingStop.opacity(0.86)
             ]
         }
         return [
@@ -1130,7 +1246,7 @@ private struct VoiceNoteRecordButtonLabel: View {
         if isDisabled {
             MuesliTheme.surfaceBorder
         } else if isStopState {
-            MuesliTheme.destructive.opacity(0.38)
+            MuesliTheme.recordingStop.opacity(0.52)
         } else {
             color.opacity(0.36)
         }
@@ -1141,7 +1257,7 @@ private struct VoiceNoteRecordButtonLabel: View {
             return .clear
         }
         if isStopState {
-            return MuesliTheme.destructive.opacity(0.16)
+            return MuesliTheme.recordingStop.opacity(0.28)
         }
         return MuesliTheme.accent.opacity(0.18)
     }
@@ -1160,10 +1276,38 @@ private struct VoiceNoteRecordButtonLabel: View {
         if isDisabled {
             MuesliTheme.textTertiary
         } else if isStopState {
-            MuesliTheme.destructive
+            MuesliTheme.textPrimary
         } else {
             MuesliTheme.textPrimary
         }
+    }
+}
+
+private struct VoiceNoteRecordingActionLabel: View {
+    let title: String
+    let systemImage: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: MuesliTheme.spacing8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 64, height: 64)
+                .background(color, in: Circle())
+                .overlay {
+                    Circle()
+                        .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+                }
+                .shadow(color: color.opacity(0.28), radius: 12, x: 0, y: 7)
+
+            Text(title)
+                .font(MuesliTheme.captionMedium())
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .lineLimit(1)
+        }
+        .frame(width: 128, height: 92)
+        .contentShape(Rectangle())
     }
 }
 
@@ -1344,8 +1488,8 @@ private struct DictationSourceFilterPicker: View {
 private struct DictationHistoryRow: View {
     let result: DictationResult
     let session: RecordingSession?
-    let hasRetainedAudio: Bool
     let onOpen: (() -> Void)?
+    let onPlay: (() -> Void)?
     let onCopy: () -> Void
     let onDelete: () -> Void
     @State private var isConfirmingDelete = false
@@ -1421,14 +1565,23 @@ private struct DictationHistoryRow: View {
 
                 Spacer(minLength: MuesliTheme.spacing8)
 
-                if hasRetainedAudio {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(MuesliTheme.accent)
-                        .accessibilityHidden(true)
+                if let onPlay {
+                    Button(action: onPlay) {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(MuesliTheme.accent)
+                            .frame(width: 24, height: 24)
+                            .padding(10)
+                            .contentShape(Circle())
+                            .padding(-10)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Play saved audio")
+                    .accessibilityIdentifier("voiceNote.playAudio")
                 }
 
-                if session?.hasUserAuthoredNotes == true {
+                if session?.hasUserAuthoredNotes == true,
+                   session?.startedAsNotepad != true {
                     VoiceNoteAttributeIcon(
                         systemImage: "note.text",
                         accessibilityLabel: "Has manual notes",
@@ -1439,8 +1592,8 @@ private struct DictationHistoryRow: View {
 
                 if session?.isLongForm == true {
                     VoiceNoteAttributeIcon(
-                        systemImage: "clock",
-                        accessibilityLabel: "Long voice note",
+                        systemImage: session?.startedAsNotepad == true ? "book.closed" : "clock",
+                        accessibilityLabel: session?.startedAsNotepad == true ? "Notepad" : "Long voice note",
                         identifier: "voiceNote.badge.longForm",
                         tint: MuesliTheme.accent
                     )

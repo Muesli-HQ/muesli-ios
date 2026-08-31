@@ -125,6 +125,73 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertEqual(controller.liveTranscript, "")
     }
 
+    // MARK: - Model selection
+
+    func testReadyModelCanBeSelectedThroughSharedRequestChannel() throws {
+        let parakeet = KeyboardTranscriptionModelOption(
+            rawValue: "parakeet-tdt-ctc-110m",
+            displayName: "Parakeet 110M",
+            shortName: "Parakeet 110M",
+            capabilityLabel: "English only",
+            isReady: true
+        )
+        let whisper = KeyboardTranscriptionModelOption(
+            rawValue: "whisper-tiny-en",
+            displayName: "Whisper Tiny English",
+            shortName: "Whisper Tiny",
+            capabilityLabel: "English only",
+            isReady: true
+        )
+        try store.saveKeyboardModelCatalog(.init(
+            selectedRawValue: parakeet.rawValue,
+            models: [parakeet, whisper],
+            canSelectModels: true
+        ))
+
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.modelChipTitle, "Parakeet 110M")
+        XCTAssertEqual(controller.readyTranscriptionModels, [parakeet, whisper])
+
+        controller.selectTranscriptionModel(whisper)
+
+        XCTAssertEqual(
+            try store.keyboardModelSelectionRequest()?.modelRawValue,
+            whisper.rawValue
+        )
+        XCTAssertTrue(controller.isModelSelectionPending)
+        XCTAssertTrue(bus.postedEvents.contains(.modelSelectionRequested))
+    }
+
+    func testModelSelectionIsDisabledDuringActiveDictation() throws {
+        let parakeet = KeyboardTranscriptionModelOption(
+            rawValue: "parakeet-tdt-ctc-110m",
+            displayName: "Parakeet 110M",
+            shortName: "Parakeet 110M",
+            capabilityLabel: "English only",
+            isReady: true
+        )
+        let whisper = KeyboardTranscriptionModelOption(
+            rawValue: "whisper-tiny-en",
+            displayName: "Whisper Tiny English",
+            shortName: "Whisper Tiny",
+            capabilityLabel: "English only",
+            isReady: true
+        )
+        try store.saveKeyboardModelCatalog(.init(
+            selectedRawValue: parakeet.rawValue,
+            models: [parakeet, whisper],
+            canSelectModels: true
+        ))
+        try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.6))
+        try store.saveKeyboardHandoffState(handoff(.recordingStarted))
+
+        controller.prepareInitialPresentationState()
+        controller.selectTranscriptionModel(whisper)
+
+        XCTAssertFalse(controller.canSelectTranscriptionModel)
+        XCTAssertNil(try store.keyboardModelSelectionRequest())
+    }
+
     // MARK: - Terminal states
 
     func testAnInsertedSessionLeavesNoActiveCard() throws {

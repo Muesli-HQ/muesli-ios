@@ -18,9 +18,107 @@ final class MuesliSmokeUITests: XCTestCase {
         let app = launchApp()
 
         XCTAssertTrue(app.staticTexts["muesli"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Voice Note"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Start Voice Note"].exists)
+        XCTAssertTrue(app.buttons["Quick Note"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Notepad"].exists)
+        XCTAssertTrue(app.staticTexts["Start Quick Note"].exists)
         XCTAssertTrue(app.staticTexts["Recent Voice Notes"].exists)
+        XCTAssertTrue(app.buttons["Transcription model"].exists)
+        XCTAssertFalse(app.staticTexts["Listening"].exists)
+
+        app.buttons["Notepad"].tap()
+        XCTAssertTrue(app.staticTexts["Start Notepad"].waitForExistence(timeout: 3))
+    }
+
+    func testStartNotepadBeginsRecordingWithoutASecondMicTap() {
+        addUIInterruptionMonitor(withDescription: "Microphone permission") { alert in
+            let allowButton = alert.buttons["Allow"]
+            guard allowButton.exists else { return false }
+            allowButton.tap()
+            return true
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-direct-start-notepad",
+        ]
+        app.launch()
+        app.buttons["Notepad"].tap()
+        let startNotepad = app.buttons.matching(NSPredicate(format: "label == %@", "Start Notepad")).firstMatch
+        XCTAssertTrue(startNotepad.waitForExistence(timeout: 3))
+        startNotepad.tap()
+
+        XCTAssertTrue(app.textViews["notepad.editor"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["notepad.stopButton"].exists)
+        let waveform = app.otherElements["notepad.waveform"]
+        let stopBurst = app.buttons["notepad.stopButton"]
+        XCTAssertTrue(waveform.exists)
+        let discardBurst = app.buttons["notepad.discardBurstButton"]
+        XCTAssertTrue(discardBurst.exists)
+        XCTAssertLessThan(discardBurst.frame.maxX, waveform.frame.minX)
+        XCTAssertLessThan(waveform.frame.maxX, stopBurst.frame.minX)
+        XCTAssertEqual(stopBurst.frame.midY, discardBurst.frame.midY, accuracy: 1)
+        XCTAssertEqual(
+            waveform.frame.minX - discardBurst.frame.maxX,
+            stopBurst.frame.minX - waveform.frame.maxX,
+            accuracy: 1
+        )
+        XCTAssertFalse(app.staticTexts["notepad.recordingStatus"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Notepad direct-start active state"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        discardBurst.tap()
+        XCTAssertTrue(app.textViews["notepad.editor"].exists)
+        XCTAssertTrue(app.buttons["notepad.microphoneButton"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["notepad.stopButton"].exists)
+    }
+
+    func testActiveCapturePreviewReplacesModelControlWithWaveform() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-preview-waveform",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Listening"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["Transcription model"].exists)
+    }
+
+    func testActiveQuickNoteUsesDedicatedStopAndDiscardControls() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-active-quick-note",
+            "--muesli-preview-waveform",
+        ]
+        app.launch()
+
+        let discard = app.buttons["Discard Recording"]
+        let stopMatches = app.buttons.matching(NSPredicate(format: "label == %@", "Stop Recording"))
+        XCTAssertTrue(stopMatches.firstMatch.waitForExistence(timeout: 8))
+        XCTAssertTrue(discard.exists)
+        guard let stop = stopMatches.allElementsBoundByIndex.min(by: {
+            $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height
+        }) else {
+            return XCTFail("Expected a dedicated Stop Recording button")
+        }
+        XCTAssertFalse(app.buttons["Transcription model"].exists)
+        XCTAssertEqual(discard.frame.midY, stop.frame.midY, accuracy: 1)
+        XCTAssertEqual(discard.frame.width, stop.frame.width, accuracy: 1)
+        XCTAssertEqual(discard.frame.height, stop.frame.height, accuracy: 1)
+        XCTAssertEqual(
+            (discard.frame.midX + stop.frame.midX) / 2,
+            app.otherElements["dictation.recorderPanel"].frame.midX,
+            accuracy: 2
+        )
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Active Quick Note with unobstructed elapsed timer"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     func testTabSwitcherNavigatesToMeetings() {
@@ -108,8 +206,12 @@ final class MuesliSmokeUITests: XCTestCase {
             NSPredicate(format: "identifier BEGINSWITH 'dictation.readMore.'")
         ).firstMatch
         XCTAssertTrue(readMore.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.descendants(matching: .any)["voiceNote.badge.notes"].firstMatch.exists)
-        XCTAssertTrue(app.descendants(matching: .any)["voiceNote.badge.longForm"].firstMatch.exists)
+        let notesBadge = app.descendants(matching: .any)["voiceNote.badge.notes"].firstMatch
+        let longFormBadge = app.descendants(matching: .any)["voiceNote.badge.longForm"].firstMatch
+        let playAudio = app.buttons["voiceNote.playAudio"].firstMatch
+        XCTAssertTrue(notesBadge.exists)
+        XCTAssertTrue(longFormBadge.exists)
+        XCTAssertTrue(playAudio.exists)
 
         readMore.tap()
 
@@ -231,15 +333,36 @@ final class MuesliSmokeUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Long Voice Note"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.textViews["longVoiceNote.scratchpad"].exists)
         XCTAssertTrue(app.buttons["longVoiceNote.stopButton"].exists)
         XCTAssertTrue(app.staticTexts["Audio saved locally"].exists)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Long Voice Note active state"
+        screenshot.name = "Long voice note active state"
         screenshot.lifetime = .keepAlways
         add(screenshot)
 
         app.buttons["Discard voice note"].tap()
         XCTAssertTrue(app.buttons["Discard Voice Note"].waitForExistence(timeout: 3))
+    }
+
+    func testEmptyNotepadIsAnEditorWithAReusableMicrophone() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing",
+            "--muesli-ui-testing-empty-notepad",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.textViews["notepad.editor"].waitForExistence(timeout: 8))
+        let microphone = app.buttons["notepad.microphoneButton"]
+        XCTAssertTrue(microphone.exists)
+        XCTAssertEqual(microphone.frame.midX, app.windows.firstMatch.frame.midX, accuracy: 1)
+        XCTAssertTrue(app.staticTexts["Tap the mic to start taking a note with Muesli"].exists)
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Notepad idle microphone centered"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     func testCompletedLongVoiceNoteHidesProgressChecklist() {

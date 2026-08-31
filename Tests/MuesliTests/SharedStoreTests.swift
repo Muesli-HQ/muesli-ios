@@ -3,6 +3,125 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    @MainActor
+    func testDiscardingFirstNotepadBurstPreservesManuallyTypedDocument() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = Muesli.SharedStore(containerURL: directory)
+        let requestID = UUID()
+        let startedAt = Date(timeIntervalSinceReferenceDate: 1_000)
+        let session = Muesli.RecordingSession(
+            requestID: requestID,
+            kind: .quickDictation,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(2),
+            phase: .cancelled,
+            keepsAudioRecording: false,
+            engineIdentifier: "test",
+            source: "app",
+            isLongForm: true,
+            longFormActivatedAt: startedAt,
+            longFormThresholdSeconds: 60,
+            scratchpadText: ""
+        )
+        try store.saveSession(session)
+
+        let coordinator = DictationCoordinator(store: store)
+        coordinator.preserveNotepadDocumentAfterDiscardingBurst(
+            sessionID: session.id,
+            text: "Manually typed Notepad text"
+        )
+
+        let reopenedStore = Muesli.SharedStore(containerURL: directory)
+        let persistedSession = try XCTUnwrap(try reopenedStore.activeRecordingSession(id: session.id))
+        XCTAssertEqual(persistedSession.phase, .completed)
+        XCTAssertEqual(persistedSession.scratchpadText, "Manually typed Notepad text")
+        XCTAssertNil(persistedSession.audioFileName)
+        XCTAssertFalse(persistedSession.keepsAudioRecording)
+
+        let reopenedResult = try XCTUnwrap(try reopenedStore.resultsHistory().first)
+        XCTAssertEqual(reopenedResult.sessionID, session.id)
+        XCTAssertEqual(reopenedResult.requestID, requestID)
+        XCTAssertEqual(reopenedResult.text, "Manually typed Notepad text")
+    }
+
+    @MainActor
+    func testDiscardingEmptyFirstNotepadBurstDoesNotCreateDocument() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = Muesli.SharedStore(containerURL: directory)
+        let startedAt = Date(timeIntervalSinceReferenceDate: 2_000)
+        let session = Muesli.RecordingSession(
+            requestID: UUID(),
+            kind: .quickDictation,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(2),
+            phase: .cancelled,
+            isLongForm: true,
+            longFormActivatedAt: startedAt,
+            longFormThresholdSeconds: 60,
+            scratchpadText: ""
+        )
+        try store.saveSession(session)
+
+        let coordinator = DictationCoordinator(store: store)
+        coordinator.preserveNotepadDocumentAfterDiscardingBurst(
+            sessionID: session.id,
+            text: "  \n"
+        )
+
+        let persistedSession = try XCTUnwrap(try store.activeRecordingSession(id: session.id))
+        XCTAssertEqual(persistedSession.phase, .cancelled)
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+    }
+
+    @MainActor
+    func testDiscardNotepadRemovesEveryBurstAndPersistedDocument() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = Muesli.SharedStore(containerURL: directory)
+        let firstRequestID = UUID()
+        let secondRequestID = UUID()
+        let firstSession = Muesli.RecordingSession(
+            requestID: firstRequestID,
+            kind: .quickDictation,
+            phase: .completed,
+            isLongForm: true,
+            scratchpadText: "First burst"
+        )
+        let secondSession = Muesli.RecordingSession(
+            requestID: secondRequestID,
+            kind: .quickDictation,
+            phase: .cancelled,
+            isLongForm: true,
+            scratchpadText: "First burst"
+        )
+        try store.saveSession(firstSession)
+        try store.saveSession(secondSession)
+        try store.saveResult(Muesli.DictationResult(
+            requestID: firstRequestID,
+            sessionID: firstSession.id,
+            text: "First burst",
+            engineIdentifier: "test"
+        ))
+        try store.saveResult(Muesli.DictationResult(
+            requestID: secondRequestID,
+            sessionID: secondSession.id,
+            text: "First burst",
+            engineIdentifier: "test"
+        ))
+
+        let coordinator = DictationCoordinator(store: store)
+        await coordinator.discardNotepad(sessionIDs: [firstSession.id, secondSession.id])
+
+        XCTAssertNil(try store.activeRecordingSession(id: firstSession.id))
+        XCTAssertNil(try store.activeRecordingSession(id: secondSession.id))
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+    }
+
     func testEventStreamBuffersEventPostedAfterSubscriptionBeforeConsumption() async {
         let bus = TestCrossProcessEventBus()
         let stream = bus.events()
@@ -972,6 +1091,42 @@ final class SharedStoreTests: XCTestCase {
         try store.clearKeyboardLiveTranscript()
 
         XCTAssertNil(try store.keyboardLiveTranscript())
+    }
+
+    func testKeyboardModelCatalogAndSelectionRequestRoundTrip() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bus = TestCrossProcessEventBus()
+        let store = SharedStore(containerURL: directory, eventPoster: bus)
+        let parakeet = KeyboardTranscriptionModelOption(
+            rawValue: "parakeet-tdt-ctc-110m",
+            displayName: "Parakeet 110M",
+            shortName: "Parakeet 110M",
+            capabilityLabel: "English only",
+            isReady: true
+        )
+        let catalog = KeyboardTranscriptionModelCatalog(
+            selectedRawValue: parakeet.rawValue,
+            models: [parakeet],
+            canSelectModels: true,
+            updatedAt: Date(timeIntervalSince1970: 800)
+        )
+        let request = KeyboardTranscriptionModelSelectionRequest(
+            modelRawValue: parakeet.rawValue,
+            createdAt: Date(timeIntervalSince1970: 801)
+        )
+
+        try store.saveKeyboardModelCatalog(catalog)
+        try store.saveKeyboardModelSelectionRequest(request)
+
+        XCTAssertEqual(try store.keyboardModelCatalog(), catalog)
+        XCTAssertEqual(try store.keyboardModelSelectionRequest(), request)
+        XCTAssertTrue(bus.postedEvents.contains(.modelCatalogChanged))
+        XCTAssertTrue(bus.postedEvents.contains(.modelSelectionRequested))
+
+        try store.clearKeyboardModelSelectionRequest()
+        XCTAssertNil(try store.keyboardModelSelectionRequest())
     }
 
     func testSavingPendingRequestDoesNotOverwriteStatus() throws {

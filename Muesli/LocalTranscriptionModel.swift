@@ -50,6 +50,16 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    var keyboardCatalogOption: KeyboardTranscriptionModelOption {
+        KeyboardTranscriptionModelOption(
+            rawValue: rawValue,
+            displayName: displayName,
+            shortName: shortName,
+            capabilityLabel: capabilityLabel,
+            isReady: isDownloaded
+        )
+    }
+
     var detail: String {
         switch self {
         case .parakeetTdtCtc110m:

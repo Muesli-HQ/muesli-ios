@@ -59,6 +59,7 @@ struct MuesliWaveformView: View {
 }
 
 enum MuesliFloatingWaveformMode: Equatable {
+    case idle
     case level
     case waiting
 }
@@ -71,8 +72,13 @@ enum MuesliInlineWaveformRefreshDriver: Equatable {
     case timeline
 
     func usesTimeline(for mode: MuesliFloatingWaveformMode) -> Bool {
-        mode == .waiting || self == .timeline
+        mode == .waiting || mode == .level && self == .timeline
     }
+}
+
+enum MuesliInlineWaveformStyle: Equatable {
+    case monochrome
+    case electricSpectrum
 }
 
 enum MuesliKeyboardWaveformPresentation {
@@ -112,11 +118,14 @@ struct MuesliInlineWaveformView: View {
     var mode: MuesliFloatingWaveformMode
     var color: Color
     var level: Double? = nil
+    var style: MuesliInlineWaveformStyle = .monochrome
     var isActive: Bool = true
     var barCount: Int = 24
     var spacing: CGFloat = 3
     var framesPerSecond: Double = 24
     var refreshDriver: MuesliInlineWaveformRefreshDriver = .inputLevel
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let basePattern: [CGFloat] = [
         0.18, 0.26, 0.42, 0.58, 0.76, 0.92,
@@ -127,7 +136,7 @@ struct MuesliInlineWaveformView: View {
 
     var body: some View {
         Group {
-            if isActive && refreshDriver.usesTimeline(for: mode) {
+            if isActive && !reduceMotion && refreshDriver.usesTimeline(for: mode) {
                 TimelineView(.animation(minimumInterval: 1.0 / max(framesPerSecond, 1.0))) { timeline in
                     let elapsed = timeline.date.timeIntervalSinceReferenceDate
                     waveformCanvas(elapsed: elapsed)
@@ -150,6 +159,10 @@ struct MuesliInlineWaveformView: View {
                 let xOffset = max((size.width - (barWidth * CGFloat(count) + totalSpacing)) / 2, 0)
                 let centerY = size.height / 2
 
+                var barPaths: [Path] = []
+                barPaths.reserveCapacity(count)
+                var combinedPath = Path()
+
                 for index in 0..<count {
                     let sample = samples[index]
                     let height = barHeight(sample: sample, maxHeight: size.height)
@@ -164,10 +177,44 @@ struct MuesliInlineWaveformView: View {
                         cornerRadius: barWidth / 2,
                         style: .continuous
                     )
-                    context.fill(
-                        path,
-                        with: .color(color.opacity(mode == .waiting ? waitingOpacity(index: index, elapsed: elapsed) : 0.94))
+                    barPaths.append(path)
+                    combinedPath.addPath(path)
+                }
+
+                switch style {
+                case .monochrome:
+                    for (index, path) in barPaths.enumerated() {
+                        context.fill(
+                            path,
+                            with: .color(
+                                color.opacity(
+                                    mode == .waiting
+                                        ? waitingOpacity(index: index, elapsed: elapsed)
+                                        : 0.94
+                                )
+                            )
+                        )
+                    }
+                case .electricSpectrum:
+                    let gradient = GraphicsContext.Shading.linearGradient(
+                        Gradient(colors: Self.electricSpectrumColors),
+                        startPoint: CGPoint(x: 0, y: centerY),
+                        endPoint: CGPoint(x: size.width, y: centerY)
                     )
+                    let restingOpacity = mode == .waiting ? 0.82 : 1.0
+
+                    context.drawLayer { glow in
+                        glow.addFilter(.blur(radius: 5))
+                        glow.opacity = 0.58 * restingOpacity
+                        glow.fill(combinedPath, with: gradient)
+                    }
+                    context.drawLayer { bloom in
+                        bloom.addFilter(.blur(radius: 1.5))
+                        bloom.opacity = 0.88 * restingOpacity
+                        bloom.fill(combinedPath, with: gradient)
+                    }
+                    context.opacity = restingOpacity
+                    context.fill(combinedPath, with: gradient)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -186,10 +233,19 @@ struct MuesliInlineWaveformView: View {
 
     private func samplesForRender(count: Int, elapsed: TimeInterval) -> [CGFloat] {
         switch mode {
+        case .idle:
+            return idleSamples(count: count)
         case .level:
             return liveLevelSamples(count: count, elapsed: elapsed)
         case .waiting:
             return waitingSamples(count: count, elapsed: elapsed)
+        }
+    }
+
+    private func idleSamples(count: Int) -> [CGFloat] {
+        (0..<count).map { index in
+            let normalizedIndex = CGFloat(index) / CGFloat(max(count - 1, 1))
+            return 0.035 + 0.025 * sin(normalizedIndex * .pi * 4)
         }
     }
 
@@ -235,5 +291,16 @@ struct MuesliInlineWaveformView: View {
         let noiseFloor: CGFloat = 0.26
         return max(0, (normalized - noiseFloor) / (1 - noiseFloor))
     }
+
+    private static let electricSpectrumColors: [Color] = [
+        Color(hex: 0x18C8FF),
+        Color(hex: 0x3F7CFF),
+        Color(hex: 0x855CFF),
+        Color(hex: 0xFF3FD1),
+        Color(hex: 0xFF5B77),
+        Color(hex: 0xFFB52E),
+        Color(hex: 0xD7F63A),
+        Color(hex: 0x58F08A),
+    ]
 
 }

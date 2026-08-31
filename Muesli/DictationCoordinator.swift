@@ -1999,6 +1999,22 @@ final class DictationCoordinator {
         )
     }
 
+    static func makePipelinedNotepadSession(
+        request: DictationRequest,
+        seedText: String,
+        captureStartedAt: Date
+    ) -> RecordingSession {
+        RecordingSession(
+            requestID: request.id,
+            kind: .quickDictation,
+            startedAt: captureStartedAt,
+            keepsAudioRecording: false,
+            source: "app",
+            longFormThresholdSeconds: VoiceNoteRecordingSchedule.checkpointIntervalSeconds,
+            scratchpadText: seedText
+        )
+    }
+
     private func startPipelinedNotepadRecording(seedText: String, sessionID: UUID?) {
         guard selectedTranscriptionModel.isDownloaded else {
             statusText = "\(selectedTranscriptionModel.shortName) is still downloading"
@@ -2024,17 +2040,14 @@ final class DictationCoordinator {
             id: existingSession?.requestID ?? UUID(),
             createdAt: existingSession?.createdAt ?? .now
         )
-        var session = existingSession ?? RecordingSession(
-            requestID: request.id,
-            kind: .quickDictation,
-            keepsAudioRecording: false,
-            source: "app",
-            longFormThresholdSeconds: VoiceNoteRecordingSchedule.checkpointIntervalSeconds,
-            scratchpadText: seedText
+        let captureStartedAt = Date.now
+        var session = existingSession ?? Self.makePipelinedNotepadSession(
+            request: request,
+            seedText: seedText,
+            captureStartedAt: captureStartedAt
         )
         let priorPhase = session.phase
         let priorAudioFileName = session.audioFileName
-        let captureStartedAt = Date.now
 
         activeRequest = request
         activeSession = session

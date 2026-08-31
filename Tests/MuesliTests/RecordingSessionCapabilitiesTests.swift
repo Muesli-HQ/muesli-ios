@@ -82,6 +82,24 @@ final class RecordingSessionCapabilitiesTests: XCTestCase {
         XCTAssertTrue(notepad.startedAsNotepad)
     }
 
+    @MainActor
+    func testWarmNotepadSessionRetainsCaptureStartForPresentationRouting() {
+        let captureStartedAt = Date(timeIntervalSinceReferenceDate: 1_234)
+        let request = Muesli.DictationRequest(createdAt: captureStartedAt.addingTimeInterval(-10))
+        var notepad = DictationCoordinator.makePipelinedNotepadSession(
+            request: request,
+            seedText: "",
+            captureStartedAt: captureStartedAt
+        )
+
+        XCTAssertEqual(notepad.startedAt, captureStartedAt)
+
+        notepad.isLongForm = true
+        notepad.longFormActivatedAt = notepad.startedAt
+
+        XCTAssertTrue(notepad.startedAsNotepad)
+    }
+
     /// The widget target cannot see RecordingSessionKind, so capabilities have
     /// to survive the trip through the attributes rather than being re-derived
     /// from a display string on the far side.

@@ -22,6 +22,11 @@ enum MuesliPreferences {
     static let meetingTemplateKey = "muesli.meetings.template"
     static let iCloudSyncEnabledKey = "muesli.sync.icloud.enabled"
     static let pinnedSectionsKey = "muesli.navigation.pinnedSections"
+    static let actionButtonOnboardingCompletedKey = "muesli.actionButton.onboarding.completed"
+    static let actionButtonSelectedModeKey = "muesli.actionButton.selectedMode"
+    static let actionButtonDeliveryKey = "muesli.actionButton.delivery"
+    static let actionButtonVerifiedModePrefix = "muesli.actionButton.verified."
+    static let actionButtonInvitationDismissedKey = "muesli.actionButton.invitation.dismissed"
 
     static var appearanceMode: MuesliAppearanceMode {
         MuesliAppearanceMode(

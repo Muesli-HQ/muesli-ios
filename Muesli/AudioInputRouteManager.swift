@@ -53,26 +53,46 @@ enum AudioInputRouteManager {
         preference: RecordingMicrophonePreference = MuesliPreferences.recordingMicrophonePreference
     ) throws -> AudioInputRouteSnapshot {
         let session = AVAudioSession.sharedInstance()
+        let activationStartedAt = Date()
+        var step = "category"
         do {
             try session.setCategory(
                 .playAndRecord,
                 mode: .spokenAudio,
                 options: recordingCategoryOptions
             )
+            step = "activation"
             try session.setActive(true)
         } catch {
+            recordActivationFailure(error, stage: stage, step: step, attempt: 1, session: session)
+            // Repeating setActive without changing execution context cannot recover
+            // a background priority denial. Preserve the original failure.
+            if isBackgroundPlaybackDenial(error) {
+                throw AudioRecorder.RecordingError.audioSessionFailed(stage: stage, underlying: error)
+            }
             do {
                 try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                step = "category"
                 try session.setCategory(
                     .playAndRecord,
                     mode: .spokenAudio,
                     options: recordingCategoryOptions
                 )
+                step = "activation"
                 try session.setActive(true)
             } catch {
+                recordActivationFailure(error, stage: stage, step: step, attempt: 2, session: session)
                 throw AudioRecorder.RecordingError.audioSessionFailed(stage: stage, underlying: error)
             }
         }
+
+        KeyboardDiagnosticsLog.record("audioSession.activated", [
+            "stage": stage,
+            "elapsed_ms": String(Int(Date().timeIntervalSince(activationStartedAt) * 1_000)),
+            "category": session.category.rawValue,
+            "mode": session.mode.rawValue,
+            "options": String(session.categoryOptions.rawValue)
+        ])
 
         let preferredInput = preferredInput(for: preference, in: session.availableInputs ?? [])
         do {
@@ -88,6 +108,36 @@ enum AudioInputRouteManager {
         print("Muesli audio route configured [\(stage)]: preference=\(preference.rawValue)")
         #endif
         return snapshot
+    }
+
+    static func isBackgroundPlaybackDenial(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSOSStatusErrorDomain && error.code == 561015905 // '!pla': CannotStartPlaying
+    }
+
+    private static func recordActivationFailure(
+        _ error: Error,
+        stage: String,
+        step: String,
+        attempt: Int,
+        session: AVAudioSession
+    ) {
+        let error = error as NSError
+        KeyboardDiagnosticsLog.record("audioSession.failed", [
+            "stage": stage,
+            "step": step,
+            "attempt": String(attempt),
+            "domain": error.domain,
+            "code": String(error.code),
+            "category": session.category.rawValue,
+            "mode": session.mode.rawValue,
+            "options": String(session.categoryOptions.rawValue),
+            "other_audio": String(session.isOtherAudioPlaying),
+            "input_available": String(session.isInputAvailable)
+        ])
+        #if DEBUG
+        print("Muesli audio session failed [\(stage), \(step), attempt \(attempt)]: \(error.domain) \(error.code)")
+        #endif
     }
 
     static func currentSnapshot(

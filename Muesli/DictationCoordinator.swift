@@ -142,9 +142,23 @@ private struct PendingNotepadTranscription: Sendable {
     let audioURL: URL
 }
 
+private enum RecordingStartOutcome: Sendable, Equatable {
+    case started
+    case failed(String)
+}
+
+private enum ActionButtonCaptureFailure: LocalizedError {
+    case liveActivityUnavailable
+
+    var errorDescription: String? {
+        "Turn on Live Activities for Muesli, then try the Action Button again."
+    }
+}
+
 @MainActor
 @Observable
 final class DictationCoordinator {
+    private var recordingStartupInProgress = false
     private static let onboardingCompletedKey = "muesli.onboarding.completed"
     private static let userNameKey = "muesli.onboarding.userName"
     private static let useCaseKey = "muesli.onboarding.useCase"
@@ -165,9 +179,13 @@ final class DictationCoordinator {
     private var meetingVadController: StreamingVadController?
     private let keyboardSessionKeeper = KeyboardSessionKeeper()
     private let liveActivityController = MuesliLiveActivityController()
+    @ObservationIgnored private var startupLiveActivityCleanupTask: Task<Void, Never>?
     private var modelPreparationTask: Task<Void, Never>?
     private var modelPrewarmTask: Task<Void, Never>?
     private var meteringTask: Task<Void, Never>?
+    @ObservationIgnored private var liveActivityMeterTask: Task<Void, Never>?
+    @ObservationIgnored private var liveActivityMeterGeneration = UUID()
+    @ObservationIgnored private var liveActivityWaveformSampler = MuesliLiveActivityWaveformSampler()
     private var recordingTimerTask: Task<Void, Never>?
     @ObservationIgnored private var recordingTimerStartedAt: Date?
     @ObservationIgnored nonisolated(unsafe) private var sharedEventObservationTask: Task<Void, Never>?
@@ -343,6 +361,8 @@ final class DictationCoordinator {
     var isMeetingTranscribing: Bool { meetingPresentationState.isProcessing }
     var activeMeetingTitle = "Untitled Meeting"
     var clipboardStatusText: String?
+    var showsDictationCopyConfirmation = false
+    @ObservationIgnored private var pendingDictationCopyRequestID: UUID?
     var longVoiceNoteCheckpointCount = 0
     var longVoiceNoteAudioIsSecured = false
     var longVoiceNoteDurabilityError: String?
@@ -524,13 +544,20 @@ final class DictationCoordinator {
         MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
             self?.stopCaptureFromLiveActivity(sessionID: sessionID) ?? .unavailable
         }
+        ActionButtonCaptureDispatcher.register { [weak self] mode in
+            guard let self else { return .unavailable }
+            switch mode {
+            case .dictation: return await self.toggleActionButtonDictation()
+            case .meeting: return await self.toggleActionButtonMeeting()
+            }
+        }
 
         refreshAudioInputRoute()
         if !isConfiguringForUITesting {
             refreshHistory()
             recoverLongVoiceNotesIfNeeded()
         }
-        Task {
+        startupLiveActivityCleanupTask = Task {
             await liveActivityController.endAllActivities(
                 detail: "Recovered from interrupted session"
             )
@@ -1350,6 +1377,12 @@ final class DictationCoordinator {
     }
 
     func handleOpenURL(_ url: URL) {
+        if url.scheme == MuesliAppConstants.urlScheme, url.host == "copy-dictation",
+           let requestID = UUID(uuidString: url.lastPathComponent) {
+            pendingDictationCopyRequestID = requestID
+            copyPendingDictationIfActive()
+            return
+        }
         #if DEBUG
         if handleDebugURL(url) {
             return
@@ -1420,6 +1453,118 @@ final class DictationCoordinator {
         }
         transitionKeyboardSession(.handoffStarted(request.id))
         startRecording(for: request, source: "keyboard")
+    }
+
+    func toggleActionButtonDictation() async -> ActionButtonDictationResult {
+        guard !recordingStartupInProgress else { return .busy("Muesli is starting the microphone.") }
+        if let startupLiveActivityCleanupTask {
+            await startupLiveActivityCleanupTask.value
+            self.startupLiveActivityCleanupTask = nil
+        }
+
+        if isRecording {
+            guard isKeyboardHandoffActive, let requestID = activeRequest?.id,
+                  let session = activeSession, ActionButtonCaptureSource.isActionButton(session.source) else {
+                return .busy("Finish the current voice note or meeting before starting Action Button dictation.")
+            }
+            stopRecording(requestID: requestID)
+            guard !isRecording else { return .failed("Muesli could not stop this recording. Try again.") }
+            AppTelemetry.signal("action_button_dictation_stopped")
+            return .stopped(sessionID: session.id)
+        }
+
+        guard !hasMeetingRecordingInProgress,
+              !voiceNoteLifecycleState.isWorkActive,
+              statusText != "Transcribing",
+              !isRemovingTranscriptionModel
+        else {
+            return .busy("Muesli is still finishing another recording.")
+        }
+
+        let request = DictationRequest(sourceBundleIdentifier: "muesli.action-button")
+        transitionKeyboardSession(.handoffStarted(request.id))
+        let outcome = await withCheckedContinuation { continuation in
+            startRecording(
+                for: request,
+                source: UserDefaults.standard.string(forKey: MuesliPreferences.actionButtonDeliveryKey) == "clipboard"
+                    ? ActionButtonCaptureSource.clipboard : ActionButtonCaptureSource.standard,
+                requiresLiveActivity: true
+            ) { outcome in
+                continuation.resume(returning: outcome)
+            }
+        }
+
+        switch outcome {
+        case .started:
+            guard let sessionID = activeSession?.id else { return .failed("The recording did not start.") }
+            AppTelemetry.signal("action_button_dictation_started")
+            return .started(sessionID: sessionID)
+        case .failed(let message):
+            return .failed(message)
+        }
+    }
+
+    func toggleActionButtonMeeting() async -> ActionButtonDictationResult {
+        if let startupLiveActivityCleanupTask {
+            await startupLiveActivityCleanupTask.value
+            self.startupLiveActivityCleanupTask = nil
+        }
+        if isMeetingRecording, let session = activeSession {
+            guard session.source == "action_button" else {
+                return .busy("Finish the current meeting before using the Action Button.")
+            }
+            guard stopCurrentMeetingRecording(),
+                  let saved = try? store.recordingSession(id: session.id),
+                  saved.endedAt != nil, saved.phase != .failed else {
+                return .failed(meetingStatusText)
+            }
+            return .stopped(sessionID: session.id)
+        }
+        guard !hasMeetingRecordingInProgress, !isRecording,
+              !voiceNoteLifecycleState.isWorkActive, !isMeetingTranscribing else {
+            return .busy("Muesli is still finishing another recording.")
+        }
+        guard selectedTranscriptionModel.isDownloaded else {
+            return .failed("Finish downloading your transcription model in Muesli first.")
+        }
+        guard let sessionID = startMeetingRecording(requiresLiveActivity: true) else {
+            return .failed("Muesli could not start a meeting. Open the app and try again.")
+        }
+        // Wait for actual capture, not just creation of the meeting row.
+        await meetingLifecycleRunner?.startupTask?.value
+        guard isMeetingRecording, activeSession?.id == sessionID else {
+            return .failed(meetingStatusText)
+        }
+        return .started(sessionID: sessionID)
+    }
+
+    func actionButtonTestOutput(sessionID: UUID, mode: ActionButtonCaptureMode) -> ActionButtonTestOutput {
+        guard let session = try? store.recordingSession(id: sessionID) else {
+            return .init(title: "Waiting for the recording", detail: "Your test result will appear here.")
+        }
+        if session.phase == .failed || session.phase == .cancelled {
+            return .init(title: "Let's try that again", detail: session.errorMessage ?? "The recording was cancelled.", isFailure: true)
+        }
+        if mode == .meeting, session.endedAt != nil, session.phase != .recording {
+            return .init(title: "Meeting note saved", detail: "Saved in Meetings. Transcription and your summary may still be processing.", text: session.title ?? "Untitled Meeting", isComplete: true)
+        }
+        if mode == .dictation, let requestID = session.requestID,
+           let result = try? store.result(for: requestID) {
+            guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return .init(title: "No words picked up", detail: "Try again with a few spoken words, then hold the Action Button to stop.", isFailure: true)
+            }
+            let handoff = try? store.keyboardHandoffState()
+            let detail: String
+            if handoff?.requestID == requestID, handoff?.phase == .inserted {
+                detail = handoff?.message == "Copied to clipboard" ? "Copied to clipboard. Paste it wherever you need it." : "Inserted through the Muesli keyboard."
+            } else if handoff?.requestID == requestID, handoff?.phase == .copyRequired {
+                detail = "Saved in Voice Notes. Tap Open to copy in the Island, then return to your app and paste."
+            } else {
+                detail = "Your transcript is saved in Voice Notes. If the keyboard is active, it can insert this text."
+            }
+            return .init(title: "Your words, ready", detail: detail, text: result.text, isComplete: true)
+        }
+        return .init(title: "Turning voice into text", detail: "Your recording has stopped. Keep Muesli open while your test finishes.")
     }
 
     func requestSyncSetup(source: String) {
@@ -4491,15 +4636,18 @@ final class DictationCoordinator {
         for request: DictationRequest,
         source: String,
         startsAsNotepad: Bool = false,
-        initialScratchpadText: String? = nil
+        initialScratchpadText: String? = nil,
+        requiresLiveActivity: Bool = false,
+        completion: (@MainActor @Sendable (RecordingStartOutcome) -> Void)? = nil
     ) {
+        let deliversToKeyboard = source == "keyboard" || ActionButtonCaptureSource.isActionButton(source)
         guard selectedTranscriptionModel.isDownloaded else {
             let message = "\(selectedTranscriptionModel.shortName) is still downloading"
             statusText = message
             if !isSelectedModelDownloadSuppressed {
                 prepareSelectedModel(reason: "\(source)_recording")
             }
-            if source == "keyboard" {
+            if deliversToKeyboard {
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
                 saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
                 saveKeyboardRuntimeStatus(
@@ -4510,16 +4658,18 @@ final class DictationCoordinator {
                     supportsBackgroundStart: canStartKeyboardRequestsInBackground
                 )
             }
+            completion?(.failed(message))
             return
         }
-        guard !isRecording,
+        guard !recordingStartupInProgress, !isRecording,
               !hasMeetingRecordingInProgress,
               !voiceNoteLifecycleState.isWorkActive,
               statusText != "Transcribing",
               !isRemovingTranscriptionModel
         else {
-            if source == "keyboard" {
+            if deliversToKeyboard {
                 if refreshActiveKeyboardRequestIfNeeded(request) {
+                    completion?(.failed("Muesli is already handling this request"))
                     return
                 }
 
@@ -4537,15 +4687,17 @@ final class DictationCoordinator {
                     supportsBackgroundStart: canStartKeyboardRequestsInBackground
                 )
             }
+            completion?(.failed("Muesli is busy"))
             return
         }
+        recordingStartupInProgress = true
         activeRequest = request
-        let usesPersistentKeyboardSession = source == "keyboard" && isKeyboardSessionArmed
+        let usesPersistentKeyboardSession = deliversToKeyboard && isKeyboardSessionArmed
         setUsesPersistentKeyboardSession(usesPersistentKeyboardSession, for: request.id)
         liveDictationTranscript = ""
         realtimeDictationCommittedText = ""
         clearKeyboardLiveTranscript()
-        let kind: RecordingSessionKind = source == "keyboard" ? .keyboardDictation : .quickDictation
+        let kind: RecordingSessionKind = deliversToKeyboard ? .keyboardDictation : .quickDictation
         let longModeThreshold = startsAsNotepad
             ? VoiceNoteRecordingSchedule.checkpointIntervalSeconds
             : configuredLongVoiceNoteThreshold()
@@ -4559,7 +4711,7 @@ final class DictationCoordinator {
             longFormThresholdSeconds: longModeThreshold,
             scratchpadText: initialScratchpadText
         )
-        if source == "keyboard" {
+        if deliversToKeyboard {
             saveKeyboardHandoff(
                 requestID: request.id,
                 phase: .startAcknowledged,
@@ -4568,51 +4720,83 @@ final class DictationCoordinator {
         }
 
         Task {
+            defer { recordingStartupInProgress = false }
+            let startupTime = Date()
+            KeyboardDiagnosticsLog.record("recording.startRequested", [
+                "request": request.id.uuidString,
+                "source": source,
+                "app_state": String(UIApplication.shared.applicationState.rawValue),
+                "persistent": String(usesPersistentKeyboardSession)
+            ])
+            var didStartRequiredLiveActivity = false
             do {
                 let audioURL = try store.newDictationAudioFileURL(startedAt: session.createdAt)
                 session.audioFileName = audioURL.lastPathComponent
                 session.startedAt = .now
                 try store.saveSession(session)
                 try await recorder.requestPermission()
-                if !usesPersistentKeyboardSession, keyboardSessionKeeper.isRunning {
-                    keyboardSessionKeeper.stop(deactivateSession: true)
-                    transitionKeyboardSession(.requestFinished)
-                    try? store.clearKeyboardRuntimeStatus()
-                    try? await Task.sleep(for: .milliseconds(150))
-                }
-                if usesPersistentKeyboardSession {
-                    if !keyboardSessionKeeper.canAcceptStartCommand {
-                        if !keyboardSessionKeeper.isRunning {
-                            try await keyboardSessionKeeper.start()
-                        }
-                        guard await keyboardSessionKeeper.waitUntilCanAcceptStartCommand() else {
-                            throw AudioRecorder.RecordingError.startFailed(stage: "keyboard session input")
-                        }
-                        transitionKeyboardSession(.startSucceeded)
+                try await ActionButtonCaptureStartup.run {
+                    if !usesPersistentKeyboardSession, keyboardSessionKeeper.isRunning {
+                        keyboardSessionKeeper.stop(deactivateSession: true)
+                        transitionKeyboardSession(.requestFinished)
+                        try? store.clearKeyboardRuntimeStatus()
+                        try? await Task.sleep(for: .milliseconds(150))
                     }
-                    let checkpointDirectory: URL?
-                    if longModeThreshold != nil {
-                        checkpointDirectory = try await voiceNoteCheckpointStore.prepare(
+                    if usesPersistentKeyboardSession {
+                        if !keyboardSessionKeeper.canAcceptStartCommand {
+                            if !keyboardSessionKeeper.isRunning {
+                                try await keyboardSessionKeeper.start()
+                            }
+                            guard await keyboardSessionKeeper.waitUntilCanAcceptStartCommand() else {
+                                throw AudioRecorder.RecordingError.startFailed(stage: "keyboard session input")
+                            }
+                            transitionKeyboardSession(.startSucceeded)
+                        }
+                        let checkpointDirectory: URL?
+                        if longModeThreshold != nil {
+                            checkpointDirectory = try await voiceNoteCheckpointStore.prepare(
+                                sessionID: session.id,
+                                startedAt: session.startedAt ?? session.createdAt
+                            )
+                        } else {
+                            checkpointDirectory = nil
+                        }
+                        try keyboardSessionKeeper.beginSegment(
+                            outputURL: audioURL,
+                            checkpointDirectory: checkpointDirectory
+                        )
+                        transitionKeyboardSession(.recordingStarted(request.id))
+                    } else if selectedTranscriptionModel.supportsRealtimeStreaming || longModeThreshold != nil {
+                        try await startCheckpointingDictationRecorder(
+                            audioURL: audioURL,
                             sessionID: session.id,
-                            startedAt: session.startedAt ?? session.createdAt
+                            enablesRealtimeTranscription: selectedTranscriptionModel.supportsRealtimeStreaming,
+                            usesDurableCheckpoints: longModeThreshold != nil
                         )
                     } else {
-                        checkpointDirectory = nil
+                        try recorder.start(
+                            outputURL: audioURL
+                        )
                     }
-                    try keyboardSessionKeeper.beginSegment(
-                        outputURL: audioURL,
-                        checkpointDirectory: checkpointDirectory
-                    )
-                    transitionKeyboardSession(.recordingStarted(request.id))
-                } else if selectedTranscriptionModel.supportsRealtimeStreaming || longModeThreshold != nil {
-                    try await startCheckpointingDictationRecorder(
-                        audioURL: audioURL,
-                        sessionID: session.id,
-                        enablesRealtimeTranscription: selectedTranscriptionModel.supportsRealtimeStreaming,
-                        usesDurableCheckpoints: longModeThreshold != nil
-                    )
-                } else {
-                    try recorder.start(outputURL: audioURL)
+                } publishActivity: {
+                    if requiresLiveActivity {
+                        didStartRequiredLiveActivity = await liveActivityController.start(
+                            session: session,
+                            requestID: request.id,
+                            phase: "Listening",
+                            detail: "Recording for keyboard insertion"
+                        )
+                        guard didStartRequiredLiveActivity else {
+                            throw ActionButtonCaptureFailure.liveActivityUnavailable
+                        }
+                    }
+                } cancelAudio: {
+                    if usesPersistentKeyboardSession {
+                        keyboardSessionKeeper.cancelSegment()
+                    } else {
+                        cleanupRealtimeDictationRecorder()
+                        recorder.cancel()
+                    }
                 }
                 refreshAudioInputRoute()
                 activeSession = session
@@ -4630,11 +4814,11 @@ final class DictationCoordinator {
                     }
                     session = promotedSession
                 }
-                if source == "keyboard", !usesPersistentKeyboardSession {
+                if deliversToKeyboard, !usesPersistentKeyboardSession {
                     transitionKeyboardSession(.recordingStarted(request.id))
                 }
                 startRecordingTimer(startedAt: session.startedAt ?? .now)
-                if source == "keyboard" {
+                if deliversToKeyboard {
                     saveKeyboardHandoff(
                         requestID: request.id,
                         phase: .recordingStarted,
@@ -4651,7 +4835,8 @@ final class DictationCoordinator {
                 startMetering { [weak self] level in
                     guard let self else { return }
                     self.inputLevel = level
-                    if source == "keyboard" {
+                    self.publishLiveActivityWaveform(level, sessionID: session.id)
+                    if deliversToKeyboard {
                         self.publishKeyboardRuntimeLevel(level, requestID: request.id)
                     }
                 }
@@ -4659,18 +4844,37 @@ final class DictationCoordinator {
                 AppTelemetry.signal("dictation_started", parameters: ["source": source])
                 try store.saveRequest(request)
                 try store.saveStatus(.init(requestID: request.id, phase: .recording))
-                if source == "keyboard" {
+                if deliversToKeyboard {
                     await processPendingKeyboardCommand()
                 }
-                Task {
-                    await liveActivityController.start(
+                if !requiresLiveActivity {
+                    Task {
+                        await liveActivityController.start(
+                            session: session,
+                            requestID: request.id,
+                            phase: startsAsNotepad ? "Notepad" : "Listening",
+                            detail: startsAsNotepad ? "Securing audio locally" : "Recording voice note"
+                        )
+                    }
+                }
+                KeyboardDiagnosticsLog.record("recording.started", [
+                    "request": request.id.uuidString,
+                    "elapsed_ms": String(Int(Date().timeIntervalSince(startupTime) * 1_000))
+                ])
+                completion?(.started)
+            } catch {
+                KeyboardDiagnosticsLog.record("recording.startFailed", [
+                    "request": request.id.uuidString,
+                    "elapsed_ms": String(Int(Date().timeIntervalSince(startupTime) * 1_000))
+                ])
+                if didStartRequiredLiveActivity {
+                    await liveActivityController.end(
+                        phase: "Failed",
+                        detail: error.localizedDescription,
                         session: session,
-                        requestID: request.id,
-                        phase: startsAsNotepad ? "Notepad" : "Listening",
-                        detail: startsAsNotepad ? "Securing audio locally" : "Recording voice note"
+                        dismissal: .immediate
                     )
                 }
-            } catch {
                 session.phase = .failed
                 session.errorMessage = error.localizedDescription
                 cleanupNonRetainedAudio(for: &session)
@@ -4703,7 +4907,7 @@ final class DictationCoordinator {
                     parameters: ["source": source]
                 )
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
-                if source == "keyboard" {
+                if deliversToKeyboard {
                     if let command = try? store.pendingCommand(), command.requestID == request.id {
                         try? store.clearPendingCommand()
                     }
@@ -4713,6 +4917,7 @@ final class DictationCoordinator {
                         message: error.localizedDescription
                     )
                 }
+                completion?(.failed(error.localizedDescription))
             }
         }
     }
@@ -4816,8 +5021,7 @@ final class DictationCoordinator {
                 )
                 try store.saveResult(result)
                 scheduleICloudSyncAfterLocalChange(reason: "dictation_completed")
-                saveKeyboardLiveTranscript(text: text, isFinal: true)
-                saveKeyboardHandoff(requestID: request.id, phase: .resultReady, message: "Ready to insert")
+                deliverKeyboardTranscript(text, requestID: request.id)
                 try store.clearPendingRequest()
                 activeRequest = nil
                 activeSession = nil
@@ -5198,8 +5402,7 @@ final class DictationCoordinator {
                 try store.saveResult(result)
                 scheduleICloudSyncAfterLocalChange(reason: "dictation_completed")
                 if startedFromKeyboard {
-                    saveKeyboardLiveTranscript(text: text, isFinal: true)
-                    saveKeyboardHandoff(requestID: request.id, phase: .resultReady, message: "Ready to insert")
+                    deliverKeyboardTranscript(text, requestID: request.id)
                 }
                 try store.clearPendingRequest()
                 refreshHistory()
@@ -5231,12 +5434,13 @@ final class DictationCoordinator {
                 liveDictationTranscript = ""
                 realtimeDictationCommittedText = ""
                 if let completedSession = try? store.recordingSession(requestID: request.id) {
-                    Task {
+                    let handoff = try? store.keyboardHandoffState()
+                    if handoff?.requestID == request.id, handoff?.phase == .copyRequired {
+                        await liveActivityController.offerForegroundCopy(session: completedSession, requestID: request.id)
+                    } else {
                         await liveActivityController.end(
-                            phase: "Completed",
-                            detail: "Transcript saved",
-                            session: completedSession,
-                            dismissal: .immediate
+                            phase: "Completed", detail: "Transcript saved",
+                            session: completedSession, dismissal: .immediate
                         )
                     }
                 }
@@ -5351,7 +5555,7 @@ final class DictationCoordinator {
     }
 
     @discardableResult
-    func startMeetingRecording(title: String = "Untitled Meeting") -> UUID? {
+    func startMeetingRecording(title: String = "Untitled Meeting", requiresLiveActivity: Bool = false) -> UUID? {
         guard !isRecording,
               !hasMeetingRecordingInProgress,
               !isMeetingTranscribing,
@@ -5365,6 +5569,7 @@ final class DictationCoordinator {
             ? "Untitled Meeting"
             : title.trimmingCharacters(in: .whitespacesAndNewlines)
         var session = RecordingSession(kind: .meeting, title: activeMeetingTitle)
+        if requiresLiveActivity { session.source = "action_button" }
         let operationID = UUID()
         session.keepsAudioRecording = MuesliPreferences.keepMeetingAudioRecordingsEnabled
         session.meetingOperationID = operationID
@@ -5393,13 +5598,13 @@ final class DictationCoordinator {
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.runMeetingStartup(session)
+            await self.runMeetingStartup(session, requiresLiveActivity: requiresLiveActivity)
         }
         setMeetingStartupTask(task, sessionID: session.id)
         return session.id
     }
 
-    private func runMeetingStartup(_ initialSession: RecordingSession) async {
+    private func runMeetingStartup(_ initialSession: RecordingSession, requiresLiveActivity: Bool = false) async {
         var session = initialSession
 
         do {
@@ -5470,6 +5675,16 @@ final class DictationCoordinator {
                 routeStage: "meeting recording"
             )
             do {
+                if requiresLiveActivity {
+                    let started = await liveActivityController.start(
+                        session: session, requestID: nil, phase: "Preparing", detail: "Preparing a meeting recording"
+                    )
+                    guard started else {
+                        throw ActionButtonCaptureError.unavailable("Enable Live Activities for meetings in Muesli and iOS Settings, then try again.")
+                    }
+                    try ensureMeetingLifecycleActive(sessionID: session.id)
+                }
+
                 try ensureMeetingLifecycleActive(sessionID: session.id)
             } catch {
                 vadController.stop()
@@ -5507,9 +5722,15 @@ final class DictationCoordinator {
                 )
             }
         } catch is CancellationError {
+            if requiresLiveActivity {
+                await liveActivityController.end(phase: "Cancelled", detail: "Recording did not start", session: session, dismissal: .immediate)
+            }
             guard isCurrentMeetingLifecycle(sessionID: session.id) else { return }
             abortCancelledMeeting(session)
         } catch {
+            if requiresLiveActivity {
+                await liveActivityController.end(phase: "Failed", detail: error.localizedDescription, session: session, dismissal: .immediate)
+            }
             guard isCurrentMeetingLifecycle(sessionID: session.id) else { return }
             let operationID = meetingLifecycleRunner?.id
             _ = try? store.transitionMeetingSession(
@@ -6622,7 +6843,74 @@ final class DictationCoordinator {
         )
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    /// Explicit simulator fixture: exercises the real meter publisher and system
+    /// Live Activity using synthetic levels, without recording microphone audio.
+    func previewLiveActivityWaveformIfRequested() async {
+        guard ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform") else { return }
+        if let startupLiveActivityCleanupTask { await startupLiveActivityCleanupTask.value }
+        UserDefaults.standard.set(true, forKey: MuesliPreferences.liveActivitiesForDictationsKey)
+        let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Waveform simulator preview")
+        defer { if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) } }
+        let previewRequestID = UUID()
+        let session = RecordingSession(requestID: previewRequestID, kind: .keyboardDictation, startedAt: .now, phase: .recording, source: "action_button")
+        activeSession = session
+        isRecording = true
+        guard await liveActivityController.start(session: session, requestID: nil, phase: "Listening", detail: "Simulator waveform preview") else {
+            isRecording = false
+            activeSession = nil
+            return
+        }
+        let began = ProcessInfo.processInfo.systemUptime
+        beginMetering(readPower: {
+            let elapsed = ProcessInfo.processInfo.systemUptime - began
+            if elapsed < 5 || elapsed >= 12 { return -80 }
+            return (0.65 + 0.3 * sin(elapsed * 9)) * 50 - 50
+        }, update: { [weak self] level in
+            self?.publishLiveActivityWaveform(level, sessionID: session.id)
+        })
+        try? await Task.sleep(for: .seconds(17))
+        isRecording = false
+        stopMetering()
+        await liveActivityController.update(phase: "Transcribing", detail: "Processing preview", session: session)
+        try? await Task.sleep(for: .seconds(7))
+        activeSession = nil
+        if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-copy") {
+            try? store.saveSession(session)
+            try? store.saveResult(DictationResult(requestID: previewRequestID, text: "Muesli copy verification", engineIdentifier: "test", source: "action_button"))
+            await liveActivityController.offerForegroundCopy(session: session, requestID: previewRequestID)
+            try? store.clearResult(for: previewRequestID)
+            try? store.deleteRecordingSession(id: session.id)
+        } else {
+            await liveActivityController.end(phase: "Ended", detail: "Preview ended", session: session, dismissal: .immediate)
+        }
+    }
+    #endif
+
+    private func publishLiveActivityWaveform(_ level: Double, sessionID: UUID) {
+        guard isRecording,
+              let session = activeSession,
+              session.id == sessionID,
+              session.kind != .meeting,
+              ActionButtonCaptureSource.isActionButton(session.source),
+              liveActivityMeterTask == nil,
+              let samples = liveActivityWaveformSampler.sample(level, at: ProcessInfo.processInfo.systemUptime)
+        else { return }
+        let generation = liveActivityMeterGeneration
+        // At most one ActivityKit update in flight. Skip intermediate envelopes
+        // if the system is slow instead of queueing updates behind the recorder.
+        liveActivityMeterTask = Task { [weak self, liveActivityController] in
+            await liveActivityController.updateWaveform(samples, sessionID: sessionID)
+            guard let self, self.liveActivityMeterGeneration == generation else { return }
+            self.liveActivityMeterTask = nil
+        }
+    }
+
     private func stopMetering() {
+        liveActivityMeterTask?.cancel()
+        liveActivityMeterTask = nil
+        liveActivityMeterGeneration = UUID()
+        liveActivityWaveformSampler = MuesliLiveActivityWaveformSampler()
         meteringTask?.cancel()
         meteringTask = nil
         inputLevel = 0
@@ -6878,6 +7166,10 @@ final class DictationCoordinator {
 
     private func saveKeyboardLiveTranscript(text: String, isFinal: Bool) {
         guard isKeyboardHandoffActive, let requestID = activeRequest?.id else { return }
+        if activeSession?.source == ActionButtonCaptureSource.clipboard {
+            clearKeyboardLiveTranscript()
+            return
+        }
 
         let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedText.isEmpty else {
@@ -6894,6 +7186,70 @@ final class DictationCoordinator {
 
     private func clearKeyboardLiveTranscript() {
         try? store.clearKeyboardLiveTranscript()
+    }
+
+    func copyPendingDictationIfActive() {
+        guard UIApplication.shared.applicationState == .active,
+              let requestID = pendingDictationCopyRequestID else { return }
+        pendingDictationCopyRequestID = nil
+        guard let result = try? store.result(for: requestID), !result.text.isEmpty else {
+            clipboardStatusText = "Transcript unavailable"
+            return
+        }
+        if copyTranscriptToPasteboard(result.text) {
+            let currentHandoff = try? store.keyboardHandoffState()
+            if currentHandoff?.requestID == requestID {
+                saveKeyboardHandoff(requestID: requestID, phase: .inserted, message: "Copied to clipboard")
+            }
+            clipboardStatusText = "Copied — return to your app and paste"
+            showsDictationCopyConfirmation = true
+            if let session = try? store.recordingSession(requestID: requestID) {
+                Task { await liveActivityController.end(phase: "Copied", detail: "Ready to paste", session: session, dismissal: .immediate) }
+            }
+        } else {
+            clipboardStatusText = "Couldn't copy. Try Copy on the saved note."
+        }
+    }
+
+    private func copyTranscriptToPasteboard(_ text: String) -> Bool {
+        guard UIApplication.shared.applicationState == .active else { return false }
+        let pasteboard = UIPasteboard.general
+        let previousCount = pasteboard.changeCount
+        pasteboard.string = text
+        return pasteboard.changeCount != previousCount
+    }
+
+    private func deliverKeyboardTranscript(_ text: String, requestID: UUID) {
+        let extensionStatus = try? store.keyboardExtensionStatus()
+        let session = try? store.recordingSession(requestID: requestID)
+        let copiesActionButtonText = session?.source == ActionButtonCaptureSource.clipboard
+        let keyboardCanInsertDirectly = !copiesActionButtonText && extensionStatus?.hasOpenAccess == true
+            && extensionStatus?.isVisible == true
+            && extensionStatus.map { Date.now.timeIntervalSince($0.lastSeenAt) < 3.5 } == true
+
+        if keyboardCanInsertDirectly {
+            try? store.saveKeyboardLiveTranscript(.init(
+                requestID: requestID,
+                text: text,
+                isFinal: true
+            ))
+            saveKeyboardHandoff(
+                requestID: requestID,
+                phase: .resultReady,
+                message: "Ready to insert"
+            )
+        } else {
+            let didCopy = copyTranscriptToPasteboard(text)
+            clearKeyboardLiveTranscript()
+            saveKeyboardHandoff(
+                requestID: requestID,
+                phase: didCopy ? .inserted : .copyRequired,
+                message: didCopy ? "Copied to clipboard" : "Open Muesli to copy"
+            )
+            KeyboardDiagnosticsLog.record("dictation.delivery", [
+                "destination": didCopy ? "clipboard" : "foregroundCopyRequired"
+            ])
+        }
     }
 
     private func scheduleKeyboardSessionRetry(attempt: Int? = nil) {

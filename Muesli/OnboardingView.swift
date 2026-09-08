@@ -22,12 +22,8 @@ struct OnboardingView: View {
     @State private var nameDraft = ""
     @State private var useCaseDraft: OnboardingUseCase = .keyboardDictation
     @State private var microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-    @State private var keyboardEnabledConfirmed = UserDefaults.standard.bool(
-        forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed
-    )
-    @State private var fullAccessConfirmed = UserDefaults.standard.bool(
-        forKey: OnboardingPreferenceKeys.fullAccessConfirmed
-    )
+    @State private var keyboardEnabledConfirmed = false
+    @State private var fullAccessConfirmed = false
     @State private var meetingSummariesEnabled = UserDefaults.standard.object(
         forKey: MuesliPreferences.meetingSummariesEnabledKey
     ) == nil ? true : UserDefaults.standard.bool(forKey: MuesliPreferences.meetingSummariesEnabledKey)
@@ -36,8 +32,6 @@ struct OnboardingView: View {
     @State private var chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
     @State private var isSigningInChatGPT = false
     @State private var summaryStatusText: String?
-    @State private var keyboardExtensionLastSeenAt: Date?
-    @State private var permissionPollingError: String?
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
@@ -46,7 +40,6 @@ struct OnboardingView: View {
     @State private var activeSyncSetupPromptID: UUID?
     @State private var bridgePromptSeenTokens: Set<String> = []
     @State private var isSyncQRCodeScannerPresented = false
-    private let permissionPoller = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
     private var orderedSteps: [OnboardingStep] {
         OnboardingStep.orderedSteps(for: useCaseDraft)
@@ -157,10 +150,6 @@ struct OnboardingView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            refreshPermissionStatus()
-        }
-        .onReceive(permissionPoller) { _ in
-            guard currentStep == .permissions else { return }
             refreshPermissionStatus()
         }
     }
@@ -308,71 +297,12 @@ struct OnboardingView: View {
             }
 
             if useCaseDraft.needsKeyboardSetup {
-                Button {
-                    openAppSettings()
-                } label: {
-                    Label("Open iOS Settings", systemImage: "arrow.up.right")
-                        .font(MuesliTheme.headline())
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(MuesliTheme.accent)
-                .muesliGlassButton(cornerRadius: MuesliTheme.cornerMedium, tint: MuesliTheme.accent)
-
-                permissionRow(
-                    icon: "keyboard.fill",
-                    title: "Keyboard",
-                    detail: keyboardPermissionDetail,
-                    isComplete: keyboardEnabledConfirmed,
-                    buttonTitle: keyboardEnabledConfirmed ? "Done" : "I Added It"
-                ) {
-                    keyboardEnabledConfirmed = true
-                }
-
-                permissionRow(
-                    icon: "network",
-                    title: "Full Access",
-                    detail: fullAccessPermissionDetail,
-                    isComplete: fullAccessConfirmed,
-                    buttonTitle: fullAccessConfirmed ? "Done" : "I Enabled It"
-                ) {
-                    fullAccessConfirmed = true
-                }
-
-                if let permissionPollingError {
-                    Text(permissionPollingError)
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("Muesli checks these permissions automatically while this screen is open. After enabling Full Access, open the Muesli Keyboard once so iOS lets it report back.")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                KeyboardSetupVerificationView(
+                    keyboardVerified: $keyboardEnabledConfirmed,
+                    fullAccessVerified: $fullAccessConfirmed
+                )
             }
         }
-    }
-
-    private var keyboardPermissionDetail: String {
-        if fullAccessConfirmed {
-            return "Muesli Keyboard was detected."
-        }
-        if let keyboardExtensionLastSeenAt {
-            return "Detected \(keyboardExtensionLastSeenAt.formatted(date: .omitted, time: .shortened))."
-        }
-        return "Muesli checks automatically after you add and open the keyboard."
-    }
-
-    private var fullAccessPermissionDetail: String {
-        if fullAccessConfirmed {
-            return "Full Access verified from the keyboard extension."
-        }
-        if keyboardEnabledConfirmed {
-            return "Enable Full Access, then open Muesli Keyboard once."
-        }
-        return "Waiting for the keyboard extension to report Full Access."
     }
 
     private func permissionRow(
@@ -1233,28 +1163,12 @@ struct OnboardingView: View {
 
     private func refreshPermissionStatus() {
         refreshMicrophoneStatus()
-        refreshKeyboardPermissionStatus()
     }
 
     private func refreshMicrophoneStatus() {
         microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
     }
 
-    private func refreshKeyboardPermissionStatus() {
-        guard useCaseDraft.needsKeyboardSetup else { return }
-
-        do {
-            permissionPollingError = nil
-            guard let status = try SharedStore().keyboardExtensionStatus() else { return }
-            keyboardExtensionLastSeenAt = status.lastSeenAt
-            if status.hasOpenAccess {
-                keyboardEnabledConfirmed = true
-                fullAccessConfirmed = true
-            }
-        } catch {
-            permissionPollingError = "Keyboard status will update after the Muesli Keyboard is opened with Full Access."
-        }
-    }
 
     private func requestMicrophonePermission() {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
@@ -1507,6 +1421,149 @@ private struct ModelPreparationPie: Shape {
         )
         path.closeSubpath()
         return path
+    }
+}
+
+struct KeyboardSetupVerificationView: View {
+    @Binding var keyboardVerified: Bool
+    @Binding var fullAccessVerified: Bool
+
+    @Environment(\.scenePhase) private var scenePhase
+    @FocusState private var verificationFieldFocused: Bool
+    @State private var challenge: KeyboardSetupVerificationChallenge?
+    @State private var verificationText = ""
+    private let verificationStore = SetupVerificationStore()
+
+    var body: some View {
+        MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    Text("Verify the keyboard")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text("Add Muesli Keyboard and enable Full Access in Settings. Then return, select Muesli with the globe key, and tap its Verify button below.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button {
+                    openAppSettings()
+                } label: {
+                    Label("Open Muesli Settings", systemImage: "arrow.up.right")
+                        .font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.accent)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                .background(MuesliTheme.accentSubtle, in: RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+
+                TextField("Tap, choose Muesli Keyboard, then Verify", text: $verificationText)
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($verificationFieldFocused)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .frame(height: 48)
+                    .background(MuesliTheme.backgroundHover, in: RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            .strokeBorder(
+                                keyboardVerified ? MuesliTheme.success : MuesliTheme.surfaceBorder,
+                                lineWidth: 1
+                            )
+                    )
+                    .onChange(of: verificationText) { _, value in
+                        acceptKeyboardResponse(value)
+                    }
+                    .accessibilityIdentifier("onboarding.keyboardVerificationField")
+
+                HStack(spacing: MuesliTheme.spacing16) {
+                    verificationStatus(
+                        title: "Keyboard active",
+                        verified: keyboardVerified
+                    )
+                    verificationStatus(
+                        title: "Full Access",
+                        verified: fullAccessVerified
+                    )
+                }
+
+                Text(statusDetail)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(fullAccessVerified ? MuesliTheme.success : MuesliTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(MuesliTheme.spacing16)
+        }
+        .onAppear(perform: beginVerification)
+        .onDisappear {
+            if let challenge {
+                verificationStore.clearKeyboardChallenge(challenge)
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, !fullAccessVerified else { return }
+            refreshReceipt()
+        }
+        .task(id: challenge?.id) {
+            while !Task.isCancelled, !fullAccessVerified {
+                refreshReceipt()
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+        }
+    }
+
+    private var statusDetail: String {
+        if fullAccessVerified {
+            return "Verified from the active Muesli Keyboard with Full Access."
+        }
+        if keyboardVerified {
+            return "Keyboard verified. Enable Full Access, then select Muesli and tap Verify once more."
+        }
+        return "The Continue button unlocks only after Muesli receives both proofs."
+    }
+
+    private func verificationStatus(title: String, verified: Bool) -> some View {
+        Label(title, systemImage: verified ? "checkmark.circle.fill" : "circle")
+            .font(MuesliTheme.captionMedium())
+            .foregroundStyle(verified ? MuesliTheme.success : MuesliTheme.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func beginVerification() {
+        keyboardVerified = false
+        fullAccessVerified = false
+        verificationText = ""
+        challenge = verificationStore.beginKeyboardChallenge()
+    }
+
+    private func acceptKeyboardResponse(_ value: String) {
+        guard let challenge, value.contains(challenge.responseToken) else { return }
+        keyboardVerified = true
+        verificationText = "Muesli Keyboard verified"
+        refreshReceipt()
+    }
+
+    private func refreshReceipt() {
+        guard let challenge else { return }
+        if !challenge.isActive() {
+            beginVerification()
+            return
+        }
+        guard let receipt = verificationStore.keyboardReceipt(for: challenge),
+              receipt.hasFullAccess else { return }
+        keyboardVerified = true
+        fullAccessVerified = true
+        verificationText = "Muesli Keyboard + Full Access verified"
+        verificationFieldFocused = false
+    }
+
+    private func openAppSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 }
 

@@ -9,9 +9,11 @@ final class KeyboardController {
     private static let staleTranscribingInterval: TimeInterval = 120
     private let store: SharedStore
     private let eventBus: any CrossProcessEventStreaming
+    private let setupVerificationStore: SetupVerificationStore
     private let handoffRecoveryPolicy = KeyboardHandoffRecoveryPolicy.keyboardDefaults
     private var eventObservationTask: Task<Void, Never>?
     private var commandAcknowledgementTask: Task<Void, Never>?
+    private var visibilityHeartbeatTask: Task<Void, Never>?
     private var latestResultID: UUID?
     private var preparedRequest: DictationRequest?
     private var activeRequestID: UUID?
@@ -27,6 +29,7 @@ final class KeyboardController {
     private var lastRecordedHandoff: (requestID: UUID, phase: KeyboardHandoffPhase)?
     private var lastLevelFreshness: Bool?
     private var pendingModelRawValue: String?
+    private var hasOpenAccessForSetup = false
 
     var statusText = "Record a voice note first"
     var hasLatestDictation = false
@@ -40,15 +43,28 @@ final class KeyboardController {
     var inputLevel = 0.0
     var isLaunchSettled = false
     var modelCatalog: KeyboardTranscriptionModelCatalog?
+    var setupVerificationChallenge: KeyboardSetupVerificationChallenge?
     private var lastInsertedCharacterCount = 0
     private var canUseRuntimeStart = false
 
     init(
         store: SharedStore? = nil,
-        eventBus: any CrossProcessEventStreaming = DarwinCrossProcessEventBus.shared
+        eventBus: any CrossProcessEventStreaming = DarwinCrossProcessEventBus.shared,
+        setupVerificationStore: SetupVerificationStore = SetupVerificationStore()
     ) {
         self.eventBus = eventBus
         self.store = store ?? SharedStore(eventPoster: eventBus)
+        self.setupVerificationStore = setupVerificationStore
+    }
+
+    var hasPendingSetupVerification: Bool {
+        setupVerificationChallenge?.isActive() == true
+    }
+
+    var setupVerificationDetail: String {
+        hasOpenAccessForSetup
+            ? "Proves Keyboard and Full Access"
+            : "Proves Keyboard • Full Access still off"
     }
 
     var showsLiveTranscript: Bool {
@@ -438,13 +454,24 @@ final class KeyboardController {
     }
 
     func prepareInitialPresentationState() {
+        refreshSetupVerificationChallenge()
         refreshLatestDictation()
         prepareLaunchRequestIfNeeded()
     }
 
-    func startObservingSharedState() {
+    func startObservingSharedState(hasOpenAccess: Bool = true) {
+        hasOpenAccessForSetup = hasOpenAccess
+        refreshSetupVerificationChallenge()
         KeyboardDiagnosticsLog.record("keyboard.appeared")
-        markKeyboardVisible()
+        markKeyboardVisible(hasOpenAccess: hasOpenAccess)
+        visibilityHeartbeatTask?.cancel()
+        visibilityHeartbeatTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self else { return }
+                self.markKeyboardVisible(hasOpenAccess: hasOpenAccess)
+            }
+        }
         eventObservationTask?.cancel()
         let events = eventBus.events()
         refreshLatestDictation()
@@ -468,9 +495,15 @@ final class KeyboardController {
         }
     }
 
-    func markKeyboardVisible() {
+    func markKeyboardVisible(hasOpenAccess: Bool = true) {
+        hasOpenAccessForSetup = hasOpenAccess
+        refreshSetupVerificationChallenge()
         do {
-            try store.saveKeyboardExtensionStatus(.init(lastSeenAt: .now, hasOpenAccess: true))
+            try store.saveKeyboardExtensionStatus(.init(
+                lastSeenAt: .now,
+                hasOpenAccess: hasOpenAccess,
+                isVisible: true
+            ))
         } catch {
             statusText = "Enable Full Access"
         }
@@ -494,6 +527,41 @@ final class KeyboardController {
         eventObservationTask = nil
         commandAcknowledgementTask?.cancel()
         commandAcknowledgementTask = nil
+        visibilityHeartbeatTask?.cancel()
+        visibilityHeartbeatTask = nil
+        if let status = try? store.keyboardExtensionStatus() {
+            try? store.saveKeyboardExtensionStatus(.init(
+                lastSeenAt: .now,
+                hasOpenAccess: status.hasOpenAccess,
+                isVisible: false
+            ))
+        }
+    }
+
+    func verifyKeyboardSetup() {
+        refreshSetupVerificationChallenge()
+        guard let challenge = setupVerificationChallenge, challenge.isActive() else {
+            statusText = "Return to Muesli and restart the test"
+            return
+        }
+
+        // Inserting the nonce response through UITextDocumentProxy proves that
+        // this keyboard is both installed and active. It deliberately bypasses
+        // insertText(_:), whose character count belongs to transcript replacement.
+        textInserter?(challenge.responseToken)
+        if hasOpenAccessForSetup {
+            setupVerificationStore.saveKeyboardReceipt(
+                for: challenge,
+                hasFullAccess: true
+            )
+            statusText = "Setup verified"
+        } else {
+            statusText = "Keyboard verified • Enable Full Access"
+        }
+    }
+
+    private func refreshSetupVerificationChallenge() {
+        setupVerificationChallenge = setupVerificationStore.activeKeyboardChallenge()
     }
 
     private func refreshLatestDictation() {
@@ -681,6 +749,12 @@ final class KeyboardController {
             dictationPhase = .transcribing
             inputLevel = 0
             statusText = handoffState.message ?? "Inserting"
+        case .copyRequired:
+            dictationPhase = .finished
+            activeRequestID = nil
+            liveTranscript = ""
+            inputLevel = 0
+            statusText = "Saved — open Muesli to copy"
         case .inserted:
             dictationPhase = .finished
             activeRequestID = nil
@@ -941,6 +1015,16 @@ final class KeyboardController {
     }
 
     private func insertCompletedResult(_ result: DictationResult) {
+        // A resultChanged event can arrive before the host publishes its final
+        // clipboard handoff. The delivery choice travels with the recording,
+        // so the keyboard must not insert this result during that interval.
+        if result.source == ActionButtonCaptureSource.clipboard {
+            activeRequestID = nil
+            liveTranscript = ""
+            dictationPhase = .finished
+            statusText = "Saved to Voice Notes"
+            return
+        }
         let shortID = result.requestID.uuidString.prefix(8).lowercased()
 
         // These two guards correctly prevent a double insertion, but they

@@ -10,6 +10,16 @@ struct MuesliLiveActivityAttributes: ActivityAttributes {
         var detail: String
         var startedAt: Date
         var accent: String
+        // Optional for Live Activities created by older app versions.
+        var waveform: [Double]? = nil
+        var copyURL: URL? = nil
+
+        var isCapturingAudio: Bool {
+            switch phase.lowercased() {
+            case "listening", "recording", "notepad", "long voice note": true
+            default: false
+            }
+        }
     }
 
     var sessionID: String
@@ -22,6 +32,7 @@ struct MuesliLiveActivityAttributes: ActivityAttributes {
     /// Optional so an activity started by an earlier build still decodes; when
     /// absent, fall back to the old meaning of `kind`.
     var offersStopControl: Bool?
+    var showsDictationWaveform: Bool? = nil
 
     var showsStopControl: Bool {
         offersStopControl ?? isMeeting

@@ -215,6 +215,31 @@ final class KeyboardControllerTests: XCTestCase {
 
     // MARK: - Insertion
 
+    func testCopyRequiredResultDoesNotInsertIntoANewKeyboardField() throws {
+        let result = DictationResult(requestID: requestID, text: "Saved from Action Button", engineIdentifier: "test", source: "action_button")
+        try store.saveResult(result)
+        try store.saveKeyboardHandoffState(handoff(.copyRequired))
+
+        controller.prepareInitialPresentationState()
+        controller.prepareInitialPresentationState()
+
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertFalse(controller.showsActiveWaveform)
+        XCTAssertFalse(controller.canCancelActiveDictation)
+        XCTAssertEqual(try store.result(for: requestID)?.text, result.text)
+    }
+
+    func testActionButtonResultInsertsOnceThroughActiveKeyboard() throws {
+        let result = DictationResult(requestID: requestID, text: "From the button", engineIdentifier: "test", source: "action_button")
+        try store.saveResult(result)
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+
+        controller.prepareInitialPresentationState()
+        controller.prepareInitialPresentationState()
+
+        XCTAssertEqual(insertedText, [result.text])
+    }
+
     func testACompletedResultIsInsertedOnce() throws {
         let result = DictationResult(requestID: requestID, text: "hello there", engineIdentifier: "test")
         try store.saveResult(result)

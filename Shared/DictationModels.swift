@@ -27,13 +27,14 @@ enum KeyboardHandoffPhase: String, Codable, Sendable, Equatable {
     case transcribingStarted
     case resultReady
     case inserted
+    case copyRequired
     case recoveryRequested
     case failed
     case cancelled
 
     var dictationPhase: DictationPhase {
         switch self {
-        case .idle, .inserted, .cancelled:
+        case .idle, .inserted, .copyRequired, .cancelled:
             .idle
         case .startRequested, .startAcknowledged:
             .requested
@@ -156,7 +157,7 @@ enum SyncOrigin: Sendable, Equatable {
 
     private static func isLocalSource(_ source: String) -> Bool {
         switch source {
-        case "ios", "iphone", "app", "keyboard":
+        case "ios", "iphone", "app", "keyboard", "action_button", "action_button_clipboard":
             true
         default:
             false
@@ -760,6 +761,28 @@ struct DictationStatus: Codable, Sendable, Equatable {
 struct KeyboardExtensionStatus: Codable, Sendable, Equatable {
     let lastSeenAt: Date
     let hasOpenAccess: Bool
+    let isVisible: Bool
+
+    init(lastSeenAt: Date, hasOpenAccess: Bool, isVisible: Bool = true) {
+        self.lastSeenAt = lastSeenAt
+        self.hasOpenAccess = hasOpenAccess
+        self.isVisible = isVisible
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case lastSeenAt
+        case hasOpenAccess
+        case isVisible
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastSeenAt = try container.decode(Date.self, forKey: .lastSeenAt)
+        hasOpenAccess = try container.decode(Bool.self, forKey: .hasOpenAccess)
+        // Status records written before Action Button support only represented
+        // a successful keyboard launch, so preserve that historical meaning.
+        isVisible = try container.decodeIfPresent(Bool.self, forKey: .isVisible) ?? true
+    }
 }
 
 struct KeyboardRuntimeStatus: Codable, Sendable, Equatable {

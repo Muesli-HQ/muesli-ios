@@ -21,7 +21,15 @@ struct MuesliApp: App {
     var body: some Scene {
         WindowGroup {
             LaunchWarmupContainer(coordinator: coordinator) {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-keyboard-permissions") {
+                    OnboardingView(coordinator: coordinator)
+                } else {
+                    RootView(coordinator: coordinator)
+                }
+                #else
                 RootView(coordinator: coordinator)
+                #endif
             }
                 .task {
                     #if DEBUG && targetEnvironment(simulator)

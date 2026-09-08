@@ -17,7 +17,9 @@ struct ToggleMuesliDictationIntent: AudioRecordingIntent, LiveActivityIntent {
         guard case .stopped(let sessionID) = capture else { return ActionButtonShortcutOutput.intentResult(nil) }
         let store = SharedStore()
         let text = try await ActionButtonShortcutOutput.waitForTranscript {
-            guard let session = try store.recordingSession(id: sessionID) else { return nil }
+            guard let session = try store.recordingSession(id: sessionID) else {
+                throw ActionButtonCaptureError.unavailable("This recording is no longer available in Muesli.")
+            }
             if session.phase == .failed || session.phase == .cancelled {
                 throw ActionButtonCaptureError.unavailable(session.errorMessage ?? "The recording could not be transcribed.")
             }
@@ -163,12 +165,17 @@ enum ActionButtonShortcutOutput {
     }
 
     static func waitForTranscript(
-        timeout: Duration = .seconds(60),
+        // Production completion is owned by the transcription lifecycle, including
+        // its progress-aware watchdog. A separate wall-clock deadline can expire
+        // while that job is healthy. Explicit deadlines are only for callers
+        // that deliberately need a bounded wait.
+        timeout: Duration? = nil,
         pollInterval: Duration = .milliseconds(100),
+        now: () -> ContinuousClock.Instant = { ContinuousClock().now },
         read: @MainActor () throws -> String?
     ) async throws -> String {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
+        let startedAt = now()
+        let deadline = timeout.map { startedAt.advanced(by: $0) }
         while true {
             try Task.checkCancellation()
             if let text = try read() {
@@ -177,7 +184,7 @@ enum ActionButtonShortcutOutput {
                 }
                 return text
             }
-            guard clock.now < deadline else {
+            if let deadline, now() >= deadline {
                 throw ActionButtonCaptureError.unavailable("Transcription is still finishing. Your recording is saved in Muesli.")
             }
             try await Task.sleep(for: pollInterval)

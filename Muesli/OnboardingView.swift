@@ -22,8 +22,8 @@ struct OnboardingView: View {
     @State private var nameDraft = ""
     @State private var useCaseDraft: OnboardingUseCase = .keyboardDictation
     @State private var microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-    @State private var keyboardEnabledConfirmed = false
-    @State private var fullAccessConfirmed = false
+    @State private var keyboardEnabledConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.keyboardEnabledConfirmed)
+    @State private var fullAccessConfirmed = UserDefaults.standard.bool(forKey: OnboardingPreferenceKeys.fullAccessConfirmed)
     @State private var meetingSummariesEnabled = UserDefaults.standard.object(
         forKey: MuesliPreferences.meetingSummariesEnabledKey
     ) == nil ? true : UserDefaults.standard.bool(forKey: MuesliPreferences.meetingSummariesEnabledKey)
@@ -1491,6 +1491,15 @@ struct KeyboardSetupVerificationView: View {
                     )
                 }
 
+                if keyboardVerified || fullAccessVerified {
+                    Button("Verify again") {
+                        keyboardVerified = false
+                        fullAccessVerified = false
+                        beginVerification()
+                    }
+                    .accessibilityIdentifier("onboarding.verifyAgain")
+                }
+
                 Text(statusDetail)
                     .font(MuesliTheme.caption())
                     .foregroundStyle(fullAccessVerified ? MuesliTheme.success : MuesliTheme.textTertiary)
@@ -1518,7 +1527,7 @@ struct KeyboardSetupVerificationView: View {
 
     private var statusDetail: String {
         if fullAccessVerified {
-            return "Verified from the active Muesli Keyboard with Full Access."
+            return "Keyboard and Full Access verified. Choose Verify again to check your current settings."
         }
         if keyboardVerified {
             return "Keyboard verified. Enable Full Access, then select Muesli and tap Verify once more."
@@ -1534,8 +1543,12 @@ struct KeyboardSetupVerificationView: View {
     }
 
     private func beginVerification() {
-        keyboardVerified = false
-        fullAccessVerified = false
+        guard !fullAccessVerified else {
+            verificationText = "Muesli Keyboard + Full Access verified"
+            return
+        }
+        // Preserve completed keyboard proof while obtaining Full Access proof.
+        // Only the explicit Verify again action clears saved confirmations.
         verificationText = ""
         challenge = verificationStore.beginKeyboardChallenge()
     }

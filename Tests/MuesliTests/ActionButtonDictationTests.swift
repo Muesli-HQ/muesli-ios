@@ -88,6 +88,30 @@ final class ActionButtonDictationTests: XCTestCase {
         XCTAssertEqual(reads, 3)
     }
 
+    func testHealthyTranscriptionCanOutliveFiveMinutes() async throws {
+        let start = ContinuousClock().now
+        var elapsed = Duration.zero
+        var reads = 0
+        let text = try await ActionButtonShortcutOutput.waitForTranscript(
+            pollInterval: .milliseconds(1), now: { start.advanced(by: elapsed) }
+        ) {
+            reads += 1
+            elapsed += .seconds(120)
+            return reads == 4 ? "A longer transcription" : nil
+        }
+        XCTAssertEqual(text, "A longer transcription")
+        XCTAssertEqual(reads, 4)
+    }
+
+    func testTranscriptionFailureEndsUnboundedShortcutWait() async {
+        do {
+            _ = try await ActionButtonShortcutOutput.waitForTranscript {
+                throw ActionButtonCaptureError.unavailable("Transcription failed")
+            }
+            XCTFail("A failed job must end the shortcut")
+        } catch { XCTAssertEqual(error.localizedDescription, "Transcription failed") }
+    }
+
     func testShortcutRejectsEmptyCompletedTranscript() async {
         for emptyText in ["", " \n\t"] {
             do {

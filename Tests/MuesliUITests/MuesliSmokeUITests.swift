@@ -29,6 +29,27 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Start Notepad"].waitForExistence(timeout: 3))
     }
 
+    func testSavedKeyboardVerificationSurvivesRelaunchAndCanBeReset() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing", "--muesli-ui-testing-keyboard-permissions",
+            "-muesli.onboarding.currentStep", "1",
+            "-muesli.onboarding.keyboardEnabledConfirmed", "YES",
+            "-muesli.onboarding.fullAccessConfirmed", "YES"
+        ]
+        app.launch()
+        let status = app.staticTexts["Keyboard and Full Access verified. Choose Verify again to check your current settings."]
+        XCTAssertTrue(status.waitForExistence(timeout: 8))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(status.waitForExistence(timeout: 8))
+        let verify = app.buttons["onboarding.verifyAgain"]
+        for _ in 0..<5 where !verify.isHittable { app.swipeUp() }
+        verify.tap()
+        XCTAssertFalse(status.exists)
+        XCTAssertTrue(app.staticTexts["The Continue button unlocks only after Muesli receives both proofs."].exists)
+    }
+
     private func actionButtonApp(_ arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-action-button-onboarding"] + arguments

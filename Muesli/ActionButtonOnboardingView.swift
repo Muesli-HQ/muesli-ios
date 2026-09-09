@@ -313,3 +313,27 @@ private struct ActionButtonShortcutImportSheet: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+
+// Hardware identifiers, not marketing generation numbers. Keep unknown models
+// out of hardware-specific setup until their controls have been confirmed.
+enum ActionButtonHardware {
+    static var isSupported: Bool {
+        #if targetEnvironment(simulator)
+        return supports(identifier: ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? "")
+        #else
+        var info = utsname()
+        uname(&info)
+        let identifier = withUnsafePointer(to: &info.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
+        }
+        return supports(identifier: identifier)
+        #endif
+    }
+
+    static func supports(identifier: String) -> Bool {
+        // iPhone 15 Pro/Pro Max; 16 family; 17 family and Air.
+        ["iPhone16,1", "iPhone16,2",
+         "iPhone17,1", "iPhone17,2", "iPhone17,3", "iPhone17,4", "iPhone17,5",
+         "iPhone18,1", "iPhone18,2", "iPhone18,3", "iPhone18,4", "iPhone18,5"].contains(identifier)
+    }
+}

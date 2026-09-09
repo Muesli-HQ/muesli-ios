@@ -14,6 +14,7 @@ final class KeyboardController {
     private var eventObservationTask: Task<Void, Never>?
     private var commandAcknowledgementTask: Task<Void, Never>?
     private var visibilityHeartbeatTask: Task<Void, Never>?
+    var currentFullAccess: (() -> Bool)?
     private var latestResultID: UUID?
     private var preparedRequest: DictationRequest?
     private var activeRequestID: UUID?
@@ -469,7 +470,7 @@ final class KeyboardController {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
-                self.markKeyboardVisible(hasOpenAccess: hasOpenAccess)
+                self.publishVisibilityHeartbeat()
             }
         }
         eventObservationTask?.cancel()
@@ -493,6 +494,16 @@ final class KeyboardController {
                 }
             }
         }
+    }
+
+    func publishVisibilityHeartbeat() {
+        let access = currentFullAccess?() ?? hasOpenAccessForSetup
+        hasOpenAccessForSetup = access
+        refreshSetupVerificationChallenge()
+        // Heartbeats must not replace recording or setup messages on failure.
+        try? store.saveKeyboardExtensionStatus(.init(
+            lastSeenAt: .now, hasOpenAccess: access, isVisible: true
+        ))
     }
 
     func markKeyboardVisible(hasOpenAccess: Bool = true) {

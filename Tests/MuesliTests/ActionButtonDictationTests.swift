@@ -88,6 +88,15 @@ final class ActionButtonDictationTests: XCTestCase {
         XCTAssertEqual(reads, 3)
     }
 
+    func testActionButtonHardwareExcludesUnsupportedDevices() {
+        for identifier in ["iPhone16,1", "iPhone16,2", "iPhone17,1", "iPhone17,5", "iPhone18,3"] {
+            XCTAssertTrue(ActionButtonHardware.supports(identifier: identifier), identifier)
+        }
+        for identifier in ["iPhone15,4", "iPhone15,5", "iPhone14,6", "iPad16,1", "arm64", "", "iPhone99,1"] {
+            XCTAssertFalse(ActionButtonHardware.supports(identifier: identifier), identifier)
+        }
+    }
+
     func testHealthyTranscriptionCanOutliveFiveMinutes() async throws {
         let start = ContinuousClock().now
         var elapsed = Duration.zero

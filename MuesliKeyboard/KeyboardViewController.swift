@@ -208,6 +208,7 @@ private extension KeyboardViewController {
                     isPresented: self.isKeyboardPresented,
                     hasActivatedRuntime: self.hasActivatedKeyboardRuntime
                   ) else { return }
+            self.controller.currentFullAccess = { [weak self] in self?.hasFullAccess ?? false }
             self.controller.startObservingSharedState(hasOpenAccess: self.hasFullAccess)
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in

@@ -125,7 +125,7 @@ struct DictationView: View {
 
     private var shouldShowActionButtonInvitation: Bool {
         guard #available(iOS 18.0, *) else { return false }
-        return UIDevice.current.userInterfaceIdiom == .phone
+        return ActionButtonHardware.isSupported
     }
 
     private var actionButtonInvitation: some View {
@@ -141,7 +141,7 @@ struct DictationView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Action Button").font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text(actionButtonSetupCompleted ? "Previously verified" : "Dictation or a meeting note")
+                    Text(actionButtonSetupCompleted ? "Setup completed" : "Dictation or a meeting note")
                         .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
                 }
                 Spacer(minLength: 8)

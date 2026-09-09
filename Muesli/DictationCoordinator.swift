@@ -4784,7 +4784,7 @@ final class DictationCoordinator {
                             session: session,
                             requestID: request.id,
                             phase: "Listening",
-                            detail: "Recording for keyboard insertion"
+                            detail: ""
                         )
                         guard didStartRequiredLiveActivity else {
                             throw ActionButtonCaptureFailure.liveActivityUnavailable

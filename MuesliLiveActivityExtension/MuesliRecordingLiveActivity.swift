@@ -110,10 +110,12 @@ private struct LockScreenLiveActivityView: View {
                 Text("muesli")
                     .font(LiveActivityTypography.wordmark)
                     .foregroundStyle(.white)
-                Text(state.detail)
-                    .font(LiveActivityTypography.body)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .lineLimit(1)
+                if !state.detail.isEmpty {
+                    Text(state.detail)
+                        .font(LiveActivityTypography.body)
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                }
             }
 
             Spacer()

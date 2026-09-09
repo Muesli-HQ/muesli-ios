@@ -40,6 +40,28 @@ final class KeyboardControllerTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testHeartbeatUsesCurrentAccessWithoutOverwritingStatus() throws {
+        var access = false
+        controller.currentFullAccess = { access }
+        controller.statusText = "Listening"
+        controller.publishVisibilityHeartbeat()
+        XCTAssertEqual(try store.keyboardExtensionStatus()?.hasOpenAccess, false)
+        access = true
+        controller.publishVisibilityHeartbeat()
+        XCTAssertEqual(try store.keyboardExtensionStatus()?.hasOpenAccess, true)
+        XCTAssertEqual(controller.setupVerificationDetail, "Proves Keyboard and Full Access")
+        XCTAssertEqual(controller.statusText, "Listening")
+    }
+
+    func testHeartbeatStorageFailurePreservesStatus() throws {
+        try FileManager.default.removeItem(at: directory)
+        try Data().write(to: directory)
+        controller.currentFullAccess = { false }
+        controller.statusText = "Keyboard verified • Enable Full Access"
+        controller.publishVisibilityHeartbeat()
+        XCTAssertEqual(controller.statusText, "Keyboard verified • Enable Full Access")
+    }
+
     // MARK: - Helpers
 
     private func recordingStatus(

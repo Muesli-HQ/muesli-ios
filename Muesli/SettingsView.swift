@@ -144,7 +144,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     settingsHeader
 
-                    if #available(iOS 18.0, *) {
+                    if #available(iOS 18.0, *), ActionButtonHardware.isSupported {
                         MuesliSurface {
                             SettingsNavigationRow(
                                 icon: "button.programmable",
@@ -243,7 +243,7 @@ struct SettingsView: View {
             MuesliSurface {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                     SettingsRow(icon: "keyboard", title: "Keyboard Extension", value: keyboardStatusText)
-                    if #available(iOS 18.0, *) {
+                    if #available(iOS 18.0, *), ActionButtonHardware.isSupported {
                         Divider().overlay(MuesliTheme.surfaceBorder)
                         SettingsNavigationRow(
                             icon: "button.programmable",

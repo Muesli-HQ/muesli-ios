@@ -92,14 +92,6 @@ struct KeyboardRootView: View {
 
             transcriptionModelMenu
 
-            if let settingsURL = controller.settingsURL {
-                Link(destination: settingsURL) {
-                    KeyboardIconLabel(systemImage: "gearshape.fill")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Muesli settings")
-            }
-
             KeyboardIconKey(systemImage: "chevron.down", accessibilityLabel: "Dismiss keyboard") {
                 controller.dismissKeyboard()
             }
@@ -300,10 +292,15 @@ struct KeyboardRootView: View {
             }
 
             HStack(spacing: 5) {
-                KeyboardTextKey(systemImage: "globe", accessibilityLabel: "Next keyboard") {
-                    controller.switchInputMode()
-                }
+                if let settingsURL = controller.settingsURL {
+                    Link(destination: settingsURL) {
+                        KeyboardTextKeyLabel(systemImage: "gearshape.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .muesliKeyboardKeySurface()
+                    .accessibilityLabel("Muesli settings")
                     .frame(maxWidth: 58)
+                }
 
                 KeyboardTextKey("ABC") { controller.switchInputMode() }
                     .frame(maxWidth: 66)

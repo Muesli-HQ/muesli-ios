@@ -103,9 +103,13 @@ final class MuesliSmokeUITests: XCTestCase {
         captureActionButton(app, name: "Settings Action Button entry")
         actionButton.tap()
 
-        let chooseAction = app.buttons["actionButton.mode.dictation"]
+        // Settings resumes any saved setup step, including Prepare and Add.
+        // Verify navigation into the actual setup screen instead of assuming
+        // which step another test (or the user) previously left open.
+        XCTAssertTrue(app.buttons["Close setup"].waitForExistence(timeout: 5))
+        let primary = app.buttons["actionButton.primaryAction"]
         let assignment = app.buttons["actionButton.openSettings"]
-        XCTAssertTrue(chooseAction.waitForExistence(timeout: 3) || assignment.waitForExistence(timeout: 3))
+        XCTAssertTrue(primary.waitForExistence(timeout: 3) || assignment.waitForExistence(timeout: 3))
         captureActionButton(app, name: "Action Button opened from Settings")
     }
 

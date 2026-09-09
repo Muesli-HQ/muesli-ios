@@ -6879,8 +6879,8 @@ final class DictationCoordinator {
             try? store.saveSession(session)
             try? store.saveResult(DictationResult(requestID: previewRequestID, text: "Muesli copy verification", engineIdentifier: "test", source: "action_button"))
             await liveActivityController.offerForegroundCopy(session: session, requestID: previewRequestID)
-            try? store.clearResult(for: previewRequestID)
-            try? store.deleteRecordingSession(id: session.id)
+            // Keep the preview transcript available while the Live Activity offers
+            // its copy link, just as completed recordings remain available.
         } else {
             await liveActivityController.end(phase: "Ended", detail: "Preview ended", session: session, dismissal: .immediate)
         }

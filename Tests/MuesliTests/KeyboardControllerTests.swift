@@ -105,7 +105,13 @@ final class KeyboardControllerTests: XCTestCase {
             XCTAssertFalse(controller.canCancelActiveDictation)
             XCTAssertTrue(insertedText.isEmpty)
         }
-        controller.insertLatestDictation()
+        let rebuilt = KeyboardController(store: store, eventBus: bus)
+        rebuilt.textInserter = { [weak self] in self?.insertedText.append($0) }
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertFalse(rebuilt.showsActiveWaveform)
+        XCTAssertFalse(rebuilt.canCancelActiveDictation)
+        XCTAssertTrue(insertedText.isEmpty)
+        rebuilt.insertLatestDictation()
         XCTAssertEqual(insertedText, ["Clipboard only"])
     }
 

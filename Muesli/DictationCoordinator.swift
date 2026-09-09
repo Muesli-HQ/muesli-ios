@@ -6877,6 +6877,18 @@ final class DictationCoordinator {
         defer { if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) } }
         let previewRequestID = UUID()
         let session = RecordingSession(requestID: previewRequestID, kind: .keyboardDictation, startedAt: .now, phase: .recording, source: "action_button")
+        // This fixture has no audio background mode to extend its lifetime.
+        // Persist its known transcript while foregrounded; a slow CI run can
+        // exhaust the background allowance before the copy phase is displayed.
+        do {
+            try store.saveSession(session)
+            if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-copy") {
+                try store.saveResult(DictationResult(requestID: previewRequestID, text: "Muesli copy verification", engineIdentifier: "test", source: "action_button"))
+            }
+        } catch {
+            KeyboardDiagnosticsLog.record("preview.persistFailed", ["error": String(describing: error)])
+            return
+        }
         activeSession = session
         waveformPreviewSessionID = session.id
         waveformPreviewStopRequested = false
@@ -6914,8 +6926,6 @@ final class DictationCoordinator {
         try? await Task.sleep(for: .seconds(7))
         activeSession = nil
         if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-copy") {
-            try? store.saveSession(session)
-            try? store.saveResult(DictationResult(requestID: previewRequestID, text: "Muesli copy verification", engineIdentifier: "test", source: "action_button"))
             await liveActivityController.offerForegroundCopy(session: session, requestID: previewRequestID)
             // Keep the preview transcript available while the Live Activity offers
             // its copy link, just as completed recordings remain available.
@@ -7230,7 +7240,7 @@ final class DictationCoordinator {
         guard UIApplication.shared.applicationState == .active,
               let requestID = pendingDictationCopyRequestID else { return }
         pendingDictationCopyRequestID = nil
-        guard let result = try? store.result(for: requestID), !result.text.isEmpty else {
+        guard let result = try? store.completedResult(for: requestID), !result.text.isEmpty else {
             clipboardStatusText = "Transcript unavailable"
             return
         }

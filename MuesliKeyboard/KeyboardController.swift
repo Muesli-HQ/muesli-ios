@@ -585,10 +585,24 @@ final class KeyboardController {
             refreshModelCatalog()
             let runtimeStatus = try store.keyboardRuntimeStatus()
             latestRuntimeStatus = runtimeStatus
-            apply(runtimeStatus: runtimeStatus)
             let status = try store.status()
-
             let handoffState = try store.keyboardHandoffState()
+            // Restore terminal clipboard ownership before stale snapshots can
+            // re-adopt a request after iOS rebuilds the extension.
+            let requestIDs = Set([runtimeStatus?.activeRequestID, status.requestID, handoffState.requestID].compactMap { $0 })
+            for requestID in requestIDs where !completedClipboardRequestIDs.contains(requestID) {
+                if let result = try store.completedResult(for: requestID),
+                   result.source == ActionButtonCaptureSource.clipboard {
+                    completedClipboardRequestIDs.insert(requestID)
+                    if activeRequestID == requestID {
+                        activeRequestID = nil
+                        liveTranscript = ""
+                        dictationPhase = .finished
+                        inputLevel = 0
+                    }
+                }
+            }
+            apply(runtimeStatus: runtimeStatus)
             if let command = try store.pendingCommand(), command.action == .cancel {
                 pendingCancellationIDs.insert(command.requestID)
             }

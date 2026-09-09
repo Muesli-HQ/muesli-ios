@@ -15,18 +15,6 @@ struct MuesliApp: App {
     }
 
     init() {
-        SharedStoreDatabaseAccess.install { expire in
-            let begin = {
-                MainActor.assumeIsolated {
-                    UIApplication.shared.beginBackgroundTask(withName: "Muesli database access", expirationHandler: expire)
-                }
-            }
-            let token = Thread.isMainThread ? begin() : DispatchQueue.main.sync(execute: begin)
-            guard token != .invalid else { throw CancellationError() }
-            return {
-                DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(token) }
-            }
-        }
         _coordinator = State(initialValue: DictationCoordinator())
         AppTelemetry.configure()
     }

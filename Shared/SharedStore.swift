@@ -94,6 +94,11 @@ struct SharedStore: Sendable {
         try database().result(for: requestID)
     }
 
+    /// Durable completion survives consumption of the one-shot Shortcut pickup.
+    func completedResult(for requestID: UUID) throws -> DictationResult? {
+        try database().completedResult(for: requestID)
+    }
+
     func resultsHistory() throws -> [DictationResult] {
         try database().resultsHistory()
     }
@@ -713,6 +718,17 @@ private struct SharedStoreDatabase {
         try withDatabase { db in
             try querySingleBlob(
                 "SELECT payload FROM result_pickups WHERE request_id = ? LIMIT 1",
+                db: db
+            ) { statement in
+                try bind(requestID.uuidString, to: statement, at: 1)
+            }.map { try decoder.decode(DictationResult.self, from: $0) }
+        }
+    }
+
+    func completedResult(for requestID: UUID) throws -> DictationResult? {
+        try withDatabase { db in
+            try querySingleBlob(
+                "SELECT payload FROM result_history WHERE request_id = ? AND deleted_at IS NULL LIMIT 1",
                 db: db
             ) { statement in
                 try bind(requestID.uuidString, to: statement, at: 1)

@@ -122,6 +122,36 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertTrue(try store.resultsHistory().isEmpty)
     }
 
+    func testDurableResultSurvivesPickupConsumptionButNotDeletion() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let result = DictationResult(requestID: UUID(), text: "Saved words", engineIdentifier: "test", source: ActionButtonCaptureSource.clipboard)
+        try store.saveResult(result)
+        try store.clearResult(for: result.requestID)
+        XCTAssertNil(try store.result(for: result.requestID))
+        XCTAssertEqual(try store.completedResult(for: result.requestID)?.text, result.text)
+        XCTAssertNil(try store.completedResult(for: UUID()))
+        try store.deleteResult(result)
+        XCTAssertNil(try store.completedResult(for: result.requestID))
+    }
+
+    @MainActor
+    func testBackgroundDatabaseAccessDoesNotWaitForMainQueue() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Use the app module's store and its installed UIKit assertion factory.
+        let store = Muesli.SharedStore(containerURL: directory)
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            defer { finished.signal() }
+            do { _ = try store.status() }
+            catch { XCTFail("Background database access failed: \(error)") }
+        }
+        // Deliberately occupy main: an unnecessary main.sync makes this fail.
+        XCTAssertEqual(finished.wait(timeout: .now() + 2), .success)
+    }
+
     func testExpiredDatabaseAccessRejectsNewWorkAndClosesConnection() throws {
         let access = SharedStoreDatabaseAccess()
         var db: OpaquePointer?

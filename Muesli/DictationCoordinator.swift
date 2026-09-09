@@ -179,6 +179,10 @@ final class DictationCoordinator {
     private var meetingVadController: StreamingVadController?
     private let keyboardSessionKeeper = KeyboardSessionKeeper()
     private let liveActivityController = MuesliLiveActivityController()
+    #if DEBUG && targetEnvironment(simulator)
+    @ObservationIgnored private var waveformPreviewSessionID: UUID?
+    @ObservationIgnored private var waveformPreviewStopRequested = false
+    #endif
     @ObservationIgnored private var startupLiveActivityCleanupTask: Task<Void, Never>?
     private var modelPreparationTask: Task<Void, Never>?
     private var modelPrewarmTask: Task<Void, Never>?
@@ -5864,6 +5868,12 @@ final class DictationCoordinator {
             return .alreadyHandled
         }
 
+        #if DEBUG && targetEnvironment(simulator)
+        if waveformPreviewSessionID == sessionID {
+            waveformPreviewStopRequested = true
+            return .accepted
+        }
+        #endif
         stopRecording()
         AppTelemetry.signal(
             "capture_stopped_from_live_activity",
@@ -6855,12 +6865,15 @@ final class DictationCoordinator {
         let previewRequestID = UUID()
         let session = RecordingSession(requestID: previewRequestID, kind: .keyboardDictation, startedAt: .now, phase: .recording, source: "action_button")
         activeSession = session
-        isRecording = true
+        waveformPreviewSessionID = session.id
+        waveformPreviewStopRequested = false
+        defer { waveformPreviewSessionID = nil }
         guard await liveActivityController.start(session: session, requestID: nil, phase: "Listening", detail: "Simulator waveform preview") else {
             isRecording = false
             activeSession = nil
             return
         }
+        isRecording = true
         let began = ProcessInfo.processInfo.systemUptime
         beginMetering(readPower: {
             let elapsed = ProcessInfo.processInfo.systemUptime - began
@@ -6869,7 +6882,19 @@ final class DictationCoordinator {
         }, update: { [weak self] level in
             self?.publishLiveActivityWaveform(level, sessionID: session.id)
         })
-        try? await Task.sleep(for: .seconds(17))
+        // Keep Listening until the real Live Activity Stop intent arrives.
+        // UI rendering on a loaded CI host must not advance this fixture.
+        while !waveformPreviewStopRequested, !Task.isCancelled,
+              ProcessInfo.processInfo.systemUptime - began < 90 {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard waveformPreviewStopRequested else {
+            isRecording = false
+            stopMetering()
+            activeSession = nil
+            await liveActivityController.end(phase: "Ended", detail: "Preview timed out", session: session, dismissal: .immediate)
+            return
+        }
         isRecording = false
         stopMetering()
         await liveActivityController.update(phase: "Transcribing", detail: "Processing preview", session: session)

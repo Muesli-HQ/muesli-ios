@@ -136,14 +136,15 @@ final class SharedStoreTests: XCTestCase {
     func testDarwinEventBusDeliversPayloadFreeInvalidation() async {
         let bus = DarwinCrossProcessEventBus.shared
         let delivered = expectation(description: "Darwin event delivered")
+        // Creating the stream registers its continuation synchronously. Yielding
+        // a task does not guarantee that its subscription has been installed.
+        let events = bus.events()
         let observation = Task {
-            for await event in bus.events() where event == .ownershipChanged {
+            for await event in events where event == .ownershipChanged {
                 delivered.fulfill()
                 return
             }
         }
-        await Task.yield()
-
         bus.post(.ownershipChanged)
 
         await fulfillment(of: [delivered], timeout: 1)

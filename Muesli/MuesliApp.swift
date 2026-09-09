@@ -36,6 +36,13 @@ struct MuesliApp: App {
                     await coordinator.previewLiveActivityWaveformIfRequested()
                     #endif
                 }
+                #if DEBUG && targetEnvironment(simulator)
+                .overlay(alignment: .top) {
+                    if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform"), coordinator.isRecording {
+                        Text("Waveform preview ready").accessibilityIdentifier("islandPreview.ready")
+                    }
+                }
+                #endif
                 .alert("Copied to clipboard", isPresented: $coordinator.showsDictationCopyConfirmation) {
                     Button("OK", role: .cancel) { }
                 } message: {

@@ -22,6 +22,7 @@ final class KeyboardController {
     private var latestHandoffState: KeyboardHandoffState?
     private var latestRuntimeStatus: KeyboardRuntimeStatus?
     private var insertedRequestIDs = Set<UUID>()
+    private var completedClipboardRequestIDs = Set<UUID>()
     private var cancelledRequestIDs = Set<UUID>()
     private var pendingCancellationIDs = Set<UUID>()
     private var isBlockedByAppVoiceNote = false
@@ -722,6 +723,8 @@ final class KeyboardController {
             return
         }
 
+        guard !completedClipboardRequestIDs.contains(requestID) else { return }
+
         let resumablePhases: [KeyboardHandoffPhase] = [
             .startRequested,
             .startAcknowledged,
@@ -860,7 +863,8 @@ final class KeyboardController {
 
         guard activeRequestID == nil, canUseRuntimeStart else { return }
         guard let runtimeRequestID = runtimeStatus?.activeRequestID,
-              !cancelledRequestIDs.contains(runtimeRequestID)
+              !cancelledRequestIDs.contains(runtimeRequestID),
+              !completedClipboardRequestIDs.contains(runtimeRequestID)
         else {
             return
         }
@@ -886,7 +890,7 @@ final class KeyboardController {
             return
         }
 
-        if cancelledRequestIDs.contains(requestID) {
+        if cancelledRequestIDs.contains(requestID) || completedClipboardRequestIDs.contains(requestID) {
             return
         }
 
@@ -1055,6 +1059,7 @@ final class KeyboardController {
         // clipboard handoff. The delivery choice travels with the recording,
         // so the keyboard must not insert this result during that interval.
         if result.source == ActionButtonCaptureSource.clipboard {
+            completedClipboardRequestIDs.insert(result.requestID)
             activeRequestID = nil
             liveTranscript = ""
             dictationPhase = .finished

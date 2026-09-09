@@ -22,7 +22,7 @@ struct StopMeetingRecordingIntent: LiveActivityIntent {
             throw StopMeetingRecordingIntentError.invalidSession
         }
 
-        switch MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: sessionID) {
+        switch await MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: sessionID) {
         case .accepted, .alreadyHandled:
             return .result()
         case .failed, .unavailable:
@@ -54,7 +54,7 @@ enum MeetingLiveActivityStopResult: Equatable {
 
 @MainActor
 enum MeetingLiveActivityActionDispatcher {
-    typealias StopHandler = @MainActor (UUID) -> MeetingLiveActivityStopResult
+    typealias StopHandler = @MainActor (UUID) async -> MeetingLiveActivityStopResult
 
     private static var stopHandler: StopHandler?
 
@@ -62,8 +62,8 @@ enum MeetingLiveActivityActionDispatcher {
         self.stopHandler = stopHandler
     }
 
-    static func stopMeetingRecording(sessionID: UUID) -> MeetingLiveActivityStopResult {
+    static func stopMeetingRecording(sessionID: UUID) async -> MeetingLiveActivityStopResult {
         guard let stopHandler else { return .unavailable }
-        return stopHandler(sessionID)
+        return await stopHandler(sessionID)
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 
 actor MuesliLiveActivityController {
     private var activity: Activity<MuesliLiveActivityAttributes>?
+    private var stoppedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
     private var endedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
 
     @discardableResult
@@ -86,11 +87,27 @@ actor MuesliLiveActivityController {
         await activity.update(ActivityContent(state: state, staleDate: nil))
     }
 
+    /// Publish the acknowledged Stop before the LiveActivityIntent returns to
+    /// SpringBoard. Do not replace a newer completion/copy state.
+    func finishCapturePresentation(sessionID: UUID) async {
+        stoppedSessionIDs.insert(sessionID)
+        guard let activity,
+              activity.attributes.sessionID == sessionID.uuidString,
+              activity.content.state.isCapturingAudio else { return }
+        var state = activity.content.state
+        state.phase = "Transcribing"
+        state.detail = "Processing recording"
+        state.accent = "blue"
+        state.waveform = nil
+        await activity.update(ActivityContent(state: state, staleDate: nil))
+    }
+
     /// Meter updates only change the current recording's envelope. A late meter
     /// task cannot restore Listening after Stop, transcription, or cancellation.
     func updateWaveform(_ samples: [Double], sessionID: UUID) async {
         guard !Task.isCancelled,
               !endedSessionIDs.contains(sessionID),
+              !stoppedSessionIDs.contains(sessionID),
               let activity,
               activity.attributes.sessionID == sessionID.uuidString,
               activity.attributes.showsDictationWaveform == true,

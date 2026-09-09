@@ -87,6 +87,28 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertTrue(insertedText.isEmpty)
     }
 
+    func testCompletedClipboardRequestIgnoresLateHandoffAndRuntime() throws {
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+        try store.saveResult(.init(requestID: requestID, text: "Clipboard only", engineIdentifier: "test", source: ActionButtonCaptureSource.clipboard))
+        controller.prepareInitialPresentationState()
+        XCTAssertFalse(controller.showsActiveWaveform)
+        XCTAssertTrue(insertedText.isEmpty)
+
+        // The Shortcut may already have consumed the pickup while stale shared
+        // handoff/runtime snapshots are still visible to the keyboard.
+        try store.clearResult(for: requestID)
+        try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.8))
+        for phase: KeyboardHandoffPhase in [.resultReady, .transcribingStarted, .stopAcknowledged] {
+            try store.saveKeyboardHandoffState(handoff(phase))
+            controller.prepareInitialPresentationState()
+            XCTAssertFalse(controller.showsActiveWaveform)
+            XCTAssertFalse(controller.canCancelActiveDictation)
+            XCTAssertTrue(insertedText.isEmpty)
+        }
+        controller.insertLatestDictation()
+        XCTAssertEqual(insertedText, ["Clipboard only"])
+    }
+
     // MARK: - Helpers
 
     private func recordingStatus(

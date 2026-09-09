@@ -546,7 +546,12 @@ final class DictationCoordinator {
         publishKeyboardModelCatalog()
         processPendingKeyboardModelSelection()
         MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
-            self?.stopCaptureFromLiveActivity(sessionID: sessionID) ?? .unavailable
+            guard let self else { return .unavailable }
+            let result = self.stopCaptureFromLiveActivity(sessionID: sessionID)
+            if result == .accepted {
+                await self.liveActivityController.finishCapturePresentation(sessionID: sessionID)
+            }
+            return result
         }
         ActionButtonCaptureDispatcher.register { [weak self] mode in
             guard let self else { return .unavailable }
@@ -1523,6 +1528,9 @@ final class DictationCoordinator {
                 return .failed(meetingStatusText)
             }
             return .stopped(sessionID: session.id)
+        }
+        guard !recordingStartupInProgress else {
+            return .busy("Muesli is starting the microphone.")
         }
         guard !hasMeetingRecordingInProgress, !isRecording,
               !voiceNoteLifecycleState.isWorkActive, !isMeetingTranscribing else {
@@ -5565,7 +5573,7 @@ final class DictationCoordinator {
 
     @discardableResult
     func startMeetingRecording(title: String = "Untitled Meeting", requiresLiveActivity: Bool = false) -> UUID? {
-        guard !isRecording,
+        guard !recordingStartupInProgress, !isRecording,
               !hasMeetingRecordingInProgress,
               !isMeetingTranscribing,
               !voiceNoteLifecycleState.isWorkActive,

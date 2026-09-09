@@ -88,6 +88,38 @@ final class ActionButtonDictationTests: XCTestCase {
         XCTAssertEqual(reads, 3)
     }
 
+    func testMissingModelReleasesActionButtonHandoff() async throws {
+        guard let model = LocalTranscriptionModel.allCases.first(where: { !$0.isDownloaded }) else {
+            throw XCTSkip("Requires an undownloaded model")
+        }
+        let defaults = UserDefaults.standard
+        let keys = [MuesliPreferences.transcriptionModelKey,
+                    MuesliPreferences.manuallyRemovedTranscriptionModelKey,
+                    MuesliPreferences.keyboardSessionModeKey]
+        let previous = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, previous) {
+                if let value { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+        }
+        defaults.set(model.rawValue, forKey: keys[0])
+        defaults.set(model.rawValue, forKey: keys[1]) // No network download in this test.
+        defaults.set(false, forKey: keys[2])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let coordinator = DictationCoordinator(store: store)
+        guard case .failed = await coordinator.toggleActionButtonDictation() else {
+            return XCTFail("Missing model must reject capture")
+        }
+        XCTAssertFalse(coordinator.isRecording)
+        XCTAssertFalse(coordinator.isKeyboardHandoffActive)
+        XCTAssertEqual(try store.keyboardModelCatalog()?.canSelectModels, true)
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .failed)
+    }
+
     func testActionButtonHardwareExcludesUnsupportedDevices() {
         for identifier in ["iPhone16,1", "iPhone16,2", "iPhone17,1", "iPhone17,5", "iPhone18,3"] {
             XCTAssertTrue(ActionButtonHardware.supports(identifier: identifier), identifier)

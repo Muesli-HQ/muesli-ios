@@ -4652,6 +4652,11 @@ final class DictationCoordinator {
                 prepareSelectedModel(reason: "\(source)_recording")
             }
             if deliversToKeyboard {
+                // Release only this failed startup's handoff, preserving any
+                // unrelated recording or armed microphone session.
+                if keyboardSessionState.phase == .handoff(request.id) {
+                    transitionKeyboardSession(.requestFinished)
+                }
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
                 saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
                 saveKeyboardRuntimeStatus(

@@ -122,6 +122,35 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertTrue(try store.resultsHistory().isEmpty)
     }
 
+    func testExpiredDatabaseAccessRejectsNewWorkAndClosesConnection() throws {
+        let access = SharedStoreDatabaseAccess()
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
+        let database = try XCTUnwrap(db)
+        access.expire()
+        XCTAssertThrowsError(try access.attach(database))
+        access.finish()
+    }
+
+    func testDatabaseExpiryInterruptsQueriesAndReleasesFileLock() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("expiry.sqlite").path
+        let access = SharedStoreDatabaseAccess()
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(path, &db), SQLITE_OK)
+        let database = try XCTUnwrap(db)
+        try access.attach(database)
+        XCTAssertEqual(sqlite3_exec(database, "CREATE TABLE t (id INTEGER); BEGIN IMMEDIATE; INSERT INTO t VALUES(1)", nil, nil, nil), SQLITE_OK)
+        access.expire()
+        XCTAssertEqual(sqlite3_exec(database, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000) SELECT sum(x) FROM n", nil, nil, nil), SQLITE_INTERRUPT)
+        access.finish()
+        var reopened: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(path, &reopened), SQLITE_OK)
+        defer { sqlite3_close(reopened) }
+        XCTAssertEqual(sqlite3_exec(reopened, "BEGIN IMMEDIATE; ROLLBACK", nil, nil, nil), SQLITE_OK)
+    }
+
     func testEventStreamBuffersEventPostedAfterSubscriptionBeforeConsumption() async {
         let bus = TestCrossProcessEventBus()
         let stream = bus.events()

@@ -257,7 +257,7 @@ struct KeyboardRootView: View {
                     mode: controller.waveformMode,
                     color: activeStatusColor,
                     level: controller.waveformLevel,
-                    style: .electricSpectrum,
+                    style: .monochrome,
                     barCount: Self.activeWaveformBarCount,
                     spacing: 2.2,
                     framesPerSecond: 18,

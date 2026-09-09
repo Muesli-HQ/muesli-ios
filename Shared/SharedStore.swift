@@ -1584,6 +1584,8 @@ private struct SharedStoreDatabase {
     }
 
     private func withDatabase<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+        let access = try SharedStoreDatabaseAccess.begin()
+        defer { access.finish() }
         var database: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(databaseURL.path, &database, flags, nil) == SQLITE_OK,
@@ -1594,7 +1596,7 @@ private struct SharedStoreDatabase {
             }
             throw SharedStoreDatabaseError.openFailed(message)
         }
-        defer { sqlite3_close(database) }
+        try access.attach(database)
 
         try configure(database)
         try ensureInitialized(database)
@@ -2995,3 +2997,67 @@ private struct SharedStoreDatabase {
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+/// The app supplies an execution assertion; extensions leave the factory unset.
+/// Keep it alive until SQLite has relinquished every connection lock.
+final class SharedStoreDatabaseAccess: @unchecked Sendable {
+    typealias Factory = @Sendable (@escaping @Sendable () -> Void) throws -> (@Sendable () -> Void)
+    private static let factoryLock = NSLock()
+    nonisolated(unsafe) private static var factory: Factory?
+    private let lock = NSLock()
+    private var database: OpaquePointer?
+    private var expired = false
+    private var endActivity: (@Sendable () -> Void)?
+
+    static func install(_ factory: @escaping Factory) {
+        factoryLock.lock()
+        self.factory = factory
+        factoryLock.unlock()
+    }
+
+    static func begin() throws -> SharedStoreDatabaseAccess {
+        factoryLock.lock()
+        let factory = self.factory
+        factoryLock.unlock()
+        let access = SharedStoreDatabaseAccess()
+        access.endActivity = try factory? { [weak access] in access?.expire() }
+        return access
+    }
+
+    func attach(_ database: OpaquePointer) throws {
+        lock.lock()
+        self.database = database
+        let isExpired = expired
+        lock.unlock()
+        guard !isExpired else { throw CancellationError() }
+        sqlite3_progress_handler(database, 1000, { context in
+            guard let context else { return 0 }
+            return Unmanaged<SharedStoreDatabaseAccess>.fromOpaque(context).takeUnretainedValue().isExpired ? 1 : 0
+        }, Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    private var isExpired: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return expired
+    }
+
+    func expire() {
+        lock.lock()
+        expired = true
+        if let database { sqlite3_interrupt(database) }
+        lock.unlock()
+    }
+
+    func finish() {
+        lock.lock()
+        if let database {
+            sqlite3_progress_handler(database, 0, nil, nil)
+            sqlite3_close(database)
+            self.database = nil
+        }
+        lock.unlock()
+        endActivity?()
+        endActivity = nil
+    }
+}

@@ -23,6 +23,7 @@ final class KeyboardController {
     private var latestRuntimeStatus: KeyboardRuntimeStatus?
     private var insertedRequestIDs = Set<UUID>()
     private var cancelledRequestIDs = Set<UUID>()
+    private var pendingCancellationIDs = Set<UUID>()
     private var isBlockedByAppVoiceNote = false
     /// Tracked separately from `latestHandoffState`, which `refreshLatestDictation`
     /// overwrites before `apply(handoffState:)` runs -- comparing against it
@@ -171,6 +172,7 @@ final class KeyboardController {
 
     var canCancelActiveDictation: Bool {
         [.requested, .recording, .transcribing].contains(dictationPhase)
+            && !(activeRequestID.map { pendingCancellationIDs.contains($0) } ?? false)
     }
 
     var selectedTranscriptionModel: KeyboardTranscriptionModelOption? {
@@ -437,6 +439,8 @@ final class KeyboardController {
                 message: "Cancelling"
             ))
             try store.saveCommand(.init(requestID: activeRequestID, action: .cancel))
+            pendingCancellationIDs.insert(activeRequestID)
+            latestHandoffState = .init(requestID: activeRequestID, phase: .cancelRequested, message: "Cancelling")
             dictationPhase = .recording
             statusText = "Cancelling"
             awaitCommandAcknowledgement(
@@ -584,6 +588,9 @@ final class KeyboardController {
             let status = try store.status()
 
             let handoffState = try store.keyboardHandoffState()
+            if let command = try store.pendingCommand(), command.action == .cancel {
+                pendingCancellationIDs.insert(command.requestID)
+            }
             latestHandoffState = handoffState
             apply(handoffState: handoffState)
             apply(liveTranscript: try store.keyboardLiveTranscript())
@@ -677,6 +684,23 @@ final class KeyboardController {
                 "active": activeRequestID?.uuidString.prefix(8).lowercased() ?? "none",
                 "inserted": insertedRequestIDs.contains(requestID) ? "yes" : "no"
             ])
+        }
+
+        // A late recorder/transcriber update must not reverse the user's Cancel.
+        if pendingCancellationIDs.contains(requestID) {
+            if [.cancelled, .failed, .idle].contains(handoffState.phase) {
+                pendingCancellationIDs.remove(requestID)
+                cancelledRequestIDs.insert(requestID)
+            } else if !(handoffState.phase == .recoveryRequested && handoffState.recoveryAction == .cancel) {
+                activeRequestID = requestID
+                recoveryRequestID = nil
+                latestHandoffState = .init(requestID: requestID, phase: .cancelRequested, message: "Cancelling")
+                dictationPhase = .recording
+                inputLevel = 0
+                liveTranscript = ""
+                statusText = "Cancelling"
+                return
+            }
         }
 
         if ![.startRequested, .stopRequested, .cancelRequested].contains(handoffState.phase) {
@@ -1026,6 +1050,7 @@ final class KeyboardController {
     }
 
     private func insertCompletedResult(_ result: DictationResult) {
+        guard !pendingCancellationIDs.contains(result.requestID) else { return }
         // A resultChanged event can arrive before the host publishes its final
         // clipboard handoff. The delivery choice travels with the recording,
         // so the keyboard must not insert this result during that interval.
@@ -1159,6 +1184,9 @@ final class KeyboardController {
         phase: KeyboardHandoffPhase
     ) -> Bool {
         guard let state = try? store.keyboardHandoffState() else { return false }
+        if phase == .cancelRequested, pendingCancellationIDs.contains(requestID) {
+            return state.requestID == requestID && ![.cancelled, .failed, .idle].contains(state.phase)
+        }
         return state.requestID == requestID && state.phase == phase
     }
 

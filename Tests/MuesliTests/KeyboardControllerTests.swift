@@ -62,6 +62,31 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertEqual(controller.statusText, "Keyboard verified • Enable Full Access")
     }
 
+    func testCancellationSurvivesLateTranscriptionAndKeyboardRecreation() throws {
+        try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.5))
+        try store.saveKeyboardHandoffState(handoff(.recordingStarted))
+        controller.prepareInitialPresentationState()
+        controller.cancelActiveDictation()
+        defer { controller.stopObservingSharedState() }
+        try store.saveKeyboardHandoffState(handoff(.transcribingStarted))
+        try store.saveResult(.init(requestID: requestID, text: "Do not insert cancelled speech", engineIdentifier: "test"))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.statusText, "Cancelling")
+        XCTAssertFalse(controller.canCancelActiveDictation)
+        XCTAssertTrue(insertedText.isEmpty)
+
+        let rebuilt = KeyboardController(store: store, eventBus: bus)
+        rebuilt.textInserter = { [weak self] in self?.insertedText.append($0) }
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertEqual(rebuilt.statusText, "Cancelling")
+        XCTAssertTrue(insertedText.isEmpty)
+        try store.clearPendingCommand()
+        try store.saveKeyboardHandoffState(handoff(.cancelled))
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertFalse(rebuilt.showsActiveWaveform)
+        XCTAssertTrue(insertedText.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func recordingStatus(

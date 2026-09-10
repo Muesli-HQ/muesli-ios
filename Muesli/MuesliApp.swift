@@ -34,13 +34,15 @@ struct MuesliApp: App {
             }
                 .task {
                     #if DEBUG && targetEnvironment(simulator)
-                    await coordinator.previewLiveActivityWaveformIfRequested()
+                    coordinator.startLiveActivityWaveformPreviewIfRequested()
                     #endif
                 }
                 #if DEBUG && targetEnvironment(simulator)
                 .overlay(alignment: .top) {
                     if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform"), coordinator.isRecording {
                         Text("Waveform preview ready").accessibilityIdentifier("islandPreview.ready")
+                    } else if let failure = coordinator.waveformPreviewFailure {
+                        Text(failure).accessibilityIdentifier("islandPreview.failure")
                     }
                 }
                 #endif
@@ -53,7 +55,12 @@ struct MuesliApp: App {
                     coordinator.handleOpenURL(url)
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { coordinator.copyPendingDictationIfActive() }
+                    if phase == .active {
+                        coordinator.copyPendingDictationIfActive()
+                        #if DEBUG && targetEnvironment(simulator)
+                        coordinator.startLiveActivityWaveformPreviewIfRequested()
+                        #endif
+                    }
                     if phase == .active, !isUITesting {
                         coordinator.reconcileMeetingRuntime(reason: "foreground")
                         coordinator.prewarmModelIfNeeded(reason: "foreground")

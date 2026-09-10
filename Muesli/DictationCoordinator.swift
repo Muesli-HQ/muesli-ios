@@ -180,7 +180,9 @@ final class DictationCoordinator {
     private let keyboardSessionKeeper = KeyboardSessionKeeper()
     private let liveActivityController = MuesliLiveActivityController()
     #if DEBUG && targetEnvironment(simulator)
+    @ObservationIgnored private var waveformPreviewTask: Task<Void, Never>?
     @ObservationIgnored private var waveformPreviewSessionID: UUID?
+    var waveformPreviewFailure: String?
     @ObservationIgnored private var waveformPreviewStopRequested = false
     #endif
     @ObservationIgnored private var startupLiveActivityCleanupTask: Task<Void, Never>?
@@ -6869,8 +6871,17 @@ final class DictationCoordinator {
     #if DEBUG && targetEnvironment(simulator)
     /// Explicit simulator fixture: exercises the real meter publisher and system
     /// Live Activity using synthetic levels, without recording microphone audio.
-    func previewLiveActivityWaveformIfRequested() async {
-        guard ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform") else { return }
+    func startLiveActivityWaveformPreviewIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform"),
+              UIApplication.shared.applicationState == .active,
+              waveformPreviewTask == nil else { return }
+        // Retain the one-shot task across foreground/background view updates.
+        waveformPreviewTask = Task { [weak self] in
+            await self?.previewLiveActivityWaveform()
+        }
+    }
+
+    private func previewLiveActivityWaveform() async {
         if let startupLiveActivityCleanupTask { await startupLiveActivityCleanupTask.value }
         UserDefaults.standard.set(true, forKey: MuesliPreferences.liveActivitiesForDictationsKey)
         let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Waveform simulator preview")
@@ -6887,6 +6898,7 @@ final class DictationCoordinator {
             }
         } catch {
             KeyboardDiagnosticsLog.record("preview.persistFailed", ["error": String(describing: error)])
+            waveformPreviewFailure = "Preview storage failed: \(error)"
             return
         }
         activeSession = session
@@ -6894,6 +6906,7 @@ final class DictationCoordinator {
         waveformPreviewStopRequested = false
         defer { waveformPreviewSessionID = nil }
         guard await liveActivityController.start(session: session, requestID: nil, phase: "Listening", detail: "Simulator waveform preview") else {
+            waveformPreviewFailure = "Preview Live Activity could not start"
             isRecording = false
             activeSession = nil
             return

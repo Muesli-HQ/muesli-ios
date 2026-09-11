@@ -66,8 +66,8 @@ targets:
 
   # Side-by-side physical-device lane for validating changes against the
   # Development CloudKit environment without replacing the TestFlight app/data.
-  # Extensions stay out of this target because their separate dev App IDs and
-  # profiles are not required for app/sync validation.
+  # Dev extensions use bundle IDs nested beneath the dev host so this lane can
+  # exercise extension-dependent flows without replacing the TestFlight app.
   MuesliDev:
     type: application
     platform: iOS
@@ -92,6 +92,8 @@ targets:
         MUESLI_URL_SCHEME: mueslidev
         PROVISIONING_PROFILE_SPECIFIER: muesli-ios-mueslidev-cloudkit-push
     dependencies:
+      - target: MuesliDevKeyboard
+      - target: MuesliDevLiveActivityExtension
       - package: FluidAudio
       - package: TelemetryDeck
       - package: WhisperKit
@@ -111,6 +113,21 @@ targets:
         SKIP_INSTALL: true
         APPLICATION_EXTENSION_API_ONLY: true
 
+  MuesliDevLiveActivityExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: MuesliLiveActivityExtension
+      - path: LiveActivityShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.dev.liveactivity
+        PRODUCT_NAME: MuesliDevLiveActivityExtension
+        INFOPLIST_FILE: MuesliLiveActivityExtension/Info.plist
+        MUESLI_DISPLAY_NAME: MuesliDev
+        SKIP_INSTALL: true
+        APPLICATION_EXTENSION_API_ONLY: true
+
   MuesliKeyboard:
     type: app-extension
     platform: iOS
@@ -124,6 +141,29 @@ targets:
         INFOPLIST_FILE: MuesliKeyboard/Info.plist
         CODE_SIGN_ENTITLEMENTS: MuesliKeyboard/MuesliKeyboard.entitlements
         SKIP_INSTALL: true
+    dependencies:
+      - sdk: libsqlite3.tbd
+
+  MuesliDevKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: MuesliKeyboard
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.dev.keyboard
+        PRODUCT_NAME: MuesliDevKeyboard
+        INFOPLIST_FILE: MuesliKeyboard/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MuesliKeyboard/MuesliDevKeyboard.entitlements
+        CODE_SIGN_IDENTITY: Apple Development
+        CODE_SIGN_STYLE: Manual
+        PROVISIONING_PROFILE_SPECIFIER: muesli-ios-mueslidev-keyboard
+        SKIP_INSTALL: true
+        MUESLI_APP_GROUP_IDENTIFIER: group.com.phequals7.muesli.dev
+        MUESLI_CROSS_PROCESS_PREFIX: com.phequals7.muesli.dev
+        MUESLI_DISPLAY_NAME: MuesliDev
+        MUESLI_URL_SCHEME: mueslidev
     dependencies:
       - sdk: libsqlite3.tbd
 
@@ -188,6 +228,8 @@ schemes:
     build:
       targets:
         MuesliDev: all
+        MuesliDevKeyboard: all
+        MuesliDevLiveActivityExtension: all
     run:
       config: MuesliDev
 

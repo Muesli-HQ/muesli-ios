@@ -109,6 +109,16 @@ enum KeyboardDiagnosticsLog {
             [.protectionKey: FileProtectionType.none],
             ofItemAtPath: url.path
         )
+        #if DEBUG
+        // A development-only mirror lets tethered diagnostics use the app's
+        // container without attaching a debugger or reading recorded content.
+        if Bundle.main.bundleIdentifier == "com.phequals7.muesli.ios.dev",
+           let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            try? FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+            let mirror = cache.appendingPathComponent(fileName)
+            try? Data((lines.joined(separator: "\n") + "\n").utf8).write(to: mirror, options: .atomic)
+        }
+        #endif
     }
 
     private static func sanitize(_ value: String) -> String {

@@ -3,42 +3,45 @@ import Foundation
 
 actor MuesliLiveActivityController {
     private var activity: Activity<MuesliLiveActivityAttributes>?
+    private var stoppedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
     private var endedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
 
-    func start(session: RecordingSession, requestID: UUID?, phase: String, detail: String) async {
+    @discardableResult
+    func start(session: RecordingSession, requestID: UUID?, phase: String, detail: String) async -> Bool {
         guard !endedSessionIDs.contains(session.id) else {
             KeyboardDiagnosticsLog.record("liveActivity.skipped", [
                 "kind": session.kind.title, "reason": "sessionAlreadyEnded"
             ])
-            return
+            return false
         }
         guard MuesliPreferences.liveActivitiesEnabled(for: session.kind) else {
             KeyboardDiagnosticsLog.record("liveActivity.skipped", [
                 "kind": session.kind.title, "reason": "disabledInSettings"
             ])
             await endActivities(for: session.kind, phase: "Off", detail: "Live Activities disabled")
-            return
+            return false
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             KeyboardDiagnosticsLog.record("liveActivity.skipped", [
                 "kind": session.kind.title, "reason": "disabledBySystem"
             ])
-            return
+            return false
         }
 
         await endInactiveActivities()
-        guard !endedSessionIDs.contains(session.id) else { return }
+        guard !endedSessionIDs.contains(session.id) else { return false }
         activity = resolvedActivity(for: session)
         if activity != nil {
             await update(phase: phase, detail: detail, session: session)
-            return
+            return true
         }
 
         let attributes = MuesliLiveActivityAttributes(
             sessionID: session.id.uuidString,
             requestID: requestID?.uuidString,
             kind: session.kind.title,
-            offersStopControl: session.kind.liveActivityOffersStopControl
+            offersStopControl: session.kind.liveActivityOffersStopControl,
+            showsDictationWaveform: session.kind != .meeting && ActionButtonCaptureSource.isActionButton(session.source)
         )
         let content = ActivityContent(
             state: contentState(phase: phase, detail: detail, session: session),
@@ -48,6 +51,7 @@ actor MuesliLiveActivityController {
         do {
             activity = try Activity.request(attributes: attributes, content: content, pushType: nil)
             KeyboardDiagnosticsLog.record("liveActivity.started", ["kind": session.kind.title])
+            return true
         } catch {
             // iOS refuses Activity.request from a backgrounded app. A keyboard
             // dictation starts while the host app is in front, so this is the
@@ -63,6 +67,7 @@ actor MuesliLiveActivityController {
                 error: error,
                 parameters: ["session_kind": session.kind.title]
             )
+            return false
         }
     }
 
@@ -73,10 +78,64 @@ actor MuesliLiveActivityController {
         }
         activity = resolvedActivity(for: session)
         guard let activity else { return }
-        await activity.update(ActivityContent(
-            state: contentState(phase: phase, detail: detail, session: session),
-            staleDate: nil
-        ))
+        var state = contentState(phase: phase, detail: detail, session: session)
+        // Keep the live envelope when a dictation becomes a long voice note.
+        // Processing and terminal states deliberately discard it.
+        if state.isCapturingAudio && activity.content.state.isCapturingAudio {
+            state.waveform = activity.content.state.waveform
+        }
+        await activity.update(ActivityContent(state: state, staleDate: nil))
+    }
+
+    /// Publish the acknowledged Stop before the LiveActivityIntent returns to
+    /// SpringBoard. Do not replace a newer completion/copy state.
+    func finishCapturePresentation(sessionID: UUID) async {
+        stoppedSessionIDs.insert(sessionID)
+        guard let activity,
+              activity.attributes.sessionID == sessionID.uuidString,
+              activity.content.state.isCapturingAudio else { return }
+        var state = activity.content.state
+        state.phase = "Transcribing"
+        state.detail = "Processing recording"
+        state.accent = "blue"
+        state.waveform = nil
+        await activity.update(ActivityContent(state: state, staleDate: nil))
+    }
+
+    /// Meter updates only change the current recording's envelope. A late meter
+    /// task cannot restore Listening after Stop, transcription, or cancellation.
+    func updateWaveform(_ samples: [Double], sessionID: UUID) async {
+        guard !Task.isCancelled,
+              !endedSessionIDs.contains(sessionID),
+              !stoppedSessionIDs.contains(sessionID),
+              let activity,
+              activity.attributes.sessionID == sessionID.uuidString,
+              activity.attributes.showsDictationWaveform == true,
+              activity.activityState == .active || activity.activityState == .stale,
+              activity.content.state.isCapturingAudio
+        else { return }
+        var state = activity.content.state
+        state.waveform = MuesliLiveActivityWaveform.bars(samples)
+        await activity.update(ActivityContent(state: state, staleDate: nil))
+    }
+
+    /// Show an actionable completion briefly in the Island, then retain it on
+    /// the Lock Screen. No transcript text is put in the URL or widget state.
+    func offerForegroundCopy(session: RecordingSession, requestID: UUID) async {
+        guard !endedSessionIDs.contains(session.id),
+              let current = resolvedActivity(for: session),
+              let url = URL(string: "\(MuesliAppConstants.urlScheme)://copy-dictation/\(requestID.uuidString)") else { return }
+        var state = contentState(phase: "Ready to copy", detail: "Open Muesli to copy, then paste", session: session)
+        state.copyURL = url
+        let content = ActivityContent(state: state, staleDate: Date.now.addingTimeInterval(120))
+        await current.update(content)
+        // The transcription background task remains alive during this short
+        // completion window; do not leave a completed recording active forever.
+        try? await Task.sleep(for: .seconds(10))
+        guard !endedSessionIDs.contains(session.id), current.activityState == .active else { return }
+        endedSessionIDs.insert(session.id)
+        await current.end(content, dismissalPolicy: .after(Date.now.addingTimeInterval(120)))
+        if activity?.id == current.id { activity = nil }
     }
 
     func end(phase: String, detail: String, session: RecordingSession, dismissal: ActivityUIDismissalPolicy = .default) async {
@@ -206,7 +265,7 @@ actor MuesliLiveActivityController {
 
     private func isActiveSessionPhase(_ phase: String) -> Bool {
         switch phase.lowercased() {
-        case "ready", "listening", "recording", "transcribing":
+        case "ready", "listening", "recording", "notepad", "long voice note", "transcribing":
             true
         default:
             false

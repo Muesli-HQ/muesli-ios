@@ -40,6 +40,81 @@ final class KeyboardControllerTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testHeartbeatUsesCurrentAccessWithoutOverwritingStatus() throws {
+        var access = false
+        controller.currentFullAccess = { access }
+        controller.statusText = "Listening"
+        controller.publishVisibilityHeartbeat()
+        XCTAssertEqual(try store.keyboardExtensionStatus()?.hasOpenAccess, false)
+        access = true
+        controller.publishVisibilityHeartbeat()
+        XCTAssertEqual(try store.keyboardExtensionStatus()?.hasOpenAccess, true)
+        XCTAssertEqual(controller.setupVerificationDetail, "Proves Keyboard and Full Access")
+        XCTAssertEqual(controller.statusText, "Listening")
+    }
+
+    func testHeartbeatStorageFailurePreservesStatus() throws {
+        try FileManager.default.removeItem(at: directory)
+        try Data().write(to: directory)
+        controller.currentFullAccess = { false }
+        controller.statusText = "Keyboard verified • Enable Full Access"
+        controller.publishVisibilityHeartbeat()
+        XCTAssertEqual(controller.statusText, "Keyboard verified • Enable Full Access")
+    }
+
+    func testCancellationSurvivesLateTranscriptionAndKeyboardRecreation() throws {
+        try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.5))
+        try store.saveKeyboardHandoffState(handoff(.recordingStarted))
+        controller.prepareInitialPresentationState()
+        controller.cancelActiveDictation()
+        defer { controller.stopObservingSharedState() }
+        try store.saveKeyboardHandoffState(handoff(.transcribingStarted))
+        try store.saveResult(.init(requestID: requestID, text: "Do not insert cancelled speech", engineIdentifier: "test"))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.statusText, "Cancelling")
+        XCTAssertFalse(controller.canCancelActiveDictation)
+        XCTAssertTrue(insertedText.isEmpty)
+
+        let rebuilt = KeyboardController(store: store, eventBus: bus)
+        rebuilt.textInserter = { [weak self] in self?.insertedText.append($0) }
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertEqual(rebuilt.statusText, "Cancelling")
+        XCTAssertTrue(insertedText.isEmpty)
+        try store.clearPendingCommand()
+        try store.saveKeyboardHandoffState(handoff(.cancelled))
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertFalse(rebuilt.showsActiveWaveform)
+        XCTAssertTrue(insertedText.isEmpty)
+    }
+
+    func testCompletedClipboardRequestIgnoresLateHandoffAndRuntime() throws {
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+        try store.saveResult(.init(requestID: requestID, text: "Clipboard only", engineIdentifier: "test", source: ActionButtonCaptureSource.clipboard))
+        controller.prepareInitialPresentationState()
+        XCTAssertFalse(controller.showsActiveWaveform)
+        XCTAssertTrue(insertedText.isEmpty)
+
+        // The Shortcut may already have consumed the pickup while stale shared
+        // handoff/runtime snapshots are still visible to the keyboard.
+        try store.clearResult(for: requestID)
+        try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.8))
+        for phase: KeyboardHandoffPhase in [.resultReady, .transcribingStarted, .stopAcknowledged] {
+            try store.saveKeyboardHandoffState(handoff(phase))
+            controller.prepareInitialPresentationState()
+            XCTAssertFalse(controller.showsActiveWaveform)
+            XCTAssertFalse(controller.canCancelActiveDictation)
+            XCTAssertTrue(insertedText.isEmpty)
+        }
+        let rebuilt = KeyboardController(store: store, eventBus: bus)
+        rebuilt.textInserter = { [weak self] in self?.insertedText.append($0) }
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertFalse(rebuilt.showsActiveWaveform)
+        XCTAssertFalse(rebuilt.canCancelActiveDictation)
+        XCTAssertTrue(insertedText.isEmpty)
+        rebuilt.insertLatestDictation()
+        XCTAssertEqual(insertedText, ["Clipboard only"])
+    }
+
     // MARK: - Helpers
 
     private func recordingStatus(
@@ -214,6 +289,31 @@ final class KeyboardControllerTests: XCTestCase {
     }
 
     // MARK: - Insertion
+
+    func testCopyRequiredResultDoesNotInsertIntoANewKeyboardField() throws {
+        let result = DictationResult(requestID: requestID, text: "Saved from Action Button", engineIdentifier: "test", source: "action_button")
+        try store.saveResult(result)
+        try store.saveKeyboardHandoffState(handoff(.copyRequired))
+
+        controller.prepareInitialPresentationState()
+        controller.prepareInitialPresentationState()
+
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertFalse(controller.showsActiveWaveform)
+        XCTAssertFalse(controller.canCancelActiveDictation)
+        XCTAssertEqual(try store.result(for: requestID)?.text, result.text)
+    }
+
+    func testActionButtonResultInsertsOnceThroughActiveKeyboard() throws {
+        let result = DictationResult(requestID: requestID, text: "From the button", engineIdentifier: "test", source: "action_button")
+        try store.saveResult(result)
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+
+        controller.prepareInitialPresentationState()
+        controller.prepareInitialPresentationState()
+
+        XCTAssertEqual(insertedText, [result.text])
+    }
 
     func testACompletedResultIsInsertedOnce() throws {
         let result = DictationResult(requestID: requestID, text: "hello there", engineIdentifier: "test")

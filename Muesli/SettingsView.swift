@@ -35,6 +35,7 @@ struct SettingsView: View {
     @State private var isModelRemovalConfirmationPresented = false
     @State private var modelBeingRemoved: LocalTranscriptionModel?
     @State private var modelRemovalErrorMessage: String?
+    @State private var isActionButtonOnboardingPresented = false
 
     var body: some View {
         NavigationStack {
@@ -108,6 +109,9 @@ struct SettingsView: View {
                     refreshAppleSyncSettings()
                 }
         }
+        .fullScreenCover(isPresented: $isActionButtonOnboardingPresented) {
+            ActionButtonOnboardingView(coordinator: coordinator)
+        }
         .alert(
             modelPendingRemoval.map { "Remove \($0.shortName)?" } ?? "Remove model?",
             isPresented: $isModelRemovalConfirmationPresented,
@@ -139,6 +143,17 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     settingsHeader
+
+                    if #available(iOS 18.0, *), ActionButtonHardware.isSupported {
+                        MuesliSurface {
+                            SettingsNavigationRow(
+                                icon: "button.programmable",
+                                title: "Action Button",
+                                detail: "Dictation and meeting-note shortcuts."
+                            ) { isActionButtonOnboardingPresented = true }
+                            .padding(MuesliTheme.spacing16)
+                        }
+                    }
 
                     MuesliSurface {
                         VStack(spacing: MuesliTheme.spacing4) {
@@ -228,9 +243,21 @@ struct SettingsView: View {
             MuesliSurface {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                     SettingsRow(icon: "keyboard", title: "Keyboard Extension", value: keyboardStatusText)
+                    if #available(iOS 18.0, *), ActionButtonHardware.isSupported {
+                        Divider().overlay(MuesliTheme.surfaceBorder)
+                        SettingsNavigationRow(
+                            icon: "button.programmable",
+                            title: "Action Button",
+                            detail: "Set up or reconfigure dictation and meeting-note shortcuts."
+                        ) {
+                            isActionButtonOnboardingPresented = true
+                            AppTelemetry.signal("action_button_settings_opened")
+                        }
+                    }
+                    Divider().overlay(MuesliTheme.surfaceBorder)
                     Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
                         HStack {
-                            Text("Open iOS Settings")
+                            Text("Open Muesli Settings")
                             Spacer()
                             Image(systemName: "arrow.up.right")
                         }

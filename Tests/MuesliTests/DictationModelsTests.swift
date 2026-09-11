@@ -44,6 +44,12 @@ final class DictationModelsTests: XCTestCase {
         XCTAssertEqual(SyncOrigin.classify(source: "iPhone"), .thisIPhone)
         XCTAssertEqual(SyncOrigin.classify(source: "app"), .thisIPhone)
         XCTAssertEqual(SyncOrigin.classify(source: "keyboard"), .thisIPhone)
+        for source in ["action_button", "action_button_clipboard"] {
+            XCTAssertEqual(SyncOrigin.classify(source: source), .thisIPhone)
+            XCTAssertEqual(SyncOrigin.classify(source: source, importedFromCloud: true), .thisIPhone)
+            let result = DictationResult(requestID: UUID(), text: "Test", engineIdentifier: "local", source: source)
+            XCTAssertEqual(result.syncOrigin, .thisIPhone)
+        }
     }
 
     func testSyncOriginClassifiesRemoteSourcesAsFromMac() {

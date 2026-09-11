@@ -92,14 +92,6 @@ struct KeyboardRootView: View {
 
             transcriptionModelMenu
 
-            if let settingsURL = controller.settingsURL {
-                Link(destination: settingsURL) {
-                    KeyboardIconLabel(systemImage: "gearshape.fill")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Muesli settings")
-            }
-
             KeyboardIconKey(systemImage: "chevron.down", accessibilityLabel: "Dismiss keyboard") {
                 controller.dismissKeyboard()
             }
@@ -164,25 +156,48 @@ struct KeyboardRootView: View {
     }
 
     private var readyRecorder: some View {
-        VStack(spacing: MuesliTheme.spacing8) {
-            primaryActionButton(isProminent: true)
+        Group {
+            if controller.hasPendingSetupVerification {
+                VStack(spacing: 5) {
+                    Button(action: controller.verifyKeyboardSetup) {
+                        Label("Verify Muesli Keyboard", systemImage: "checkmark.shield.fill")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .background(MuesliTheme.accent, in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("keyboard.verifySetup")
 
-            if controller.canInsertLatest {
-                Button {
-                    controller.insertLatestDictation()
-                } label: {
-                    Label("Insert latest", systemImage: "text.insert")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(MuesliTheme.recording)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background(MuesliTheme.recording.opacity(0.14), in: Capsule())
-                        .contentShape(Capsule())
+                    Text(controller.setupVerificationDetail)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.plain)
             } else {
-                Color.clear
-                    .frame(height: 32)
+                VStack(spacing: MuesliTheme.spacing8) {
+                    primaryActionButton(isProminent: true)
+
+                    if controller.canInsertLatest {
+                        Button {
+                            controller.insertLatestDictation()
+                        } label: {
+                            Label("Insert latest", systemImage: "text.insert")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(MuesliTheme.recording)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 32)
+                                .background(MuesliTheme.recording.opacity(0.14), in: Capsule())
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Color.clear
+                            .frame(height: 32)
+                    }
+                }
             }
         }
         .frame(height: Self.recorderBodyHeight)
@@ -234,7 +249,7 @@ struct KeyboardRootView: View {
                     mode: controller.waveformMode,
                     color: activeStatusColor,
                     level: controller.waveformLevel,
-                    style: .electricSpectrum,
+                    style: .monochrome,
                     barCount: Self.activeWaveformBarCount,
                     spacing: 2.2,
                     framesPerSecond: 18,
@@ -277,10 +292,15 @@ struct KeyboardRootView: View {
             }
 
             HStack(spacing: 5) {
-                KeyboardTextKey(systemImage: "globe", accessibilityLabel: "Next keyboard") {
-                    controller.switchInputMode()
-                }
+                if let settingsURL = controller.settingsURL {
+                    Link(destination: settingsURL) {
+                        KeyboardTextKeyLabel(systemImage: "gearshape.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .muesliKeyboardKeySurface()
+                    .accessibilityLabel("Muesli settings")
                     .frame(maxWidth: 58)
+                }
 
                 KeyboardTextKey("ABC") { controller.switchInputMode() }
                     .frame(maxWidth: 66)

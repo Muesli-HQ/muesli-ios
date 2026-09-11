@@ -122,6 +122,65 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertTrue(try store.resultsHistory().isEmpty)
     }
 
+    func testDurableResultSurvivesPickupConsumptionButNotDeletion() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SharedStore(containerURL: directory)
+        let result = DictationResult(requestID: UUID(), text: "Saved words", engineIdentifier: "test", source: ActionButtonCaptureSource.clipboard)
+        try store.saveResult(result)
+        try store.clearResult(for: result.requestID)
+        XCTAssertNil(try store.result(for: result.requestID))
+        XCTAssertEqual(try store.completedResult(for: result.requestID)?.text, result.text)
+        XCTAssertNil(try store.completedResult(for: UUID()))
+        try store.deleteResult(result)
+        XCTAssertNil(try store.completedResult(for: result.requestID))
+    }
+
+    @MainActor
+    func testBackgroundDatabaseAccessDoesNotWaitForMainQueue() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Use the app module's store and its installed UIKit assertion factory.
+        let store = Muesli.SharedStore(containerURL: directory)
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            defer { finished.signal() }
+            do { _ = try store.status() }
+            catch { XCTFail("Background database access failed: \(error)") }
+        }
+        // Deliberately occupy main: an unnecessary main.sync makes this fail.
+        XCTAssertEqual(finished.wait(timeout: .now() + 2), .success)
+    }
+
+    func testExpiredDatabaseAccessRejectsNewWorkAndClosesConnection() throws {
+        let access = SharedStoreDatabaseAccess()
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
+        let database = try XCTUnwrap(db)
+        access.expire()
+        XCTAssertThrowsError(try access.attach(database))
+        access.finish()
+    }
+
+    func testDatabaseExpiryInterruptsQueriesAndReleasesFileLock() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("expiry.sqlite").path
+        let access = SharedStoreDatabaseAccess()
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(path, &db), SQLITE_OK)
+        let database = try XCTUnwrap(db)
+        try access.attach(database)
+        XCTAssertEqual(sqlite3_exec(database, "CREATE TABLE t (id INTEGER); BEGIN IMMEDIATE; INSERT INTO t VALUES(1)", nil, nil, nil), SQLITE_OK)
+        access.expire()
+        XCTAssertEqual(sqlite3_exec(database, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000) SELECT sum(x) FROM n", nil, nil, nil), SQLITE_INTERRUPT)
+        access.finish()
+        var reopened: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(path, &reopened), SQLITE_OK)
+        defer { sqlite3_close(reopened) }
+        XCTAssertEqual(sqlite3_exec(reopened, "BEGIN IMMEDIATE; ROLLBACK", nil, nil, nil), SQLITE_OK)
+    }
+
     func testEventStreamBuffersEventPostedAfterSubscriptionBeforeConsumption() async {
         let bus = TestCrossProcessEventBus()
         let stream = bus.events()
@@ -136,14 +195,15 @@ final class SharedStoreTests: XCTestCase {
     func testDarwinEventBusDeliversPayloadFreeInvalidation() async {
         let bus = DarwinCrossProcessEventBus.shared
         let delivered = expectation(description: "Darwin event delivered")
+        // Creating the stream registers its continuation synchronously. Yielding
+        // a task does not guarantee that its subscription has been installed.
+        let events = bus.events()
         let observation = Task {
-            for await event in bus.events() where event == .ownershipChanged {
+            for await event in events where event == .ownershipChanged {
                 delivered.fulfill()
                 return
             }
         }
-        await Task.yield()
-
         bus.post(.ownershipChanged)
 
         await fulfillment(of: [delivered], timeout: 1)

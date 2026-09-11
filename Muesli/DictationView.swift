@@ -27,12 +27,14 @@ struct DictationView: View {
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
+    @AppStorage(MuesliPreferences.actionButtonOnboardingCompletedKey) private var actionButtonSetupCompleted = false
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
     @State private var dashboardStats = DictationDashboardStats.empty
     @State private var navigationPath = NavigationPath()
     @State private var captureMode: DashboardCaptureMode = .quickNote
+    @State private var isActionButtonOnboardingPresented = false
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -41,6 +43,9 @@ struct DictationView: View {
                     header
                     homeStatsRow
                     keyboardSessionHomeControl
+                    if shouldShowActionButtonInvitation {
+                        actionButtonInvitation
+                    }
                     recorderPanel
                     voiceNoteHistorySection
                 }
@@ -69,6 +74,9 @@ struct DictationView: View {
             }
             .onAppear {
                 refreshVisibleStateIfNeeded()
+                if Self.hasDebugSimulatorLaunchArgument("--muesli-ui-testing-action-button-onboarding") {
+                    isActionButtonOnboardingPresented = true
+                }
             }
             .onChange(of: isActive) { _, active in
                 guard active else { return }
@@ -110,6 +118,43 @@ struct DictationView: View {
                 }
             }
         }
+        .fullScreenCover(isPresented: $isActionButtonOnboardingPresented) {
+            ActionButtonOnboardingView(coordinator: coordinator)
+        }
+    }
+
+    private var shouldShowActionButtonInvitation: Bool {
+        guard #available(iOS 18.0, *) else { return false }
+        return ActionButtonHardware.isSupported
+    }
+
+    private var actionButtonInvitation: some View {
+        Button {
+            isActionButtonOnboardingPresented = true
+            AppTelemetry.signal("action_button_invitation_opened")
+        } label: {
+            HStack(spacing: MuesliTheme.spacing12) {
+                Image(systemName: "button.programmable")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Action Button").font(MuesliTheme.headline())
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                    Text(actionButtonSetupCompleted ? "Setup completed" : "Dictation or a meeting note")
+                        .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
+                }
+                Spacer(minLength: 8)
+                Text(actionButtonSetupCompleted ? "Reconfigure" : "Set Up")
+                    .font(MuesliTheme.headline()).foregroundStyle(MuesliTheme.accent)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .background(MuesliTheme.backgroundRaised, in: RoundedRectangle(cornerRadius: 16))
+            .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(MuesliTheme.surfaceBorder) }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("dictation.actionButtonInvitation")
     }
 
     @ViewBuilder
@@ -185,65 +230,39 @@ struct DictationView: View {
             tint: keyboardSessionMode ? MuesliTheme.success : MuesliTheme.accent,
             isInteractive: true
         ) {
-            HStack(spacing: MuesliTheme.spacing12) {
+            HStack(spacing: MuesliTheme.spacing8) {
                 ZStack {
                     Circle()
                         .fill(keyboardSessionMode ? MuesliTheme.success.opacity(0.16) : MuesliTheme.accentSubtle)
                     Image(systemName: keyboardSessionMode ? "mic.circle.fill" : "mic.circle")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(keyboardSessionMode ? MuesliTheme.success : MuesliTheme.accent)
                 }
-                .frame(width: 44, height: 44)
+                .frame(width: 32, height: 32)
                 .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Keep mic ready")
-                        .font(MuesliTheme.headline())
-                        .foregroundStyle(MuesliTheme.textPrimary)
-                    Text(keyboardSessionHomeDetail)
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .lineLimit(2)
-                }
+                Text("Persistent mic for improved experience")
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(1)
+                    .allowsTightening(true)
+                    .minimumScaleFactor(0.82)
 
                 Spacer(minLength: MuesliTheme.spacing8)
 
-                Toggle("Keep mic ready", isOn: $keyboardSessionMode)
+                Toggle("Persistent mic for improved experience", isOn: $keyboardSessionMode)
                     .labelsHidden()
                     .tint(MuesliTheme.success)
-                    .frame(minWidth: 56, minHeight: 44)
+                    .frame(minWidth: 52, minHeight: 44)
             }
-            .padding(MuesliTheme.spacing12)
+            .padding(.horizontal, MuesliTheme.spacing12)
+            .padding(.vertical, MuesliTheme.spacing4)
             .contentShape(Rectangle())
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Keep mic ready")
+        .accessibilityLabel("Persistent mic for improved experience")
         .accessibilityValue(keyboardSessionMode ? "On" : "Off")
         .accessibilityHint("Keeps a Muesli microphone session ready for keyboard dictation.")
-    }
-
-    private var keyboardSessionHomeDetail: String {
-        let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard keyboardSessionMode else {
-            return "Turn on before using Muesli Keyboard for fewer app switches."
-        }
-
-        if status.isEmpty || status == "Off" {
-            return "Starting keyboard microphone standby."
-        }
-
-        switch status {
-        case "Ready":
-            return "Keyboard dictation can start from text fields."
-        case "Starting":
-            return "Preparing the app-owned microphone session."
-        case "Recording":
-            return "Keyboard dictation is listening."
-        case "Transcribing":
-            return "Preparing text for insertion."
-        default:
-            return "\(status)."
-        }
     }
 
     private func totalDictationWords(in history: [DictationResult]) -> Int {

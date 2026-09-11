@@ -29,6 +29,156 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Start Notepad"].waitForExistence(timeout: 3))
     }
 
+    func testSavedKeyboardVerificationSurvivesRelaunchAndCanBeReset() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--muesli-ui-testing", "--muesli-ui-testing-keyboard-permissions",
+            "-muesli.onboarding.currentStep", "1",
+            "-muesli.onboarding.keyboardEnabledConfirmed", "YES",
+            "-muesli.onboarding.fullAccessConfirmed", "YES"
+        ]
+        app.launch()
+        let status = app.staticTexts["Keyboard and Full Access verified. Choose Verify again to check your current settings."]
+        XCTAssertTrue(status.waitForExistence(timeout: 8))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(status.waitForExistence(timeout: 8))
+        let verify = app.buttons["onboarding.verifyAgain"]
+        for _ in 0..<5 where !verify.isHittable { app.swipeUp() }
+        verify.tap()
+        XCTAssertFalse(status.exists)
+        XCTAssertTrue(app.staticTexts["The Continue button unlocks only after Muesli receives both proofs."].exists)
+    }
+
+    private func actionButtonApp(_ arguments: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-action-button-onboarding"] + arguments
+        app.launch()
+        return app
+    }
+
+    private func captureActionButton(_ app: XCUIApplication, name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testShortcutWaveformInDynamicIsland() async throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-island-waveform", "--muesli-ui-testing-island-copy"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["islandPreview.ready"].waitForExistence(timeout: 15))
+        XCUIDevice.shared.press(.home)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        try await Task.sleep(for: .seconds(6))
+        captureActionButton(springboard, name: "Dynamic Island speech input")
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.035)).press(forDuration: 1)
+        XCTAssertTrue(springboard.staticTexts["Listening"].waitForExistence(timeout: 15))
+        captureActionButton(springboard, name: "Dynamic Island expanded dictation")
+        XCTAssertTrue(springboard.buttons["Stop keyboard dictation recording"].exists)
+        try await Task.sleep(for: .seconds(6))
+        captureActionButton(springboard, name: "Dynamic Island returned to quiet")
+        springboard.buttons["Stop keyboard dictation recording"].tap()
+        XCTAssertTrue(springboard.staticTexts["Transcribing"].waitForExistence(timeout: 5))
+        XCTAssertFalse(springboard.staticTexts["Listening"].exists)
+        captureActionButton(springboard, name: "Dynamic Island processing after recording")
+        XCTAssertFalse(springboard.buttons["Stop keyboard dictation recording"].exists)
+        let copy = springboard.buttons["Open to copy"].firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 10))
+        captureActionButton(springboard, name: "Dynamic Island transcript ready to copy")
+        copy.tap()
+        XCTAssertTrue(app.alerts["Copied to clipboard"].waitForExistence(timeout: 8))
+        captureActionButton(app, name: "Dictation copied in foreground")
+        app.alerts["Copied to clipboard"].buttons["OK"].tap()
+    }
+
+    func testSettingsOpensActionButtonConfiguration() {
+        let app = launchApp()
+        let settings = app.buttons["tab.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 8))
+        settings.tap()
+
+        let actionButton = app.staticTexts["Action Button"].firstMatch
+        XCTAssertTrue(actionButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(actionButton.isHittable)
+        captureActionButton(app, name: "Settings Action Button entry")
+        actionButton.tap()
+
+        // Settings resumes any saved setup step, including Prepare and Add.
+        // Verify navigation into the actual setup screen instead of assuming
+        // which step another test (or the user) previously left open.
+        XCTAssertTrue(app.buttons["Close setup"].waitForExistence(timeout: 5))
+        let primary = app.buttons["actionButton.primaryAction"]
+        let assignment = app.buttons["actionButton.openSettings"]
+        XCTAssertTrue(primary.waitForExistence(timeout: 3) || assignment.waitForExistence(timeout: 3))
+        captureActionButton(app, name: "Action Button opened from Settings")
+    }
+
+    func testActionButtonAddStepExplainsImportBeforeAssignment() {
+        let app = actionButtonApp(["--muesli-ui-testing-action-button-add"])
+        let add = app.buttons["actionButton.primaryAction"]
+        XCTAssertTrue(add.waitForExistence(timeout: 8))
+        XCTAssertEqual(add.label, "Add to Shortcuts")
+        XCTAssertFalse(app.buttons["actionButton.openSettings"].exists)
+        captureActionButton(app, name: "Muesli guided import")
+    }
+
+    func testActionButtonClipboardSetupDoesNotRequireKeyboard() {
+        let app = actionButtonApp()
+        XCTAssertTrue(app.buttons["actionButton.mode.dictation"].waitForExistence(timeout: 8))
+        app.buttons["actionButton.mode.dictation"].tap()
+        app.buttons["actionButton.primaryAction"].tap()
+        XCTAssertFalse(app.staticTexts["Verify the keyboard"].exists)
+        XCTAssertFalse(app.textFields["onboarding.keyboardVerificationField"].exists)
+        captureActionButton(app, name: "Muesli clipboard readiness")
+    }
+
+    func testActionButtonMeetingSetupDoesNotRequireKeyboard() {
+        let app = actionButtonApp()
+        XCTAssertTrue(app.buttons["actionButton.mode.meeting"].waitForExistence(timeout: 8))
+        app.buttons["actionButton.mode.meeting"].tap()
+        captureActionButton(app, name: "Muesli meeting choice")
+        app.buttons["actionButton.primaryAction"].tap()
+        XCTAssertTrue(app.staticTexts["Let Muesli listen."].exists)
+        XCTAssertFalse(app.staticTexts["Verify the keyboard"].exists)
+        XCTAssertFalse(app.segmentedControls["actionButton.delivery"].exists)
+        captureActionButton(app, name: "Muesli meeting readiness")
+    }
+
+    func testActionButtonAssignmentUsesExactShortcutAndSettingsDestination() {
+        let app = actionButtonApp(["--muesli-ui-testing-action-button-assignment", "--muesli-ui-testing-action-button-meeting"])
+        XCTAssertTrue(app.buttons["actionButton.openSettings"].waitForExistence(timeout: 8))
+        XCTAssertEqual(app.buttons["actionButton.openSettings"].label, "Open Settings")
+        XCTAssertTrue(app.staticTexts["Muesli Meeting Note"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["The button below opens Muesli’s settings. Go back to the main Settings list, then select Action Button."].exists)
+        XCTAssertFalse(app.staticTexts["Your Action Button is ready"].exists)
+        captureActionButton(app, name: "Muesli meeting assignment")
+    }
+
+    func testActionButtonAssignmentFinishesWithoutRecordingTest() {
+        let app = actionButtonApp(["--muesli-ui-testing-action-button-returned"])
+        let done = app.buttons["I’ve assigned it — Done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.staticTexts["actionButton.testResult"].exists)
+        done.tap()
+        XCTAssertFalse(app.buttons["actionButton.openSettings"].exists)
+    }
+
+    func testActionButtonAssignmentKeepsSettingsAccessibleAtLargestTextSize() {
+        let app = actionButtonApp([
+            "--muesli-ui-testing-action-button-assignment",
+            "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL",
+        ])
+        let settings = app.buttons["actionButton.openSettings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 8))
+        for _ in 0..<10 where !settings.isHittable { app.swipeUp() }
+        XCTAssertTrue(settings.isHittable)
+        XCTAssertTrue(app.buttons["Close setup"].isHittable)
+        XCTAssertLessThanOrEqual(settings.frame.maxY, app.frame.maxY)
+        captureActionButton(app, name: "Muesli assignment accessibility text size")
+    }
+
     func testStartNotepadBeginsRecordingWithoutASecondMicTap() {
         addUIInterruptionMonitor(withDescription: "Microphone permission") { alert in
             let allowButton = alert.buttons["Allow"]

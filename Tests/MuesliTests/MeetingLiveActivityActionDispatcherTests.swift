@@ -19,40 +19,35 @@ final class MeetingLiveActivityActionDispatcherTests: XCTestCase {
         XCTAssertFalse(dictation.isMeeting)
     }
 
-    func testStopDispatchesTheLiveActivitySessionIdentifier() {
+    func testStopDispatchesTheLiveActivitySessionIdentifier() async {
         defer { MeetingLiveActivityActionDispatcher.register(stopHandler: nil) }
         let sessionID = UUID()
         var receivedSessionID: UUID?
         MeetingLiveActivityActionDispatcher.register { receivedID in
+            await Task.yield()
             receivedSessionID = receivedID
             return .accepted
         }
 
-        XCTAssertEqual(
-            MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: sessionID),
-            .accepted
-        )
+        let result = await MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: sessionID)
+        XCTAssertEqual(result, .accepted)
         XCTAssertEqual(receivedSessionID, sessionID)
     }
 
-    func testStopPreservesAnIdempotentAlreadyHandledResult() {
+    func testStopPreservesAnIdempotentAlreadyHandledResult() async {
         defer { MeetingLiveActivityActionDispatcher.register(stopHandler: nil) }
         MeetingLiveActivityActionDispatcher.register { _ in .alreadyHandled }
 
-        XCTAssertEqual(
-            MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: UUID()),
-            .alreadyHandled
-        )
+        let result = await MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: UUID())
+        XCTAssertEqual(result, .alreadyHandled)
     }
 
-    func testStopIsRejectedWhenTheAppHasNoActiveHandler() {
+    func testStopIsRejectedWhenTheAppHasNoActiveHandler() async {
         defer { MeetingLiveActivityActionDispatcher.register(stopHandler: nil) }
         MeetingLiveActivityActionDispatcher.register(stopHandler: nil)
 
-        XCTAssertEqual(
-            MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: UUID()),
-            .unavailable
-        )
+        let result = await MeetingLiveActivityActionDispatcher.stopMeetingRecording(sessionID: UUID())
+        XCTAssertEqual(result, .unavailable)
     }
 
     func testRecentEndedSessionIDsRemainBoundedAndEvictTheOldest() {

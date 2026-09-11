@@ -25,6 +25,13 @@ final class MuesliAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Register once UIKit has finished launching. Background task APIs are
+        // nonisolated/thread-safe; database workers need no main-queue hop.
+        SharedStoreDatabaseAccess.install { expire in
+            let token = application.beginBackgroundTask(withName: "Muesli database access", expirationHandler: expire)
+            guard token != .invalid else { throw CancellationError() }
+            return { application.endBackgroundTask(token) }
+        }
         // Create/restore CKSyncEngine independently of SwiftUI view ownership so
         // automatic CloudKit push handling is available from process launch.
         let runtime = MuesliCKSyncRuntime.shared

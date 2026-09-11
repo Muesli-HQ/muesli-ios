@@ -47,6 +47,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
 
         _ = try AudioInputRouteManager.configureForRecording(stage: routeStage)
 
+        var startupStep = "format"
         do {
             guard let targetFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
@@ -58,11 +59,15 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
             }
 
             let inputNode = engine.inputNode
+            // This recorder only consumes microphone samples. Do not start the
+            // RemoteIO output side and require background playback privileges.
+            inputNode.auAudioUnit.isOutputEnabled = false
             let inputFormat = inputNode.outputFormat(forBus: 0)
             converter = inputFormat.sampleRate != targetFormat.sampleRate || inputFormat.channelCount != targetFormat.channelCount
                 ? AVAudioConverter(from: inputFormat, to: targetFormat)
                 : nil
 
+            startupStep = "audio files"
             let writer = try CheckpointingAudioWriter(
                 continuousAudioURL: retainedAudioURL,
                 checkpointDirectory: chunksDirectory,
@@ -75,21 +80,50 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
             audioWriter = writer
             lock.unlock()
 
+            startupStep = "input tap"
             inputNode.installTap(onBus: 0, bufferSize: Self.bufferSize, format: nil) { [weak self] buffer, _ in
                 self?.handle(buffer: buffer, targetFormat: targetFormat)
             }
             tapInstalled = true
-            engine.prepare()
+            startupStep = "audio engine"
+            try prepareInputOnlyEngine()
             try engine.start()
             isRunning = true
         } catch {
+            // Preserve the OS error before cleanup changes the audio session.
+            // Never include paths or audio content in the diagnostic log.
+            let nsError = error as NSError
+            KeyboardDiagnosticsLog.record("recorder_start_failed", [
+                "stage": routeStage,
+                "step": startupStep,
+                "domain": nsError.domain,
+                "code": String(nsError.code),
+                "sample_rate": String(engine.inputNode.outputFormat(forBus: 0).sampleRate),
+                "channels": String(engine.inputNode.outputFormat(forBus: 0).channelCount)
+            ])
             cleanupAfterFailedStart()
             if error is AudioRecorder.RecordingError {
                 throw error
             }
-            throw AudioRecorder.RecordingError.startFailed(stage: routeStage)
+            throw AudioRecorder.RecordingError.recorderSetupFailed(
+                stage: "\(routeStage) (\(startupStep))", underlying: error
+            )
         }
     }
+
+    private func prepareInputOnlyEngine() throws {
+        engine.prepare()
+        let unit = engine.inputNode.auAudioUnit
+        KeyboardDiagnosticsLog.record("recorder.ioConfiguration", [
+            "input_enabled": String(unit.isInputEnabled),
+            "output_enabled": String(unit.isOutputEnabled)
+        ])
+        guard unit.isInputEnabled && !unit.isOutputEnabled else {
+            throw AudioRecorder.RecordingError.startFailed(stage: "microphone-only configuration")
+        }
+    }
+
+    var isPlaybackEnabled: Bool { engine.inputNode.auAudioUnit.isOutputEnabled }
 
     func rotateChunk() -> MeetingAudioChunk? {
         guard isRunning else { return nil }
@@ -108,7 +142,8 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         guard isRunning else { return false }
         guard !engine.isRunning else { return true }
         _ = try AudioInputRouteManager.configureForRecording(stage: routeStage)
-        engine.prepare()
+        engine.inputNode.auAudioUnit.isOutputEnabled = false
+        try prepareInputOnlyEngine()
         try engine.start()
         return engine.isRunning
     }

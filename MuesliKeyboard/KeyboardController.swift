@@ -602,6 +602,16 @@ final class KeyboardController {
                     }
                 }
             }
+            if handoffState.phase == .copyRequired, let requestID = handoffState.requestID {
+                completedClipboardRequestIDs.insert(requestID)
+            }
+            if handoffState.phase == .cancelled, let requestID = handoffState.requestID {
+                cancelledRequestIDs.insert(requestID)
+                pendingCancellationIDs.remove(requestID)
+            }
+            if handoffState.phase == .inserted, let requestID = handoffState.requestID {
+                insertedRequestIDs.insert(requestID)
+            }
             apply(runtimeStatus: runtimeStatus)
             if let command = try store.pendingCommand(), command.action == .cancel {
                 pendingCancellationIDs.insert(command.requestID)
@@ -699,6 +709,11 @@ final class KeyboardController {
                 "active": activeRequestID?.uuidString.prefix(8).lowercased() ?? "none",
                 "inserted": insertedRequestIDs.contains(requestID) ? "yes" : "no"
             ])
+        }
+
+        if insertedRequestIDs.contains(requestID) {
+            reconcileInsertedRequest(requestID)
+            return
         }
 
         // A late recorder/transcriber update must not reverse the user's Cancel.
@@ -877,6 +892,7 @@ final class KeyboardController {
 
         guard activeRequestID == nil, canUseRuntimeStart else { return }
         guard let runtimeRequestID = runtimeStatus?.activeRequestID,
+              !insertedRequestIDs.contains(runtimeRequestID),
               !cancelledRequestIDs.contains(runtimeRequestID),
               !completedClipboardRequestIDs.contains(runtimeRequestID)
         else {
@@ -904,6 +920,10 @@ final class KeyboardController {
             return
         }
 
+        if insertedRequestIDs.contains(requestID) {
+            reconcileInsertedRequest(requestID)
+            return
+        }
         if cancelledRequestIDs.contains(requestID) || completedClipboardRequestIDs.contains(requestID) {
             return
         }
@@ -1067,6 +1087,17 @@ final class KeyboardController {
         }
     }
 
+    private func reconcileInsertedRequest(_ requestID: UUID) {
+        // A delayed completion for A must not reset a newer dictation B.
+        guard activeRequestID == nil || activeRequestID == requestID else { return }
+        activeRequestID = nil
+        recoveryRequestID = nil
+        liveTranscript = ""
+        inputLevel = 0
+        dictationPhase = .idle
+        statusText = "Latest ready"
+    }
+
     private func insertCompletedResult(_ result: DictationResult) {
         guard !pendingCancellationIDs.contains(result.requestID) else { return }
         // A resultChanged event can arrive before the host publishes its final
@@ -1082,11 +1113,8 @@ final class KeyboardController {
         }
         let shortID = result.requestID.uuidString.prefix(8).lowercased()
 
-        // These two guards correctly prevent a double insertion, but they
-        // return without reconciling dictationPhase or activeRequestID. If the
-        // keyboard is stranded mid-session, this is the line it is stranded on
-        // -- and until now it was completely silent.
         guard !insertedRequestIDs.contains(result.requestID) else {
+            reconcileInsertedRequest(result.requestID)
             KeyboardDiagnosticsLog.record("insert.skipped", [
                 "reason": "alreadyInserted",
                 "request": String(shortID),

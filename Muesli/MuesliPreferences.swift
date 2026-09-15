@@ -5,7 +5,17 @@ enum MuesliPreferences {
     static let accentThemeKey = "muesli.appearance.accent"
     static let liveActivitiesForDictationsKey = "muesli.liveActivities.dictations"
     static let liveActivitiesForMeetingsKey = "muesli.liveActivities.meetings"
+
     static let keyboardSessionModeKey = "muesli.keyboardSession.enabled"
+    static let retiredKeyboardSessionModeKey = "muesli.keyboardSession.keepReadyBetweenDictations"
+
+    static func migrateKeyboardSessionPreference(in defaults: UserDefaults = .standard) {
+        // The experimental build's choice is newer than the original stored value.
+        if let choice = defaults.object(forKey: retiredKeyboardSessionModeKey) as? Bool {
+            defaults.set(choice, forKey: keyboardSessionModeKey)
+            defaults.removeObject(forKey: retiredKeyboardSessionModeKey)
+        }
+    }
     static let fillerWordRemovalKey = "muesli.transcription.fillerWordRemoval"
     static let customDictionaryKey = "muesli.transcription.customDictionary"
     static let transcriptionModelKey = "muesli.transcription.localModel"
@@ -49,7 +59,7 @@ enum MuesliPreferences {
     }
 
     static var keyboardSessionModeEnabled: Bool {
-        bool(for: keyboardSessionModeKey, defaultValue: false)
+        bool(for: keyboardSessionModeKey, defaultValue: true)
     }
 
     static var fillerWordRemovalEnabled: Bool {

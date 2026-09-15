@@ -39,6 +39,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var isEngineRunning = false
     private var isStarting = false
+    private var startupGeneration = UUID()
     private var tapInstalled = false
     private var inputActivityHandler: (@Sendable (_ powerDB: Float, _ isCapturing: Bool) -> Void)?
     var onRecordingFailure: (@Sendable (CheckpointingAudioWriterFailure) -> Void)?
@@ -73,12 +74,16 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         return recording
     }
 
-    func start() async throws {
-        guard beginStartingIfNeeded() else {
+    @MainActor
+    func start(requestPermission: @MainActor () async -> Bool = { await AVAudioApplication.requestRecordPermission() }) async throws {
+        guard let generation = beginStartingIfNeeded() else {
             return
         }
 
-        let granted = await AVAudioApplication.requestRecordPermission()
+        let granted = await requestPermission()
+        // Mic-off can run while the permission prompt is suspended. A late
+        // answer must not activate audio, nor clean up a newer startup.
+        guard isCurrentStartup(generation) else { throw CancellationError() }
         guard granted else {
             setEngineStarting(false)
             throw AudioRecorder.RecordingError.microphonePermissionDenied
@@ -87,24 +92,40 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         do {
             // Standby captures real keyboard dictation segments, so it must honor the selected route.
             _ = try AudioInputRouteManager.configureForRecording(stage: "keyboard session")
+            KeyboardDiagnosticsLog.record("keyboardMic.startStep", ["step": "prepare"])
             prepareForStart()
 
             let targetFormat = try Self.makeTargetFormat()
             let inputNode = engine.inputNode
+            // Match the working input-only recorder. Standby does not play audio.
+            inputNode.auAudioUnit.isOutputEnabled = false
             let inputFormat = inputNode.outputFormat(forBus: 0)
             converter = Self.requiresConversion(from: inputFormat, to: targetFormat)
                 ? AVAudioConverter(from: inputFormat, to: targetFormat)
                 : nil
 
-            inputNode.installTap(onBus: 0, bufferSize: Self.bufferSize, format: nil) { [weak self] buffer, _ in
-                self?.handle(buffer: buffer, targetFormat: targetFormat)
-            }
+            KeyboardDiagnosticsLog.record("keyboardMic.startStep", ["step": "inputTap"])
+            inputNode.installTap(onBus: 0, bufferSize: Self.bufferSize, format: nil,
+                                 block: makeInputTap(targetFormat: targetFormat))
             setTapInstalled(true)
+            KeyboardDiagnosticsLog.record("keyboardMic.startStep", ["step": "enginePrepare"])
             engine.prepare()
+            let unit = inputNode.auAudioUnit
+            KeyboardDiagnosticsLog.record("keyboardMic.ioConfiguration", [
+                "input_enabled": String(unit.isInputEnabled),
+                "output_enabled": String(unit.isOutputEnabled)
+            ])
+            guard unit.isInputEnabled && !unit.isOutputEnabled else {
+                throw AudioRecorder.RecordingError.startFailed(stage: "keyboard input-only configuration")
+            }
+            KeyboardDiagnosticsLog.record("keyboardMic.startStep", ["step": "engineStart"])
             try engine.start()
 
             setEngineRunning(true)
+            KeyboardDiagnosticsLog.record("keyboardMic.started")
         } catch {
+            let nsError = error as NSError
+            KeyboardDiagnosticsLog.record("keyboardMic.startFailed", ["domain": nsError.domain, "code": String(nsError.code)])
             cleanupAfterFailedStart()
             if error is AudioRecorder.RecordingError {
                 throw error
@@ -119,6 +140,15 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         lock.lock()
         inputActivityHandler = handler
         lock.unlock()
+    }
+
+    // Construct the Objective-C audio block outside the main-actor startup
+    // method. Otherwise Swift 6 inserts an executor assertion that traps when
+    // AVAudioEngine invokes it on RealtimeMessenger.mServiceQueue.
+    private nonisolated func makeInputTap(targetFormat: AVAudioFormat) -> AVAudioNodeTapBlock {
+        { [weak self] buffer, _ in
+            self?.handle(buffer: buffer, targetFormat: targetFormat)
+        }
     }
 
     func beginSegment(outputURL: URL, checkpointDirectory: URL? = nil) throws {
@@ -234,6 +264,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
 
         lock.lock()
         isStarting = false
+        startupGeneration = UUID()
         isEngineRunning = false
         state.latestPowerDB = -160
         state.lastInputBufferAt = nil
@@ -442,14 +473,21 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         lock.unlock()
     }
 
-    private func beginStartingIfNeeded() -> Bool {
+    private func beginStartingIfNeeded() -> UUID? {
         lock.lock()
         defer { lock.unlock() }
         guard !isStarting, !(isEngineRunning && engine.isRunning) else {
-            return false
+            return nil
         }
         isStarting = true
-        return true
+        startupGeneration = UUID()
+        return startupGeneration
+    }
+
+    private func isCurrentStartup(_ generation: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isStarting && startupGeneration == generation
     }
 
     private var isTapInstalled: Bool {

@@ -87,6 +87,19 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertTrue(insertedText.isEmpty)
     }
 
+    func testAcknowledgedCancellationCannotResurrectAfterKeyboardRecreation() throws {
+        try store.saveKeyboardHandoffState(handoff(.cancelled))
+        try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.5))
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+        try store.saveResult(.init(requestID: requestID, text: "Cancelled speech", engineIdentifier: "test"))
+        let rebuilt = KeyboardController(store: store, eventBus: bus)
+        rebuilt.textInserter = { [weak self] in self?.insertedText.append($0) }
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertEqual(rebuilt.dictationPhase, .idle)
+        XCTAssertFalse(rebuilt.canCancelActiveDictation)
+        XCTAssertTrue(insertedText.isEmpty)
+    }
+
     func testCompletedClipboardRequestIgnoresLateHandoffAndRuntime() throws {
         try store.saveKeyboardHandoffState(handoff(.resultReady))
         try store.saveResult(.init(requestID: requestID, text: "Clipboard only", engineIdentifier: "test", source: ActionButtonCaptureSource.clipboard))
@@ -328,21 +341,28 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertEqual(insertedText, ["hello there"])
     }
 
-    /// Known defect, pinned rather than left undocumented.
-    ///
-    /// Both processes write `keyboard_handoff_state` with no sequence number,
-    /// and `KeyboardHandoffState.advanced(to:)` performs no ordering check. So
-    /// a late `.resultReady` from the app can land after the extension has
-    /// already written `.inserted`, regressing a terminal phase. The extension
-    /// re-adopts the request it just finished, `insertCompletedResult` returns
-    /// early on its idempotency latch without reconciling, and the keyboard
-    /// strands on "Transcribing" with its primary button disabled.
-    ///
-    /// This is the defect behind the original bug report. It is unfixed on
-    /// `main`; fixing it needs monotonic transitions at the storage layer.
-    /// When that lands this test fails as an unexpected pass -- delete the
-    /// `XCTExpectFailure` then.
-    func testLateResultReadyStrandsTheKeyboard() throws {
+    func testInsertedHandoffSurvivesKeyboardRecreationAndLateStatus() throws {
+        let result = DictationResult(requestID: requestID, text: "already sent", engineIdentifier: "test")
+        try store.saveResult(result)
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+        controller.prepareInitialPresentationState()
+        controller = KeyboardController(store: store, eventBus: bus)
+        controller.textInserter = { [weak self] text in self?.insertedText.append(text) }
+        for phase: KeyboardHandoffPhase in [.transcribingStarted, .resultReady, .recordingStarted] {
+            try store.saveKeyboardHandoffState(handoff(phase))
+            controller.prepareInitialPresentationState()
+            XCTAssertEqual(try store.keyboardHandoffState().phase, .inserted)
+            XCTAssertEqual(controller.dictationPhase, .idle)
+            XCTAssertFalse(controller.isPrimaryButtonDisabled)
+        }
+        XCTAssertEqual(insertedText, ["already sent"])
+        let next = UUID()
+        try store.saveKeyboardHandoffState(.init(requestID: next, phase: .recordingStarted))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.dictationPhase, .recording, "A completed request must not block the next one")
+    }
+
+    func testLateResultReadyCannotReopenInsertedRequest() throws {
         let result = DictationResult(requestID: requestID, text: "already sent", engineIdentifier: "test")
         try store.saveResult(result)
         try store.saveKeyboardHandoffState(handoff(.resultReady))
@@ -354,7 +374,7 @@ final class KeyboardControllerTests: XCTestCase {
         // the keyboard has already inserted and marked .inserted.
         try store.saveKeyboardHandoffState(handoff(.resultReady))
 
-        XCTExpectFailure("Terminal handoff phases are not yet monotonic; see Context/findings-2026-07-26") {
+        do {
             controller.prepareInitialPresentationState()
             XCTAssertEqual(
                 controller.dictationPhase,

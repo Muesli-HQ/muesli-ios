@@ -153,6 +153,21 @@ struct MuesliInlineWaveformView: View {
         GeometryReader { geometry in
             let count = sampleCount
             let samples = samplesForRender(count: count, elapsed: elapsed)
+            if style == .monochrome {
+                // Native bars retain a visible baseline without a Canvas backing
+                // surface. Meter updates drive listening redraws after unlock.
+                let totalSpacing = spacing * CGFloat(count - 1)
+                let barWidth = max(2, min(5, (geometry.size.width - totalSpacing) / CGFloat(count)))
+                HStack(spacing: spacing) {
+                    ForEach(0..<count, id: \.self) { index in
+                        Capsule()
+                            .fill(color.opacity(mode == .waiting
+                                ? waitingOpacity(index: index, elapsed: elapsed) : 0.94))
+                            .frame(width: barWidth, height: barHeight(sample: samples[index], maxHeight: geometry.size.height))
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+            } else {
             Canvas { context, size in
                 let totalSpacing = spacing * CGFloat(count - 1)
                 let barWidth = max(2, min(5, (size.width - totalSpacing) / CGFloat(count)))
@@ -218,6 +233,7 @@ struct MuesliInlineWaveformView: View {
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+            }
         }
     }
 

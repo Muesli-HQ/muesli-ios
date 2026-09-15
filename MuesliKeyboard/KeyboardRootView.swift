@@ -253,7 +253,7 @@ struct KeyboardRootView: View {
                     barCount: Self.activeWaveformBarCount,
                     spacing: 2.2,
                     framesPerSecond: 18,
-                    refreshDriver: .timeline
+                    refreshDriver: .inputLevel
                 )
                 .frame(height: 24)
                 .shadow(color: activeStatusColor.opacity(0.28), radius: 8)

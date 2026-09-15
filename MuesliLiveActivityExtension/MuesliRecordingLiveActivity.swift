@@ -143,7 +143,8 @@ private struct LockScreenLiveActivityView: View {
     }
 }
 
-private struct LiveActivityInputWaveform: View {
+struct LiveActivityInputWaveform: View {
+    static let tint = Color(red: 0.40, green: 0.64, blue: 1)
     let samples: [Double]?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
@@ -154,7 +155,7 @@ private struct LiveActivityInputWaveform: View {
             HStack(spacing: 2) {
                 ForEach(bars.indices, id: \.self) { index in
                     Capsule()
-                        .fill(Color(red: 0.40, green: 0.64, blue: 1))
+                        .fill(Self.tint)
                         .frame(height: 3 + (geometry.size.height - 3) * bars[index])
                 }
             }

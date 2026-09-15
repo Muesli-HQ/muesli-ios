@@ -3,6 +3,55 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    func testHandoffProgressCannotRegressAcrossIndependentWriters() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = Muesli.SharedStore(containerURL: directory)
+        let keyboard = Muesli.SharedStore(containerURL: directory)
+        let id = UUID()
+        let phases: [Muesli.KeyboardHandoffPhase] = [.startRequested, .startAcknowledged,
+            .recordingStarted, .stopRequested, .stopAcknowledged, .audioSaved,
+            .transcribingStarted, .resultReady, .inserted]
+        for (index, phase) in phases.enumerated() {
+            try app.saveKeyboardHandoffState(.init(requestID: id, phase: phase))
+            for stale in phases.prefix(index) {
+                try keyboard.saveKeyboardHandoffState(.init(requestID: id, phase: stale))
+                XCTAssertEqual(try app.keyboardHandoffState().phase, phase)
+            }
+        }
+    }
+
+    func testCancellationAndCopyDeliverySurviveLateProgress() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        for terminal: Muesli.KeyboardHandoffPhase in [.cancelRequested, .cancelled, .copyRequired] {
+            let id = UUID()
+            try store.clearKeyboardHandoffState()
+            try store.saveKeyboardHandoffState(.init(requestID: id, phase: terminal))
+            for stale: Muesli.KeyboardHandoffPhase in [.recordingStarted, .transcribingStarted, .resultReady] {
+                try store.saveKeyboardHandoffState(.init(requestID: id, phase: stale))
+                XCTAssertEqual(try store.keyboardHandoffState().phase, terminal)
+            }
+        }
+    }
+
+    func testRecoveryAndNewRequestRemainPossible() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let first = Muesli.DictationRequest()
+        try store.saveRequest(first)
+        try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .recoveryRequested, recoveryAction: .start))
+        try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .startAcknowledged))
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .startAcknowledged)
+        let next = Muesli.DictationRequest()
+        try store.saveRequest(next)
+        try store.saveKeyboardHandoffState(.init(requestID: next.id, phase: .startRequested))
+        try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .resultReady))
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, next.id)
+    }
+
     @MainActor
     func testDiscardingFirstNotepadBurstPreservesManuallyTypedDocument() throws {
         let directory = try makeTemporaryDirectory()

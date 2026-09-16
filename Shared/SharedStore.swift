@@ -695,15 +695,12 @@ private struct SharedStoreDatabase {
             try transaction(db: db) {
                 if let data = try valueData(key: .keyboardHandoffState, db: db) {
                     let current = try decoder.decode(KeyboardHandoffState.self, from: data)
-                    if current.requestID != state.requestID,
-                       ![.idle, .inserted, .cancelled, .copyRequired, .failed].contains(current.phase),
-                       ![.startRequested, .startAcknowledged].contains(state.phase),
-                       let pendingData = try valueData(key: .pendingRequest, db: db),
-                       let currentID = current.requestID {
-                        let pending = try decoder.decode(DictationRequest.self, from: pendingData)
-                        // A callback for A cannot displace the active request B.
-                        // Starting B first saves its own pending request.
-                        if pending.id == currentID { return }
+                    if current.requestID != nil, current.requestID != state.requestID {
+                        // The handoff retains ownership even after pending cleanup.
+                        // Only an explicitly prepared new request may replace it.
+                        guard let pendingData = try valueData(key: .pendingRequest, db: db),
+                              try decoder.decode(DictationRequest.self, from: pendingData).id == state.requestID
+                        else { return }
                     }
                     if !current.accepts(state) {
                         return

@@ -17,11 +17,13 @@ final class KeyboardMicActivityController {
         guard activity == nil, ActivityAuthorizationInfo().areActivitiesEnabled,
               MuesliPreferences.liveActivitiesForDictationsEnabled else { return }
         do {
+            let state = KeyboardMicActivityAttributes.ContentState(isRecording: isRecording, isReady: true)
             activity = try Activity.request(
                 attributes: KeyboardMicActivityAttributes(sessionID: sessionID.uuidString),
-                content: ActivityContent(state: .init(isRecording: isRecording, isReady: true), staleDate: nil),
+                content: ActivityContent(state: state, staleDate: nil),
                 pushType: nil
             )
+            lastState = state
         } catch {
             KeyboardDiagnosticsLog.record("keyboardMic.activityFailed", ["error": String(describing: error)])
         }

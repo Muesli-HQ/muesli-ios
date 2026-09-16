@@ -345,7 +345,20 @@ final class DictationCoordinator {
         eventBus: any CrossProcessEventStreaming = DarwinCrossProcessEventBus.shared
     ) {
         MuesliPreferences.migrateKeyboardSessionPreference()
-        let store = store ?? SharedStore(eventPoster: eventBus)
+        var fixtureStore = store
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureStore == nil,
+           ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing"),
+           ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform") {
+            // Unsigned simulator UI tests have no app-group entitlement. The
+            // Island fixture and its in-app intent dispatcher share this store.
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("island-preview-\(UUID().uuidString)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            fixtureStore = SharedStore(containerURL: directory, eventPoster: eventBus)
+        }
+        #endif
+        let store = fixtureStore ?? SharedStore(eventPoster: eventBus)
         self.store = store
         self.eventBus = eventBus
         voiceNoteCheckpointStore = VoiceNoteCheckpointStore(store: store)
@@ -1388,6 +1401,8 @@ final class DictationCoordinator {
         }
 
         let request = DictationRequest(sourceBundleIdentifier: "muesli.action-button")
+        do { try store.saveRequest(request) }
+        catch { return .failed(error.localizedDescription) }
         transitionKeyboardSession(.handoffStarted(request.id))
         let outcome = await withCheckedContinuation { continuation in
             startRecording(

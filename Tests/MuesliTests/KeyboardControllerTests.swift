@@ -357,6 +357,7 @@ final class KeyboardControllerTests: XCTestCase {
         }
         XCTAssertEqual(insertedText, ["already sent"])
         let next = UUID()
+        try store.saveRequest(.init(id: next))
         try store.saveKeyboardHandoffState(.init(requestID: next, phase: .recordingStarted))
         controller.prepareInitialPresentationState()
         XCTAssertEqual(controller.dictationPhase, .recording, "A completed request must not block the next one")

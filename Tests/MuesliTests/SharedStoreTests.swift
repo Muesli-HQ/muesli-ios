@@ -21,6 +21,32 @@ final class SharedStoreTests: XCTestCase {
         }
     }
 
+    func testOldRequestsCannotReplaceTerminalHandoffAfterPendingCleanup() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = Muesli.SharedStore(containerURL: directory)
+        let keyboard = Muesli.SharedStore(containerURL: directory)
+        for terminal: Muesli.KeyboardHandoffPhase in [.inserted, .cancelled, .copyRequired] {
+            try app.clearKeyboardHandoffState()
+            let old = Muesli.DictationRequest()
+            let current = Muesli.DictationRequest()
+            try app.saveRequest(old)
+            try app.saveKeyboardHandoffState(.init(requestID: old.id, phase: .recordingStarted))
+            try keyboard.saveRequest(current)
+            try keyboard.saveKeyboardHandoffState(.init(requestID: current.id, phase: terminal))
+            try keyboard.clearPendingRequest()
+            for stale: Muesli.KeyboardHandoffPhase in [.startAcknowledged, .transcribingStarted, .resultReady, .recoveryRequested] {
+                try app.saveKeyboardHandoffState(.init(requestID: old.id, phase: stale))
+                XCTAssertEqual(try keyboard.keyboardHandoffState().requestID, current.id)
+                XCTAssertEqual(try keyboard.keyboardHandoffState().phase, terminal)
+            }
+            let next = Muesli.DictationRequest()
+            try keyboard.saveRequest(next)
+            try keyboard.saveKeyboardHandoffState(.init(requestID: next.id, phase: .startRequested))
+            XCTAssertEqual(try app.keyboardHandoffState().requestID, next.id)
+        }
+    }
+
     func testCancellationAndCopyDeliverySurviveLateProgress() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

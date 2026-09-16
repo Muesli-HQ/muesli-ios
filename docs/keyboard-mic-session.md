@@ -36,8 +36,8 @@ Both processes apply `KeyboardHandoffState.accepts` inside a SQLite transaction.
 Normal progress can skip ahead but cannot regress. Inserted/cancelled outcomes
 cannot resume; copy-required can become inserted; pending cancellation only accepts
 cancellation acknowledgements, failure, or cancel recovery. Existing recovery paths
-remain available. Late completion for an older request cannot displace a different
-pending active request. A rebuilt keyboard restores terminal ownership before
+remain available. A different request may replace the durable handoff owner only when the pending
+request explicitly identifies that next request, including after terminal cleanup. A rebuilt keyboard restores terminal ownership before
 adopting transient runtime/status snapshots.
 
 ## Waveforms and activities

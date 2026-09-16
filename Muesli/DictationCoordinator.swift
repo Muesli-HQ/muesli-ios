@@ -4993,6 +4993,7 @@ final class DictationCoordinator {
                     supportsBackgroundStart: canStartKeyboardRequestsInBackground
                 )
                 resumeKeyboardSessionKeeperIfNeeded()
+                keyboardMicActivity.showCompletion(sessionID: keyboardMicSession.id)
                 AppTelemetry.signal(
                     "keyboard_transcription_recovered",
                     parameters: [
@@ -5382,6 +5383,9 @@ final class DictationCoordinator {
                 resumeKeyboardSessionKeeperIfNeeded()
                 statusText = "Ready"
                 publishKeyboardSessionReadyIfAvailable()
+                if startedFromKeyboard {
+                    keyboardMicActivity.showCompletion(sessionID: keyboardMicSession.id)
+                }
                 liveDictationTranscript = ""
                 realtimeDictationCommittedText = ""
                 if let completedSession = try? store.recordingSession(requestID: request.id) {

@@ -60,12 +60,12 @@ final class KeyboardWaveformTests: XCTestCase {
         var throttle = MuesliWaveformLevelThrottle()
         let start = Date(timeIntervalSinceReferenceDate: 1_000)
 
-        XCTAssertEqual(throttle.valueToPublish(0.61, at: start), 0.6)
+        XCTAssertEqual(throttle.valueToPublish(0.61, at: start), 0.61)
         XCTAssertNil(throttle.valueToPublish(0.62, at: start.addingTimeInterval(0.05)))
-        XCTAssertNil(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.1)))
-        XCTAssertEqual(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.17)), 0.65)
+        XCTAssertEqual(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.1)), 0.66)
+        XCTAssertNil(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.17)))
         XCTAssertNil(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.3)))
-        XCTAssertEqual(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.93)), 0.65)
+        XCTAssertEqual(throttle.valueToPublish(0.66, at: start.addingTimeInterval(0.93)), 0.66)
     }
 
     func testWaveformLevelPublishingClampsOutOfRangeValues() {

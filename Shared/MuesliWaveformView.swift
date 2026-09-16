@@ -92,7 +92,7 @@ enum MuesliKeyboardWaveformPresentation {
 }
 
 struct MuesliWaveformLevelThrottle {
-    static let minimumPublishInterval: TimeInterval = 0.16
+    static let minimumPublishInterval: TimeInterval = 0.08
     static let heartbeatInterval: TimeInterval = 0.75
 
     private var lastPublishedAt = Date.distantPast
@@ -101,7 +101,7 @@ struct MuesliWaveformLevelThrottle {
     mutating func valueToPublish(_ rawLevel: Double, at now: Date = .now) -> Double? {
         let elapsed = now.timeIntervalSince(lastPublishedAt)
         let normalized = min(max(rawLevel, 0), 1)
-        let quantized = (normalized * 40).rounded() / 40
+        let quantized = (normalized * 100).rounded() / 100
         let changed = quantized != lastPublishedLevel
 
         guard elapsed >= Self.minimumPublishInterval,
@@ -167,6 +167,10 @@ struct MuesliInlineWaveformView: View {
                     }
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
+                // Interpolate native bar heights between cross-process samples.
+                // The bars remain visible even if animation pauses on lock.
+                .animation(isActive && mode == .level && !reduceMotion
+                    ? .linear(duration: 0.12) : nil, value: samples)
             } else {
             Canvas { context, size in
                 let totalSpacing = spacing * CGFloat(count - 1)

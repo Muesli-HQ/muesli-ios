@@ -19,8 +19,11 @@ struct KeyboardMicLiveActivity: Widget {
                 if context.state.isRecording {
                     LiveActivityInputWaveform(samples: context.state.waveform)
                         .frame(width: 24, height: 20)
-                } else {
-                    Image(systemName: context.state.isReady ? "checkmark" : "pause.fill")
+                } else if context.state.showsCompletion() {
+                    Image(systemName: "checkmark")
+                        .accessibilityLabel("Dictation complete")
+                } else if !context.state.isReady {
+                    Image(systemName: "pause.fill")
                         .accessibilityLabel(context.state.title)
                 }
             } minimal: {

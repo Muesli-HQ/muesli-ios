@@ -7,6 +7,11 @@ struct KeyboardMicActivityAttributes: ActivityAttributes {
         var isRecording: Bool
         var isReady: Bool
         var waveform: [Double]? = nil
+        var completionExpiresAt: Date? = nil
+
+        func showsCompletion(at date: Date = .now) -> Bool {
+            !isRecording && isReady && completionExpiresAt.map { date < $0 } == true
+        }
 
         var title: String { isRecording ? "Listening" : (isReady ? "Mic ready" : "Mic paused") }
     }

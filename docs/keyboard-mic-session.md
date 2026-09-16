@@ -52,10 +52,17 @@ A mic session has its own ActivityAttributes rather than a synthetic recording o
 history row. It shows Listening, Mic ready, or Mic paused. Recording uses the same
 five-bar amplitude envelope, sampler, renderer, and tint as Action Button activities.
 Updates are coalesced to at most two per second with one meter update in flight.
-Ready/paused states clear waveform data. Older activities decode without samples.
+Ready/paused states clear waveform data. Successful dictation briefly shows a
+completion checkmark for five seconds, then clears it while retaining mic-off
+controls. Initial standby never shows a completion checkmark. Starting another
+recording or ending the mic session cancels the old completion timeout. Older
+activities decode without samples or a completion deadline.
 
 The keyboard's listening waveform uses native bars driven by metered input rather
-than an animation timeline and Canvas. This avoids depending on animation resumption
+than an animation timeline and Canvas. Meter publication is capped at 12.5 Hz
+(approximately 10 Hz with the 20 Hz sampler), with 1% level precision and native
+120 ms interpolation between updates. Reduce Motion disables interpolation. This
+avoids depending on animation resumption
 after screen timeout. Waiting animation and electric-spectrum rendering retain
 their existing behavior.
 

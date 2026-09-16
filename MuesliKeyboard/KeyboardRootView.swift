@@ -252,7 +252,7 @@ struct KeyboardRootView: View {
                     style: .monochrome,
                     barCount: Self.activeWaveformBarCount,
                     spacing: 2.2,
-                    framesPerSecond: 18,
+                    framesPerSecond: 30,
                     refreshDriver: .inputLevel
                 )
                 .frame(height: 24)

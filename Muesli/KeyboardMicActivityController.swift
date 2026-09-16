@@ -6,6 +6,7 @@ final class KeyboardMicActivityController {
     private var activity: Activity<KeyboardMicActivityAttributes>?
     private var lastState: KeyboardMicActivityAttributes.ContentState?
     private var updateTask: Task<Void, Never>?
+    private var completionTask: Task<Void, Never>?
 
     func hasActivity(sessionID: UUID?) -> Bool {
         guard let sessionID else { return false }
@@ -33,9 +34,33 @@ final class KeyboardMicActivityController {
         guard let activity, activity.attributes.sessionID == sessionID.uuidString else { return }
         let state = KeyboardMicActivityAttributes.ContentState(
             isRecording: isRecording, isReady: isReady,
-            waveform: isRecording ? lastState?.waveform : nil
+            waveform: isRecording ? lastState?.waveform : nil,
+            completionExpiresAt: !isRecording && isReady ? lastState?.completionExpiresAt : nil
         )
+        if isRecording || !isReady {
+            completionTask?.cancel()
+            completionTask = nil
+        }
         enqueue(state, activity: activity)
+    }
+
+    func showCompletion(sessionID: UUID?) {
+        guard let sessionID, let activity,
+              activity.attributes.sessionID == sessionID.uuidString,
+              var state = lastState, !state.isRecording, state.isReady else { return }
+        completionTask?.cancel()
+        let expiry = Date.now.addingTimeInterval(5)
+        state.completionExpiresAt = expiry
+        enqueue(state, activity: activity)
+        completionTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(5)) }
+            catch { return }
+            guard let self, self.activity?.id == activity.id,
+                  var current = self.lastState, current.completionExpiresAt == expiry else { return }
+            current.completionExpiresAt = nil
+            self.enqueue(current, activity: activity)
+            self.completionTask = nil
+        }
     }
 
     private func enqueue(_ state: KeyboardMicActivityAttributes.ContentState,
@@ -61,6 +86,8 @@ final class KeyboardMicActivityController {
 
     func end(sessionID: UUID) async {
         if activity?.attributes.sessionID == sessionID.uuidString {
+            completionTask?.cancel()
+            completionTask = nil
             activity = nil
             lastState = nil
             let pendingUpdate = updateTask

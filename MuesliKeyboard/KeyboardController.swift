@@ -284,7 +284,7 @@ final class KeyboardController {
     }
 
     func prepareLaunchRequestIfNeeded() {
-        guard preparedRequest == nil, activeRequestID == nil else { return }
+        guard preparedRequest == nil, activeRequestID == nil, recoveryRequestID == nil else { return }
         let request = DictationRequest()
         preparedRequest = request
         launchURL = makeLaunchURL(for: request)
@@ -1075,7 +1075,7 @@ final class KeyboardController {
             try? store.saveKeyboardHandoffState(recovery)
             latestHandoffState = recovery
             recoveryRequestID = requestID
-            launchURL = makeLaunchURL(for: requestID, action: MuesliAppConstants.startAction)
+            launchURL = makeLaunchURL(for: requestID, action: urlAction(for: recovery.recoveryAction ?? .start))
             dictationPhase = .failed
             activeRequestID = nil
             liveTranscript = ""

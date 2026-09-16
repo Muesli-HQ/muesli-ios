@@ -1577,6 +1577,8 @@ final class DictationCoordinator {
               FileManager.default.fileExists(atPath: audioURL.path)
         else {
             let message = "Recording was interrupted. Start a new voice note."
+            try? store.clearPendingRequest(matching: request.id)
+            KeyboardDiagnosticsLog.record("recording.recovery", ["outcome": "missingAudio"])
             try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: message))
             saveKeyboardHandoff(requestID: request.id, phase: .failed, message: message)
             statusText = message
@@ -5057,6 +5059,23 @@ final class DictationCoordinator {
 
     private func stopRecording(requestID: UUID) {
         guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .stop) else { return }
+
+        // A Stop delivered after relaunch has no live recorder to stop. Resolve
+        // persisted work before adopting its ID; otherwise adoption itself makes
+        // recoverKeyboardRequestIfNeeded reject the interrupted recording.
+        if !isRecording && !recordingStartupInProgress {
+            let request = (try? store.pendingRequest()).flatMap { $0.id == requestID ? $0 : nil }
+                ?? DictationRequest(id: requestID)
+            if refreshActiveKeyboardRequestIfNeeded(request) { return }
+            if recoverKeyboardRequestIfNeeded(request) { return }
+            let message = "Recording was interrupted. Start a new dictation."
+            try? store.saveStatus(.init(requestID: requestID, phase: .failed, message: message))
+            saveKeyboardHandoff(requestID: requestID, phase: .failed, message: message)
+            try? store.clearPendingRequest(matching: requestID)
+            statusText = message
+            KeyboardDiagnosticsLog.record("recording.interruptedStop", ["outcome": "noRecoverableRecording"])
+            return
+        }
 
         let request: DictationRequest
         var session = activeSession

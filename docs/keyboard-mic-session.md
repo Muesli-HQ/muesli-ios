@@ -44,7 +44,11 @@ or pending text insertion. A completed, cancelled, copy-required, or failed hand
 allows the next request; duplicate adoption preserves progress, while delayed starts
 for delivered/cancelled requests are rejected. Progress updates cannot transfer
 ownership. Pending-request and command cleanup match the request being finished.
-A rebuilt keyboard restores terminal ownership before adopting transient snapshots.
+A rebuilt keyboard restores terminal ownership before adopting transient snapshots. Recovery URLs retain the original request and Stop/Cancel action across refresh
+and recreation; preparing another launch URL cannot replace a recovery URL. A Stop
+received after app relaunch resolves persisted audio through the existing recovery
+pipeline before adopting the request. If no recoverable recording exists, it marks
+the request failed and releases it instead of waiting for a nonexistent recorder.
 
 ## Waveforms and activities
 

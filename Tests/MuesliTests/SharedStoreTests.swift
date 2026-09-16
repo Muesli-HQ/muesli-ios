@@ -3,6 +3,30 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    @MainActor
+    func testStopAfterRelaunchWithoutAudioReleasesInterruptedRequest() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let request = Muesli.DictationRequest()
+        try store.claimRequest(request)
+        try store.saveStatus(.init(requestID: request.id, phase: .recording))
+        try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .recoveryRequested, recoveryAction: .stop))
+        let coordinator = DictationCoordinator(store: store)
+        var url = URLComponents()
+        url.scheme = Muesli.MuesliAppConstants.urlScheme
+        url.host = Muesli.MuesliAppConstants.dictateHost
+        url.queryItems = [
+            .init(name: Muesli.MuesliAppConstants.requestQueryItem, value: request.id.uuidString),
+            .init(name: Muesli.MuesliAppConstants.actionQueryItem, value: Muesli.MuesliAppConstants.stopAction)
+        ]
+        coordinator.handleOpenURL(try XCTUnwrap(url.url))
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .failed)
+        XCTAssertNil(try store.pendingRequest())
+        XCTAssertFalse(coordinator.isRecording)
+        XCTAssertNoThrow(try store.claimRequest(.init()))
+    }
+
     func testCompetingStartsPreserveFirstOwnerInBothArrivalOrders() throws {
         let activePhases: [Muesli.KeyboardHandoffPhase] = [
             .startRequested, .startAcknowledged, .recordingStarted, .stopRequested,

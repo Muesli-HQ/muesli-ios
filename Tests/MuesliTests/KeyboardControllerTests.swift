@@ -40,6 +40,20 @@ final class KeyboardControllerTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testRecoveryRefreshPreservesStopAndCancelActions() throws {
+        for action in [DictationCommandAction.stop, .cancel] {
+            try store.clearKeyboardHandoffState()
+            try store.saveKeyboardHandoffState(.init(
+                requestID: requestID, phase: .recoveryRequested, recoveryAction: action
+            ))
+            controller.prepareInitialPresentationState()
+            let url = try XCTUnwrap(controller.launchURL)
+            let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+            XCTAssertEqual(components.queryItems?.first { $0.name == MuesliAppConstants.actionQueryItem }?.value,
+                           action == .stop ? MuesliAppConstants.stopAction : MuesliAppConstants.cancelAction)
+        }
+    }
+
     func testPreparingKeyboardDoesNotClaimOrReplaceActionButtonRequest() throws {
         controller.prepareLaunchRequestIfNeeded()
         XCTAssertNil(try store.pendingRequest())

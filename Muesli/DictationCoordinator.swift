@@ -673,7 +673,7 @@ final class DictationCoordinator {
             : "Finish the active voice note first"
         saveKeyboardHandoff(requestID: requestID, phase: .failed, message: message)
         if let pendingRequest = try? store.pendingRequest(), pendingRequest.id == requestID {
-            try? store.clearPendingRequest()
+            try? store.clearPendingRequest(matching: requestID)
         }
         saveKeyboardRuntimeStatus(
             isActive: false,
@@ -1327,7 +1327,7 @@ final class DictationCoordinator {
             ?? MuesliAppConstants.startAction
         if action == MuesliAppConstants.cancelAction {
             guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .cancel) else {
-                try? store.clearPendingCommand()
+                try? store.clearPendingCommand(matching: requestID)
                 return
             }
             saveKeyboardHandoff(
@@ -1336,12 +1336,12 @@ final class DictationCoordinator {
                 message: "Cancelled"
             )
             cancelRecording(requestID: requestID)
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: requestID)
             return
         }
         if action == MuesliAppConstants.stopAction {
             guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .stop) else {
-                try? store.clearPendingCommand()
+                try? store.clearPendingCommand(matching: requestID)
                 return
             }
             saveKeyboardHandoff(
@@ -1350,15 +1350,15 @@ final class DictationCoordinator {
                 message: "Stopping"
             )
             stopRecording(requestID: requestID)
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: requestID)
             return
         }
 
         guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .start) else {
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: requestID)
             return
         }
-        defer { try? store.clearPendingCommand() }
+        defer { try? store.clearPendingCommand(matching: requestID) }
 
         let pendingRequest = try? store.pendingRequest()
         let request = pendingRequest?.id == requestID
@@ -1370,7 +1370,6 @@ final class DictationCoordinator {
         if recoverKeyboardRequestIfNeeded(request) {
             return
         }
-        transitionKeyboardSession(.handoffStarted(request.id))
         startRecording(for: request, source: "keyboard")
     }
 
@@ -1401,9 +1400,9 @@ final class DictationCoordinator {
         }
 
         let request = DictationRequest(sourceBundleIdentifier: "muesli.action-button")
-        do { try store.saveRequest(request) }
+        do { try store.claimRequest(request) }
+        catch SharedStoreError.requestInProgress { return .busy("Finish the current dictation first.") }
         catch { return .failed(error.localizedDescription) }
-        transitionKeyboardSession(.handoffStarted(request.id))
         let outcome = await withCheckedContinuation { continuation in
             startRecording(
                 for: request,
@@ -3808,7 +3807,7 @@ final class DictationCoordinator {
         let endingID = keyboardMicSession.id
         transitionKeyboardSession(.micStopped)
         if let command = try? store.pendingCommand(), command.action == .start {
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: command.requestID)
         }
         keyboardSessionRetryTask?.cancel()
         keyboardSessionRetryTask = nil
@@ -4576,6 +4575,14 @@ final class DictationCoordinator {
         completion: (@MainActor @Sendable (RecordingStartOutcome) -> Void)? = nil
     ) {
         let deliversToKeyboard = source == "keyboard" || ActionButtonCaptureSource.isActionButton(source)
+        if deliversToKeyboard {
+            do { try store.claimRequest(request) }
+            catch {
+                completion?(.failed(error.localizedDescription))
+                return
+            }
+            transitionKeyboardSession(.handoffStarted(request.id))
+        }
         guard selectedTranscriptionModel.isDownloaded else {
             let message = "\(selectedTranscriptionModel.shortName) is still downloading"
             statusText = message
@@ -4796,7 +4803,6 @@ final class DictationCoordinator {
                 }
                 statusText = "Recording"
                 AppTelemetry.signal("dictation_started", parameters: ["source": source])
-                try store.saveRequest(request)
                 try store.saveStatus(.init(requestID: request.id, phase: .recording))
                 if deliversToKeyboard {
                     await processPendingKeyboardCommand()
@@ -4860,7 +4866,7 @@ final class DictationCoordinator {
                 try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: error.localizedDescription))
                 if deliversToKeyboard {
                     if let command = try? store.pendingCommand(), command.requestID == request.id {
-                        try? store.clearPendingCommand()
+                        try? store.clearPendingCommand(matching: request.id)
                     }
                     saveKeyboardHandoff(
                         requestID: request.id,
@@ -4973,7 +4979,7 @@ final class DictationCoordinator {
                 try store.saveResult(result)
                 scheduleICloudSyncAfterLocalChange(reason: "dictation_completed")
                 deliverKeyboardTranscript(text, requestID: request.id)
-                try store.clearPendingRequest()
+                try store.clearPendingRequest(matching: request.id)
                 activeRequest = nil
                 activeSession = nil
                 transitionKeyboardSession(.requestFinished)
@@ -5018,8 +5024,8 @@ final class DictationCoordinator {
                 )
                 activeRequest = nil
                 activeSession = nil
-                try? store.clearPendingRequest()
-                try? store.clearPendingCommand()
+                try? store.clearPendingRequest(matching: request.id)
+                try? store.clearPendingCommand(matching: request.id)
                 transitionKeyboardSession(.requestFinished)
                 statusText = error.localizedDescription
                 saveKeyboardRuntimeStatus(
@@ -5300,7 +5306,7 @@ final class DictationCoordinator {
                         )
                     }
                     clearPersistentKeyboardSessionRoute(for: request.id)
-                    try? store.clearPendingRequest()
+                    try? store.clearPendingRequest(matching: request.id)
                     try? store.saveStatus(.idle)
                     return
                 }
@@ -5352,7 +5358,7 @@ final class DictationCoordinator {
                 if startedFromKeyboard {
                     deliverKeyboardTranscript(text, requestID: request.id)
                 }
-                try store.clearPendingRequest()
+                try store.clearPendingRequest(matching: request.id)
                 refreshHistory()
                 lastTranscript = text
                 activeRequest = nil
@@ -5437,8 +5443,8 @@ final class DictationCoordinator {
                 }
                 activeRequest = nil
                 activeSession = nil
-                try? store.clearPendingRequest()
-                try? store.clearPendingCommand()
+                try? store.clearPendingRequest(matching: request.id)
+                try? store.clearPendingCommand(matching: request.id)
                 saveKeyboardRuntimeStatus(
                     isActive: isKeyboardHandoffActive || usesPersistentKeyboardSession || canStartKeyboardRequestsInBackground,
                     activeRequestID: nil,
@@ -6938,7 +6944,7 @@ final class DictationCoordinator {
             requestID: command.requestID,
             action: command.action
         ) else {
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: command.requestID)
             return
         }
         if KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
@@ -6961,7 +6967,7 @@ final class DictationCoordinator {
                 message: "Stopping"
             )
             stopRecording(requestID: command.requestID)
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: command.requestID)
             return
         case .cancel:
             saveKeyboardHandoff(
@@ -6970,7 +6976,7 @@ final class DictationCoordinator {
                 message: "Cancelled"
             )
             cancelRecording(requestID: command.requestID)
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: command.requestID)
             return
         }
 
@@ -6994,19 +7000,18 @@ final class DictationCoordinator {
                 phase: .failed,
                 message: "Muesli is busy"
             ))
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: command.requestID)
             return
         }
 
         guard !keyboardMicSession.isPaused else {
             saveKeyboardHandoff(requestID: request.id, phase: .failed, message: "Mic is off. Tap Start to reopen Muesli.")
             try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: "Mic is off"))
-            try? store.clearPendingCommand()
+            try? store.clearPendingCommand(matching: command.requestID)
             return
         }
-        transitionKeyboardSession(.handoffStarted(request.id))
         startRecording(for: request, source: "keyboard")
-        try? store.clearPendingCommand()
+        try? store.clearPendingCommand(matching: command.requestID)
     }
 
     private func publishKeyboardSessionReadyIfAvailable() {
@@ -7376,7 +7381,7 @@ final class DictationCoordinator {
     private func cancelRecording(requestID: UUID) {
         guard activeRequest?.id == requestID else {
             if let pendingRequest = try? store.pendingRequest(), pendingRequest.id == requestID {
-                try? store.clearPendingRequest()
+                try? store.clearPendingRequest(matching: requestID)
             }
             clearPersistentKeyboardSessionRoute(for: requestID)
             if activeRequest == nil {
@@ -7445,8 +7450,8 @@ final class DictationCoordinator {
         )
         transitionKeyboardSession(.requestFinished)
         statusText = "Ready"
-        try? store.clearPendingCommand()
-        try? store.clearPendingRequest()
+        try? store.clearPendingCommand(matching: requestID)
+        try? store.clearPendingRequest(matching: requestID)
         try? store.saveStatus(.idle)
         saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
         clearKeyboardLiveTranscript()

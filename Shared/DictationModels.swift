@@ -229,6 +229,12 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         self.updatedAt = updatedAt
     }
 
+    /// A new request may replace only a completed handoff. Recovery and
+    /// cancellation-in-progress retain ownership until they settle.
+    var canReleaseRequest: Bool {
+        [.idle, .inserted, .cancelled, .copyRequired, .failed].contains(phase)
+    }
+
     /// Shared by both writers; ordinary progress can skip stages but cannot
     /// reverse them. Recovery remains an explicit escape path in existing states.
     func accepts(_ next: KeyboardHandoffState) -> Bool {

@@ -3,6 +3,77 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    func testCompetingStartsPreserveFirstOwnerInBothArrivalOrders() throws {
+        let activePhases: [Muesli.KeyboardHandoffPhase] = [
+            .startRequested, .startAcknowledged, .recordingStarted, .stopRequested,
+            .stopAcknowledged, .audioSaved, .transcribingStarted, .resultReady,
+            .cancelRequested, .recoveryRequested
+        ]
+        for actionButtonFirst in [false, true] {
+            for phase in activePhases {
+                let directory = try makeTemporaryDirectory()
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let keyboard = Muesli.SharedStore(containerURL: directory)
+                let app = Muesli.SharedStore(containerURL: directory)
+                let winner = Muesli.DictationRequest(sourceBundleIdentifier: actionButtonFirst ? "muesli.action-button" : nil)
+                let loser = Muesli.DictationRequest(sourceBundleIdentifier: actionButtonFirst ? nil : "muesli.action-button")
+                try keyboard.claimRequest(winner)
+                try keyboard.saveKeyboardHandoffState(.init(requestID: winner.id, phase: phase))
+                XCTAssertThrowsError(try app.claimRequest(loser), "Must retain ownership during \(phase)")
+                try app.clearPendingRequest(matching: loser.id)
+                try app.saveKeyboardHandoffState(.init(requestID: loser.id, phase: .failed))
+                XCTAssertEqual(try app.pendingRequest()?.id, winner.id)
+                XCTAssertEqual(try app.keyboardHandoffState().requestID, winner.id)
+                XCTAssertEqual(try app.keyboardHandoffState().phase, phase)
+            }
+        }
+    }
+
+    func testConcurrentRequestAcquisitionHasExactlyOneWinner() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let winners = await withTaskGroup(of: UUID?.self, returning: [UUID].self) { group in
+            for _ in 0..<12 {
+                group.addTask {
+                    let store = Muesli.SharedStore(containerURL: directory)
+                    let request = Muesli.DictationRequest()
+                    do { try store.claimRequest(request); return request.id }
+                    catch { return nil }
+                }
+            }
+            var winners: [UUID] = []
+            for await id in group { if let id { winners.append(id) } }
+            return winners
+        }
+        XCTAssertEqual(winners.count, 1)
+        let store = Muesli.SharedStore(containerURL: directory)
+        XCTAssertEqual(try store.pendingRequest()?.id, winners.first)
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, winners.first)
+    }
+
+    func testAcquisitionIsIdempotentAndOldCleanupCannotEraseNextOwner() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = Muesli.SharedStore(containerURL: directory)
+        let keyboard = Muesli.SharedStore(containerURL: directory)
+        let first = Muesli.DictationRequest()
+        try keyboard.claimRequest(first)
+        try app.saveKeyboardHandoffState(.init(requestID: first.id, phase: .recordingStarted))
+        try app.claimRequest(first)
+        XCTAssertEqual(try app.keyboardHandoffState().phase, .recordingStarted)
+        try keyboard.saveKeyboardHandoffState(.init(requestID: first.id, phase: .inserted))
+        XCTAssertThrowsError(try app.claimRequest(first), "A delayed URL cannot restart delivered speech")
+        let next = Muesli.DictationRequest()
+        try keyboard.claimRequest(next)
+        try keyboard.saveCommand(.init(requestID: next.id, action: .start))
+        try app.clearPendingCommand(matching: first.id)
+        XCTAssertEqual(try app.pendingCommand()?.requestID, next.id)
+        try app.clearPendingRequest(matching: first.id)
+        XCTAssertThrowsError(try app.claimRequest(first))
+        XCTAssertEqual(try app.pendingRequest()?.id, next.id)
+        XCTAssertEqual(try app.keyboardHandoffState().requestID, next.id)
+    }
+
     func testHandoffProgressCannotRegressAcrossIndependentWriters() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -27,21 +98,22 @@ final class SharedStoreTests: XCTestCase {
         let app = Muesli.SharedStore(containerURL: directory)
         let keyboard = Muesli.SharedStore(containerURL: directory)
         for terminal: Muesli.KeyboardHandoffPhase in [.inserted, .cancelled, .copyRequired] {
+            if let pending = try app.pendingRequest() { try app.clearPendingRequest(matching: pending.id) }
             try app.clearKeyboardHandoffState()
             let old = Muesli.DictationRequest()
             let current = Muesli.DictationRequest()
-            try app.saveRequest(old)
-            try app.saveKeyboardHandoffState(.init(requestID: old.id, phase: .recordingStarted))
-            try keyboard.saveRequest(current)
+            try app.claimRequest(old)
+            try app.saveKeyboardHandoffState(.init(requestID: old.id, phase: .inserted))
+            try keyboard.claimRequest(current)
             try keyboard.saveKeyboardHandoffState(.init(requestID: current.id, phase: terminal))
-            try keyboard.clearPendingRequest()
+            try keyboard.clearPendingRequest(matching: current.id)
             for stale: Muesli.KeyboardHandoffPhase in [.startAcknowledged, .transcribingStarted, .resultReady, .recoveryRequested] {
                 try app.saveKeyboardHandoffState(.init(requestID: old.id, phase: stale))
                 XCTAssertEqual(try keyboard.keyboardHandoffState().requestID, current.id)
                 XCTAssertEqual(try keyboard.keyboardHandoffState().phase, terminal)
             }
             let next = Muesli.DictationRequest()
-            try keyboard.saveRequest(next)
+            try keyboard.claimRequest(next)
             try keyboard.saveKeyboardHandoffState(.init(requestID: next.id, phase: .startRequested))
             XCTAssertEqual(try app.keyboardHandoffState().requestID, next.id)
         }
@@ -67,12 +139,13 @@ final class SharedStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = Muesli.SharedStore(containerURL: directory)
         let first = Muesli.DictationRequest()
-        try store.saveRequest(first)
+        try store.claimRequest(first)
         try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .recoveryRequested, recoveryAction: .start))
         try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .startAcknowledged))
         XCTAssertEqual(try store.keyboardHandoffState().phase, .startAcknowledged)
         let next = Muesli.DictationRequest()
-        try store.saveRequest(next)
+        try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .inserted))
+        try store.claimRequest(next)
         try store.saveKeyboardHandoffState(.init(requestID: next.id, phase: .startRequested))
         try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .resultReady))
         XCTAssertEqual(try store.keyboardHandoffState().requestID, next.id)
@@ -339,7 +412,7 @@ final class SharedStoreTests: XCTestCase {
         let bus = TestCrossProcessEventBus()
         let store = SharedStore(containerURL: directory, eventPoster: bus)
 
-        try store.saveRequest(DictationRequest())
+        try store.claimRequest(DictationRequest())
 
         XCTAssertFalse(bus.postedEvents.contains(.commandChanged))
     }
@@ -1273,7 +1346,7 @@ final class SharedStoreTests: XCTestCase {
         let activeRequestID = UUID()
 
         try store.saveStatus(.init(requestID: activeRequestID, phase: .recording))
-        try store.saveRequest(.init())
+        try store.claimRequest(.init())
 
         XCTAssertEqual(try store.status().requestID, activeRequestID)
         XCTAssertEqual(try store.status().phase, .recording)

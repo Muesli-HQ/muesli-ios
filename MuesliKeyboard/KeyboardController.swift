@@ -283,28 +283,16 @@ final class KeyboardController {
         }
     }
 
-    func prepareLaunchRequestIfNeeded(clearsPendingCommand: Bool = true) {
+    func prepareLaunchRequestIfNeeded() {
         guard preparedRequest == nil, activeRequestID == nil else { return }
         let request = DictationRequest()
         preparedRequest = request
         launchURL = makeLaunchURL(for: request)
-
-        do {
-            if clearsPendingCommand, !hasPendingCancelCommand() {
-                try store.clearPendingCommand()
-            }
-            try store.saveRequest(request)
-        } catch {
-            statusText = "Enable Full Access"
-        }
     }
 
     func startDictation() {
         refreshLatestDictation()
         guard !isBlockedByAppVoiceNote else { return }
-        if hasPendingCancelCommand() {
-            try? store.clearPendingCommand()
-        }
 
         MuesliHaptics.dictationStart()
         KeyboardDiagnosticsLog.record("intent.start", [
@@ -315,6 +303,16 @@ final class KeyboardController {
             } ?? "never"
         ])
         let request = preparedRequest ?? DictationRequest()
+        do {
+            try store.claimRequest(request)
+        } catch SharedStoreError.requestInProgress {
+            refreshLatestDictation()
+            statusText = "Finish the current dictation"
+            return
+        } catch {
+            statusText = "Enable Full Access"
+            return
+        }
         preparedRequest = nil
         recoveryRequestID = nil
         launchURL = makeLaunchURL(for: request)
@@ -328,7 +326,6 @@ final class KeyboardController {
         do {
             try store.clearPendingCommand()
             try store.clearKeyboardLiveTranscript()
-            try store.saveRequest(request)
             try store.saveKeyboardHandoffState(.init(
                 requestID: request.id,
                 phase: .startRequested,
@@ -1148,8 +1145,8 @@ final class KeyboardController {
         launchURL = nil
         dictationPhase = .idle
         statusText = "Latest ready"
-        try? store.clearPendingRequest()
-        try? store.clearPendingCommand()
+        try? store.clearPendingRequest(matching: result.requestID)
+        try? store.clearPendingCommand(matching: result.requestID)
         try? store.clearKeyboardLiveTranscript()
         try? store.saveKeyboardHandoffState(.init(
             requestID: result.requestID,

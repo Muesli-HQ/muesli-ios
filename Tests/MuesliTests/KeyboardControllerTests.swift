@@ -40,6 +40,17 @@ final class KeyboardControllerTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testPreparingKeyboardDoesNotClaimOrReplaceActionButtonRequest() throws {
+        controller.prepareLaunchRequestIfNeeded()
+        XCTAssertNil(try store.pendingRequest())
+        let actionButton = DictationRequest(sourceBundleIdentifier: "muesli.action-button")
+        try store.claimRequest(actionButton)
+        controller.startDictation()
+        XCTAssertEqual(try store.pendingRequest()?.id, actionButton.id)
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, actionButton.id)
+        XCTAssertNil(try store.pendingCommand())
+    }
+
     func testHeartbeatUsesCurrentAccessWithoutOverwritingStatus() throws {
         var access = false
         controller.currentFullAccess = { access }
@@ -357,7 +368,7 @@ final class KeyboardControllerTests: XCTestCase {
         }
         XCTAssertEqual(insertedText, ["already sent"])
         let next = UUID()
-        try store.saveRequest(.init(id: next))
+        try store.claimRequest(.init(id: next))
         try store.saveKeyboardHandoffState(.init(requestID: next, phase: .recordingStarted))
         controller.prepareInitialPresentationState()
         XCTAssertEqual(controller.dictationPhase, .recording, "A completed request must not block the next one")

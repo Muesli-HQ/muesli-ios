@@ -324,7 +324,6 @@ final class KeyboardController {
         statusText = "Opening Muesli"
 
         do {
-            try store.clearPendingCommand()
             try store.clearKeyboardLiveTranscript()
             try store.saveKeyboardHandoffState(.init(
                 requestID: request.id,
@@ -619,6 +618,7 @@ final class KeyboardController {
 
             let statusBelongsToAppVoiceNote = applyAppVoiceNoteOwnership(status: status)
             if !statusBelongsToAppVoiceNote,
+               (handoffState.requestID == nil || status.requestID == handoffState.requestID),
                (handoffState.requestID == nil
                 || [.idle, .failed, .cancelled, .inserted].contains(handoffState.phase)) {
                 apply(status: status)
@@ -693,6 +693,17 @@ final class KeyboardController {
     private func apply(handoffState: KeyboardHandoffState) {
         guard let requestID = handoffState.requestID else { return }
 
+        if let activeRequestID, activeRequestID != requestID {
+            // A resumed extension must follow the durable owner, even if the
+            // previous request completed while this keyboard was off screen.
+            self.activeRequestID = nil
+            recoveryRequestID = nil
+            preparedRequest = nil
+            liveTranscript = ""
+            inputLevel = 0
+            dictationPhase = .idle
+        }
+
         // The handoff record is written by both processes with no ordering
         // guarantee, so record what arrived and what we were already showing.
         // A phase that moves backwards is visible here and nowhere else.
@@ -749,25 +760,18 @@ final class KeyboardController {
             return
         }
 
-        guard !completedClipboardRequestIDs.contains(requestID) else { return }
-
-        let resumablePhases: [KeyboardHandoffPhase] = [
-            .startRequested,
-            .startAcknowledged,
-            .recordingStarted,
-            .stopRequested,
-            .cancelRequested,
-            .stopAcknowledged,
-            .audioSaved,
-            .transcribingStarted,
-            .resultReady,
-            .recoveryRequested
-        ]
-        if activeRequestID == nil, resumablePhases.contains(handoffState.phase) {
-            activeRequestID = requestID
+        if completedClipboardRequestIDs.contains(requestID) {
+            activeRequestID = nil
+            recoveryRequestID = nil
+            liveTranscript = ""
+            inputLevel = 0
+            dictationPhase = .finished
+            statusText = handoffState.phase == .copyRequired
+                ? "Saved — open Muesli to copy" : "Saved to Voice Notes"
+            return
         }
 
-        guard activeRequestID == requestID else { return }
+        activeRequestID = requestID
 
         if markHandoffForRecoveryIfStale(handoffState) {
             return
@@ -885,7 +889,9 @@ final class KeyboardController {
             ])
         }
         inputLevel = hasFreshRecordingLevel ? (runtimeStatus?.inputLevel ?? 0) : 0
-        canUseRuntimeStart = runtimeStatus?.canAcceptStartCommand == true
+        canUseRuntimeStart = runtimeStatus.map {
+            $0.canAcceptStartCommand && now.timeIntervalSince($0.updatedAt) < handoffRecoveryPolicy.runtimeFreshnessInterval
+        } ?? false
 
         guard activeRequestID == nil, canUseRuntimeStart else { return }
         guard let runtimeRequestID = runtimeStatus?.activeRequestID,

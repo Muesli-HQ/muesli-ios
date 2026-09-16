@@ -229,10 +229,10 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         self.updatedAt = updatedAt
     }
 
-    /// A new request may replace only a completed handoff. Recovery and
+    /// Saved results no longer reserve capture ownership. Recovery and
     /// cancellation-in-progress retain ownership until they settle.
     var canReleaseRequest: Bool {
-        [.idle, .inserted, .cancelled, .copyRequired, .failed].contains(phase)
+        [.idle, .resultReady, .inserted, .cancelled, .copyRequired, .failed].contains(phase)
     }
 
     /// Shared by both writers; ordinary progress can skip stages but cannot
@@ -241,6 +241,10 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         guard requestID == next.requestID else { return true }
         if phase == .inserted || phase == .cancelled { return next.phase == phase }
         if phase == .copyRequired { return [.copyRequired, .inserted].contains(next.phase) }
+        if phase == .resultReady {
+            return [.resultReady, .copyRequired, .inserted, .cancelRequested, .cancelled].contains(next.phase)
+                || (next.phase == .recoveryRequested && next.recoveryAction == .cancel)
+        }
         if phase == .cancelRequested || (phase == .recoveryRequested && recoveryAction == .cancel) {
             return [.cancelRequested, .cancelled, .failed].contains(next.phase)
                 || (next.phase == .recoveryRequested && next.recoveryAction == .cancel)

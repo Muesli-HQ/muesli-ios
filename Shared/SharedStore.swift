@@ -46,6 +46,15 @@ struct SharedStore: Sendable {
         try database().claimRequest(request)
     }
 
+    /// Resumes only the current owner, pinning it before any async recovery work.
+    func claimRecovery(_ request: DictationRequest) throws {
+        try database().claimRecovery(request)
+    }
+
+    func clearPendingCommand(ifMatching command: DictationCommand) throws {
+        try database().clearPendingCommand(ifMatching: command)
+    }
+
     func pendingRequest() throws -> DictationRequest? {
         try database().value(DictationRequest.self, key: .pendingRequest)
     }
@@ -55,7 +64,7 @@ struct SharedStore: Sendable {
     }
 
     func saveCommand(_ command: DictationCommand) throws {
-        try database().saveValue(command, key: .pendingCommand)
+        try database().saveCommand(command)
         eventPoster.post(.commandChanged)
     }
 
@@ -697,6 +706,58 @@ private struct SharedStoreDatabase {
         }
     }
 
+    func saveCommand(_ command: DictationCommand) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                if let data = try valueData(key: .keyboardHandoffState, db: db) {
+                    let owner = try decoder.decode(KeyboardHandoffState.self, from: data)
+                    guard owner.requestID == command.requestID, !owner.canReleaseRequest else { return }
+                    if command.action == .start {
+                        guard [.startRequested, .startAcknowledged].contains(owner.phase)
+                            || (owner.phase == .recoveryRequested && owner.recoveryAction == .start) else { return }
+                    }
+                    if command.action != .cancel,
+                       owner.phase == .cancelRequested || owner.recoveryAction == .cancel { return }
+                }
+                if let data = try valueData(key: .pendingCommand, db: db) {
+                    let pending = try decoder.decode(DictationCommand.self, from: data)
+                    if pending.requestID == command.requestID, pending.action == .cancel,
+                       command.action != .cancel { return }
+                }
+                try upsertValue(encoder.encode(command), key: .pendingCommand, db: db)
+            }
+        }
+    }
+
+    func claimRecovery(_ request: DictationRequest) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                guard let data = try valueData(key: .keyboardHandoffState, db: db) else {
+                    throw SharedStoreError.requestInProgress
+                }
+                let current = try decoder.decode(KeyboardHandoffState.self, from: data)
+                guard current.requestID == request.id,
+                      ![.idle, .resultReady, .inserted, .copyRequired, .cancelled, .cancelRequested].contains(current.phase),
+                      current.recoveryAction != .cancel else { throw SharedStoreError.requestInProgress }
+                try upsertValue(encoder.encode(request), key: .pendingRequest, db: db)
+                try upsertValue(encoder.encode(current.advanced(to: .transcribingStarted)),
+                                key: .keyboardHandoffState, db: db)
+            }
+        }
+    }
+
+    func clearPendingCommand(ifMatching command: DictationCommand) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                guard let data = try valueData(key: .pendingCommand, db: db),
+                      try decoder.decode(DictationCommand.self, from: data) == command else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
+                }
+            }
+        }
+    }
+
     func claimRequest(_ request: DictationRequest) throws {
         try withDatabase { db in
             try transaction(db: db) {
@@ -709,6 +770,12 @@ private struct SharedStoreDatabase {
                           !(current.phase == .recoveryRequested && current.recoveryAction == .cancel)
                     else { throw SharedStoreError.requestInProgress }
                     try upsertValue(encoder.encode(request), key: .pendingRequest, db: db)
+                    if current.phase == .failed || current.phase == .idle {
+                        // Retrying the same ID must reserve it just as a new
+                        // claim does, before another process can claim a start.
+                        try upsertValue(encoder.encode(current.advanced(to: .startRequested)),
+                                        key: .keyboardHandoffState, db: db)
+                    }
                     return
                 }
                 if let current, current.requestID != nil {
@@ -721,6 +788,11 @@ private struct SharedStoreDatabase {
                 try upsertValue(encoder.encode(KeyboardHandoffState(
                     requestID: request.id, phase: .startRequested
                 )), key: .keyboardHandoffState, db: db)
+                // Clear an earlier owner's command inside acquisition. Clearing
+                // later in the keyboard could erase a new Stop/Cancel.
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
+                }
             }
         }
     }
@@ -754,6 +826,7 @@ private struct SharedStoreDatabase {
             // Both processes publish handoffs. Read and write under the same
             // SQLite transaction so a delayed app update cannot undo insertion.
             try transaction(db: db) {
+                var state = state
                 if let data = try valueData(key: .keyboardHandoffState, db: db) {
                     let current = try decoder.decode(KeyboardHandoffState.self, from: data)
                     if current.requestID != nil, current.requestID != state.requestID {
@@ -763,6 +836,10 @@ private struct SharedStoreDatabase {
                     }
                     if !current.accepts(state) {
                         return
+                    }
+                    if state.phase == .failed,
+                       current.phase == .cancelRequested || current.recoveryAction == .cancel {
+                        state = current.advanced(to: .cancelled, message: "Cancelled")
                     }
                 }
                 try upsertValue(encoder.encode(state), key: .keyboardHandoffState, db: db)

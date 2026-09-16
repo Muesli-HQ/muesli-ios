@@ -40,6 +40,35 @@ final class KeyboardControllerTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testCopyFallbackSettlesExistingKeyboardAfterReturningToHost() throws {
+        try store.claimRequest(.init(id: requestID))
+        try store.saveKeyboardHandoffState(handoff(.recordingStarted))
+        controller.prepareInitialPresentationState()
+        try store.saveResult(.init(requestID: requestID, text: "Saved speech", engineIdentifier: "test"))
+        try store.saveKeyboardHandoffState(handoff(.copyRequired))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.dictationPhase, .finished)
+        XCTAssertFalse(controller.showsActiveWaveform)
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertNoThrow(try store.claimRequest(.init()))
+    }
+
+    func testRecreatedKeyboardAdoptsNewCaptureInsteadOfInsertingOlderResult() throws {
+        let old = DictationRequest()
+        try store.claimRequest(old)
+        try store.saveKeyboardHandoffState(.init(requestID: old.id, phase: .recordingStarted))
+        controller.prepareInitialPresentationState()
+        try store.saveResult(.init(requestID: old.id, text: "Old speech", engineIdentifier: "test"))
+        try store.saveKeyboardHandoffState(.init(requestID: old.id, phase: .resultReady))
+        let next = DictationRequest(sourceBundleIdentifier: "muesli.action-button")
+        try store.claimRequest(next)
+        try store.saveKeyboardHandoffState(.init(requestID: next.id, phase: .recordingStarted))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.dictationPhase, .recording)
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertEqual(try store.result(for: old.id)?.text, "Old speech")
+    }
+
     func testRecoveryRefreshPreservesStopAndCancelActions() throws {
         for action in [DictationCommandAction.stop, .cancel] {
             try store.clearKeyboardHandoffState()

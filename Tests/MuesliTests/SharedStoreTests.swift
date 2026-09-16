@@ -3,6 +3,142 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    func testExplicitRetryPinsFailedOwnerBeforeAppStartup() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = Muesli.SharedStore(containerURL: directory)
+        let keyboard = Muesli.SharedStore(containerURL: directory)
+        let request = Muesli.DictationRequest()
+        try app.claimRequest(request)
+        try app.saveKeyboardHandoffState(.init(requestID: request.id, phase: .failed))
+        try app.claimRequest(request)
+        XCTAssertEqual(try keyboard.keyboardHandoffState().phase, .startRequested)
+        XCTAssertThrowsError(try keyboard.claimRequest(.init()))
+    }
+
+    func testStaleCommandsCannotReplaceCurrentOwnersCancel() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let old = Muesli.DictationRequest()
+        try store.claimRequest(old)
+        try store.saveCommand(.init(requestID: old.id, action: .start))
+        try store.saveKeyboardHandoffState(.init(requestID: old.id, phase: .failed))
+        let next = Muesli.DictationRequest()
+        try store.claimRequest(next)
+        XCTAssertNil(try store.pendingCommand())
+        let cancel = Muesli.DictationCommand(requestID: next.id, action: .cancel)
+        try store.saveKeyboardHandoffState(.init(requestID: next.id, phase: .cancelRequested))
+        try store.saveCommand(cancel)
+        try store.saveCommand(.init(requestID: old.id, action: .stop))
+        try store.saveCommand(.init(requestID: next.id, action: .start))
+        try store.saveCommand(.init(requestID: next.id, action: .stop))
+        XCTAssertEqual(try store.pendingCommand(), cancel)
+    }
+
+    func testUndeliveredResultReleasesCaptureWithoutLosingTranscript() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let first = Muesli.DictationRequest()
+        try store.claimRequest(first)
+        try store.saveResult(.init(requestID: first.id, text: "Saved speech", engineIdentifier: "test"))
+        try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .resultReady))
+        try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .failed))
+        try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .recoveryRequested))
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .resultReady)
+        let next = Muesli.DictationRequest(sourceBundleIdentifier: "muesli.action-button")
+        try store.claimRequest(next)
+        XCTAssertEqual(try store.pendingRequest()?.id, next.id)
+        XCTAssertEqual(try store.result(for: first.id)?.text, "Saved speech")
+        XCTAssertEqual(try store.resultsHistory().first?.requestID, first.id)
+        XCTAssertThrowsError(try store.claimRecovery(first))
+        try store.saveKeyboardHandoffState(.init(requestID: first.id, phase: .inserted))
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, next.id)
+    }
+
+    func testRecoveryAndNewCaptureRespectWhicheverAcquiresOwnershipFirst() throws {
+        for recoverFirst in [true, false] {
+            let directory = try makeTemporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let app = Muesli.SharedStore(containerURL: directory)
+            let keyboard = Muesli.SharedStore(containerURL: directory)
+            let old = Muesli.DictationRequest()
+            let next = Muesli.DictationRequest()
+            try app.claimRequest(old)
+            try app.saveKeyboardHandoffState(.init(requestID: old.id, phase: .failed))
+            if recoverFirst {
+                try app.claimRecovery(old)
+                XCTAssertThrowsError(try keyboard.claimRequest(next))
+                XCTAssertEqual(try app.keyboardHandoffState().phase, .transcribingStarted)
+            } else {
+                try keyboard.claimRequest(next)
+                XCTAssertThrowsError(try app.claimRecovery(old))
+                XCTAssertEqual(try app.keyboardHandoffState().requestID, next.id)
+            }
+        }
+    }
+
+    func testAcknowledgingStartDoesNotConsumeNewerStopOrCancel() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let request = Muesli.DictationRequest()
+        try store.claimRequest(request)
+        let start = Muesli.DictationCommand(requestID: request.id, action: .start)
+        for action: Muesli.DictationCommandAction in [.stop, .cancel] {
+            try store.saveCommand(start)
+            let newer = Muesli.DictationCommand(requestID: request.id, action: action)
+            try store.saveCommand(newer)
+            try store.clearPendingCommand(ifMatching: start)
+            XCTAssertEqual(try store.pendingCommand(), newer)
+            try store.clearPendingCommand(ifMatching: newer)
+            XCTAssertNil(try store.pendingCommand())
+        }
+    }
+
+    func testFailedCancellationStaysCancelledAfterStoreRecreation() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let request = Muesli.DictationRequest()
+        try store.claimRequest(request)
+        try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .cancelRequested))
+        try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .failed))
+        let recreated = Muesli.SharedStore(containerURL: directory)
+        try recreated.saveKeyboardHandoffState(.init(requestID: request.id, phase: .resultReady))
+        XCTAssertEqual(try recreated.keyboardHandoffState().phase, .cancelled)
+        XCTAssertThrowsError(try recreated.claimRecovery(request))
+        XCTAssertNoThrow(try recreated.claimRequest(.init()))
+    }
+
+    @MainActor
+    func testOldStopLinkCannotChangeNewKeyboardOwnerOrItsStatus() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let old = Muesli.DictationRequest()
+        try store.claimRequest(old)
+        try store.saveStatus(.init(requestID: old.id, phase: .recording))
+        try store.saveKeyboardHandoffState(.init(requestID: old.id, phase: .failed))
+        let next = Muesli.DictationRequest()
+        try store.claimRequest(next)
+        let coordinator = DictationCoordinator(store: store)
+        var url = URLComponents()
+        url.scheme = Muesli.MuesliAppConstants.urlScheme
+        url.host = Muesli.MuesliAppConstants.dictateHost
+        url.queryItems = [
+            .init(name: Muesli.MuesliAppConstants.requestQueryItem, value: old.id.uuidString),
+            .init(name: Muesli.MuesliAppConstants.actionQueryItem, value: Muesli.MuesliAppConstants.stopAction)
+        ]
+        let before = try store.status()
+        coordinator.handleOpenURL(try XCTUnwrap(url.url))
+        XCTAssertEqual(try store.pendingRequest()?.id, next.id)
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, next.id)
+        XCTAssertEqual(try store.status(), before)
+        XCTAssertFalse(coordinator.isRecording)
+    }
+
     @MainActor
     func testStopAfterRelaunchWithoutAudioReleasesInterruptedRequest() throws {
         let directory = try makeTemporaryDirectory()
@@ -30,7 +166,7 @@ final class SharedStoreTests: XCTestCase {
     func testCompetingStartsPreserveFirstOwnerInBothArrivalOrders() throws {
         let activePhases: [Muesli.KeyboardHandoffPhase] = [
             .startRequested, .startAcknowledged, .recordingStarted, .stopRequested,
-            .stopAcknowledged, .audioSaved, .transcribingStarted, .resultReady,
+            .stopAcknowledged, .audioSaved, .transcribingStarted,
             .cancelRequested, .recoveryRequested
         ]
         for actionButtonFirst in [false, true] {

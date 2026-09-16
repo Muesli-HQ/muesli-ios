@@ -1325,9 +1325,18 @@ final class DictationCoordinator {
 
         let action = components.queryItems?.first(where: { $0.name == MuesliAppConstants.actionQueryItem })?.value
             ?? MuesliAppConstants.startAction
+        let observedCommand = try? store.pendingCommand()
+        defer {
+            if let command = observedCommand, command.requestID == requestID,
+               command.action.rawValue == action {
+                try? store.clearPendingCommand(ifMatching: command)
+            }
+        }
+        // Delayed Stop/Cancel links cannot mutate snapshots for a new owner.
+        if action != MuesliAppConstants.startAction,
+           (try? store.keyboardHandoffState().requestID) != requestID { return }
         if action == MuesliAppConstants.cancelAction {
             guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .cancel) else {
-                try? store.clearPendingCommand(matching: requestID)
                 return
             }
             saveKeyboardHandoff(
@@ -1336,12 +1345,10 @@ final class DictationCoordinator {
                 message: "Cancelled"
             )
             cancelRecording(requestID: requestID)
-            try? store.clearPendingCommand(matching: requestID)
             return
         }
         if action == MuesliAppConstants.stopAction {
             guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .stop) else {
-                try? store.clearPendingCommand(matching: requestID)
                 return
             }
             saveKeyboardHandoff(
@@ -1350,15 +1357,12 @@ final class DictationCoordinator {
                 message: "Stopping"
             )
             stopRecording(requestID: requestID)
-            try? store.clearPendingCommand(matching: requestID)
             return
         }
 
         guard !rejectConflictingKeyboardCommand(requestID: requestID, action: .start) else {
-            try? store.clearPendingCommand(matching: requestID)
             return
         }
-        defer { try? store.clearPendingCommand(matching: requestID) }
 
         let pendingRequest = try? store.pendingRequest()
         let request = pendingRequest?.id == requestID
@@ -1569,6 +1573,14 @@ final class DictationCoordinator {
               !isRecording
         else {
             return false
+        }
+
+        // Recovery must acquire the same durable ownership as a fresh start.
+        // A stale URL must not resurrect A after the extension has claimed B.
+        do { try store.claimRecovery(request) }
+        catch {
+            KeyboardDiagnosticsLog.record("recording.recoveryRejected", ["reason": "ownershipUnavailable"])
+            return true
         }
 
         guard let session = try? store.recordingSession(requestID: request.id),
@@ -3809,7 +3821,7 @@ final class DictationCoordinator {
         let endingID = keyboardMicSession.id
         transitionKeyboardSession(.micStopped)
         if let command = try? store.pendingCommand(), command.action == .start {
-            try? store.clearPendingCommand(matching: command.requestID)
+            try? store.clearPendingCommand(ifMatching: command)
         }
         keyboardSessionRetryTask?.cancel()
         keyboardSessionRetryTask = nil
@@ -6967,7 +6979,7 @@ final class DictationCoordinator {
             requestID: command.requestID,
             action: command.action
         ) else {
-            try? store.clearPendingCommand(matching: command.requestID)
+            try? store.clearPendingCommand(ifMatching: command)
             return
         }
         if KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
@@ -6990,7 +7002,7 @@ final class DictationCoordinator {
                 message: "Stopping"
             )
             stopRecording(requestID: command.requestID)
-            try? store.clearPendingCommand(matching: command.requestID)
+            try? store.clearPendingCommand(ifMatching: command)
             return
         case .cancel:
             saveKeyboardHandoff(
@@ -6999,7 +7011,7 @@ final class DictationCoordinator {
                 message: "Cancelled"
             )
             cancelRecording(requestID: command.requestID)
-            try? store.clearPendingCommand(matching: command.requestID)
+            try? store.clearPendingCommand(ifMatching: command)
             return
         }
 
@@ -7023,18 +7035,18 @@ final class DictationCoordinator {
                 phase: .failed,
                 message: "Muesli is busy"
             ))
-            try? store.clearPendingCommand(matching: command.requestID)
+            try? store.clearPendingCommand(ifMatching: command)
             return
         }
 
         guard !keyboardMicSession.isPaused else {
             saveKeyboardHandoff(requestID: request.id, phase: .failed, message: "Mic is off. Tap Start to reopen Muesli.")
             try? store.saveStatus(.init(requestID: request.id, phase: .failed, message: "Mic is off"))
-            try? store.clearPendingCommand(matching: command.requestID)
+            try? store.clearPendingCommand(ifMatching: command)
             return
         }
         startRecording(for: request, source: "keyboard")
-        try? store.clearPendingCommand(matching: command.requestID)
+        try? store.clearPendingCommand(ifMatching: command)
     }
 
     private func publishKeyboardSessionReadyIfAvailable() {

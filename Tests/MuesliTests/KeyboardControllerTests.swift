@@ -53,7 +53,7 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertNoThrow(try store.claimRequest(.init()))
     }
 
-    func testRecreatedKeyboardAdoptsNewCaptureInsteadOfInsertingOlderResult() throws {
+    func testRecreatedKeyboardDeliversOlderResultWithoutDisturbingNewCapture() throws {
         let old = DictationRequest()
         try store.claimRequest(old)
         try store.saveKeyboardHandoffState(.init(requestID: old.id, phase: .recordingStarted))
@@ -65,8 +65,31 @@ final class KeyboardControllerTests: XCTestCase {
         try store.saveKeyboardHandoffState(.init(requestID: next.id, phase: .recordingStarted))
         controller.prepareInitialPresentationState()
         XCTAssertEqual(controller.dictationPhase, .recording)
-        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertEqual(insertedText, ["Old speech"])
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, next.id)
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .recordingStarted)
+        let rebuilt = KeyboardController(store: store, eventBus: bus)
+        rebuilt.textInserter = { [weak self] in self?.insertedText.append($0) }
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertEqual(insertedText, ["Old speech"])
+        XCTAssertEqual(rebuilt.dictationPhase, .recording)
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
         XCTAssertEqual(try store.result(for: old.id)?.text, "Old speech")
+    }
+
+    func testPendingDeliveryWaitsForTextInserterAndManualInsertionAcknowledgesIt() throws {
+        try store.claimRequest(.init(id: requestID))
+        try store.saveResult(.init(requestID: requestID, text: "Waiting speech", engineIdentifier: "test"))
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+        controller.textInserter = nil
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(try store.pendingKeyboardDeliveries().count, 1)
+        controller.textInserter = { [weak self] in self?.insertedText.append($0) }
+        controller.insertLatestDictation()
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(insertedText, ["Waiting speech"])
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+        XCTAssertEqual(controller.dictationPhase, .idle)
     }
 
     func testRecoveryRefreshPreservesStopAndCancelActions() throws {

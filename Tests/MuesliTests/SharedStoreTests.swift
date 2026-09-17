@@ -3,6 +3,63 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    func testPendingDeliveriesSurviveNewOwnersAndPickupConsumption() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        var ids: [UUID] = []
+        for text in ["First", "Second"] {
+            let request = Muesli.DictationRequest()
+            ids.append(request.id)
+            try store.claimRequest(request)
+            try store.saveResult(.init(requestID: request.id, text: text, engineIdentifier: "test"))
+            try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .resultReady))
+            try store.clearResult(for: request.id)
+        }
+        let next = Muesli.DictationRequest()
+        try store.claimRequest(next)
+        try store.saveKeyboardHandoffState(.init(requestID: next.id, phase: .recordingStarted))
+        let stop = Muesli.DictationCommand(requestID: next.id, action: .stop)
+        try store.saveCommand(stop)
+        let reopened = Muesli.SharedStore(containerURL: directory)
+        XCTAssertEqual(try reopened.pendingKeyboardDeliveries().map(\.requestID), ids)
+        for id in ids { try reopened.acknowledgeKeyboardDelivery(for: id) }
+        XCTAssertTrue(try reopened.pendingKeyboardDeliveries().isEmpty)
+        XCTAssertEqual(try reopened.keyboardHandoffState().requestID, next.id)
+        XCTAssertEqual(try reopened.keyboardHandoffState().phase, .recordingStarted)
+        XCTAssertEqual(try reopened.pendingRequest()?.id, next.id)
+        XCTAssertEqual(try reopened.pendingCommand(), stop)
+        XCTAssertEqual(try reopened.resultsHistory().count, 2)
+    }
+
+    func testOnlyExplicitAutomaticDeliveryIsQueued() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let request = Muesli.DictationRequest()
+        try store.claimRequest(request)
+        let result = Muesli.DictationResult(requestID: request.id, text: "Speech", engineIdentifier: "test")
+        try store.saveResult(result)
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+        try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .resultReady))
+        XCTAssertEqual(try store.pendingKeyboardDeliveries().count, 1)
+        try store.deleteResult(result)
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+    }
+
+    func testCancelledPendingDeliveryDoesNotReplay() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let request = Muesli.DictationRequest()
+        try store.claimRequest(request)
+        try store.saveResult(.init(requestID: request.id, text: "Speech", engineIdentifier: "test"))
+        try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .resultReady))
+        try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .cancelRequested))
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+        XCTAssertEqual(try store.resultsHistory().count, 1)
+    }
+
     func testExplicitRetryPinsFailedOwnerBeforeAppStartup() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -584,7 +641,7 @@ final class SharedStoreTests: XCTestCase {
         let store = SharedStore(containerURL: directory)
         XCTAssertEqual(try store.resultsHistory(), [])
 
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 5)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 6)
         XCTAssertTrue(try sqliteColumnNames(table: "result_history", in: directory).isSuperset(of: [
             "session_id",
             "text",
@@ -654,7 +711,7 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try sqliteString("SELECT text FROM result_history LIMIT 1", in: directory), "migrated dictation")
         XCTAssertEqual(try sqliteString("SELECT engine_identifier FROM result_history LIMIT 1", in: directory), "parakeet-v3")
         XCTAssertEqual(try sqliteString("SELECT replacement FROM custom_words LIMIT 1", in: directory), "Muesli")
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 5)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 6)
     }
 
     func testResultsHistoryPersistsSortedResultsAfterOneOffResultIsCleared() throws {
@@ -2341,7 +2398,7 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try store.recordingSessions(), [expectedSession])
         XCTAssertEqual(try store.transcript(for: session.id), transcript)
         XCTAssertEqual(try store.customWords(), [customWord])
-        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 5)
+        XCTAssertEqual(try sqliteInt("PRAGMA user_version", in: directory), 6)
         XCTAssertEqual(try sqliteString("SELECT text FROM result_history LIMIT 1", in: directory), "legacy sqlite dictation")
         XCTAssertEqual(try sqliteString("SELECT audio_file_name FROM recording_sessions LIMIT 1", in: directory), "legacy.wav")
         XCTAssertEqual(try sqliteString("SELECT summary_text FROM transcripts LIMIT 1", in: directory), "Legacy notes")

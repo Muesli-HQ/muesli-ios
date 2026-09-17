@@ -257,7 +257,10 @@ final class KeyboardController {
                 return
             }
 
+            guard textInserter != nil else { return }
             insertText(result.text)
+            insertedRequestIDs.insert(result.requestID)
+            try store.acknowledgeKeyboardDelivery(for: result.requestID)
             latestResultID = result.id
             hasLatestDictation = true
             statusText = "Inserted"
@@ -637,9 +640,9 @@ final class KeyboardController {
             }
 
             hasLatestDictation = true
-            if let activeRequestID, let activeResult = try store.result(for: activeRequestID) {
-                insertCompletedResult(activeResult)
-                return
+            // Delivery is independent of whichever request now owns capture.
+            for pending in try store.pendingKeyboardDeliveries() {
+                insertCompletedResult(pending)
             }
 
             if latestResultID != result.id {
@@ -1102,7 +1105,7 @@ final class KeyboardController {
     }
 
     private func insertCompletedResult(_ result: DictationResult) {
-        guard !pendingCancellationIDs.contains(result.requestID) else { return }
+        guard textInserter != nil, !pendingCancellationIDs.contains(result.requestID) else { return }
         // A resultChanged event can arrive before the host publishes its final
         // clipboard handoff. The delivery choice travels with the recording,
         // so the keyboard must not insert this result during that interval.
@@ -1117,6 +1120,7 @@ final class KeyboardController {
         let shortID = result.requestID.uuidString.prefix(8).lowercased()
 
         guard !insertedRequestIDs.contains(result.requestID) else {
+            try? store.acknowledgeKeyboardDelivery(for: result.requestID)
             reconcileInsertedRequest(result.requestID)
             KeyboardDiagnosticsLog.record("insert.skipped", [
                 "reason": "alreadyInserted",
@@ -1144,6 +1148,9 @@ final class KeyboardController {
         insertedRequestIDs.insert(result.requestID)
         latestResultID = result.id
         hasLatestDictation = true
+        try? store.acknowledgeKeyboardDelivery(for: result.requestID)
+        // Acknowledging A must not clear B's command, transcript, or UI.
+        guard activeRequestID == result.requestID else { return }
         activeRequestID = nil
         liveTranscript = ""
         preparedRequest = nil
@@ -1153,13 +1160,6 @@ final class KeyboardController {
         statusText = "Latest ready"
         try? store.clearPendingRequest(matching: result.requestID)
         try? store.clearPendingCommand(matching: result.requestID)
-        try? store.clearKeyboardLiveTranscript()
-        try? store.saveKeyboardHandoffState(.init(
-            requestID: result.requestID,
-            phase: .inserted,
-            message: "Inserted"
-        ))
-        try? store.saveStatus(.idle)
         prepareLaunchRequestIfNeeded()
 
     }

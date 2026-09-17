@@ -53,8 +53,20 @@ ownership atomically. Pending-request cleanup matches the request being finished
 command acknowledgement matches the exact command, including action and timestamp.
 New acquisition clears the previous command in its transaction, and stale command
 writers cannot overwrite a new owner or undo pending cancellation.
-A resumed keyboard follows the current durable owner instead of inserting an older
-result. Copy fallback settles its UI, and stale readiness cannot select background
+Pending automatic delivery is stored separately from capture ownership in SQLite
+(schema 6), referencing saved history rather than duplicating transcript text.
+Publishing result-ready queues delivery atomically; a new capture cannot replace
+that queue. A resumed keyboard inserts queued results in completion order while
+continuing to display the current capture owner. Acknowledging an older result
+cannot clear the newer request, command, or live transcript. Manual insertion also
+acknowledges delivery. Cancellation, copy fallback, and deletion remove automatic
+delivery; ordinary history and clipboard-only results are never replayed. Existing
+result-ready handoffs are backfilled without replaying old history.
+
+Insertion into another app and the SQLite acknowledgement cannot share a transaction.
+A process termination between these operations can still leave delivery uncertain;
+this change does not promise exactly-once insertion across that crash window.
+ Copy fallback settles its UI, and stale readiness cannot select background
 start indefinitely. Recovery URLs retain the original request and Stop/Cancel action across refresh
 and recreation; preparing another launch URL cannot replace a recovery URL. A Stop
 received after app relaunch resolves persisted audio through the existing recovery

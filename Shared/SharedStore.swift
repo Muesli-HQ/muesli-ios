@@ -108,6 +108,15 @@ struct SharedStore: Sendable {
         eventPoster.post(.resultChanged)
     }
 
+    func pendingKeyboardDeliveries() throws -> [DictationResult] {
+        try database().pendingKeyboardDeliveries()
+    }
+
+    func acknowledgeKeyboardDelivery(for requestID: UUID) throws {
+        try database().acknowledgeKeyboardDelivery(for: requestID)
+        eventPoster.post(.handoffStatusChanged)
+    }
+
     func result(for requestID: UUID) throws -> DictationResult? {
         try database().result(for: requestID)
     }
@@ -631,7 +640,7 @@ private enum SharedStoreDatabaseError: Error, LocalizedError {
 
 private struct SharedStoreDatabase {
     private static let databaseFileName = "Muesli.sqlite"
-    private static let schemaVersion = 5
+    private static let schemaVersion = 6
 
     private static let syncMeetingLookupColumns = """
     s.cloud_record_name, s.title, s.created_at, s.started_at, s.ended_at,
@@ -780,6 +789,9 @@ private struct SharedStoreDatabase {
                 }
                 if let current, current.requestID != nil {
                     guard current.canReleaseRequest else { throw SharedStoreError.requestInProgress }
+                    if current.phase == .resultReady, let requestID = current.requestID {
+                        try enqueueKeyboardDelivery(for: requestID, db: db)
+                    }
                 } else if let data = try valueData(key: .pendingRequest, db: db),
                           try decoder.decode(DictationRequest.self, from: data).id != request.id {
                     throw SharedStoreError.requestInProgress
@@ -842,6 +854,14 @@ private struct SharedStoreDatabase {
                         state = current.advanced(to: .cancelled, message: "Cancelled")
                     }
                 }
+                if let requestID = state.requestID {
+                    if state.phase == .resultReady {
+                        try enqueueKeyboardDelivery(for: requestID, db: db)
+                    } else if [.inserted, .cancelRequested, .cancelled, .copyRequired].contains(state.phase)
+                                || state.recoveryAction == .cancel {
+                        try deleteKeyboardDelivery(for: requestID, db: db)
+                    }
+                }
                 try upsertValue(encoder.encode(state), key: .keyboardHandoffState, db: db)
             }
         }
@@ -869,6 +889,60 @@ private struct SharedStoreDatabase {
                 try upsertResultHistory(result, db: db)
                 let status = DictationStatus(requestID: result.requestID, phase: .finished)
                 try upsertValue(try encoder.encode(status), key: .dictationStatus, db: db)
+            }
+        }
+    }
+
+    private func enqueueKeyboardDelivery(for requestID: UUID, db: OpaquePointer) throws {
+        guard let data = try querySingleBlob(
+            "SELECT payload FROM result_history WHERE request_id = ? AND deleted_at IS NULL", db: db,
+            bindValues: { try bind(requestID.uuidString, to: $0, at: 1) }
+        ) else { return }
+        guard try decoder.decode(DictationResult.self, from: data).source != ActionButtonCaptureSource.clipboard else { return }
+        try execute("INSERT OR IGNORE INTO keyboard_deliveries (request_id, queued_at) VALUES (?, ?)", db: db) {
+            try bind(requestID.uuidString, to: $0, at: 1)
+            try bind(Date.now.timeIntervalSince1970, to: $0, at: 2)
+        }
+    }
+
+    private func deleteKeyboardDelivery(for requestID: UUID, db: OpaquePointer) throws {
+        try execute("DELETE FROM keyboard_deliveries WHERE request_id = ?", db: db) {
+            try bind(requestID.uuidString, to: $0, at: 1)
+        }
+    }
+
+    func pendingKeyboardDeliveries() throws -> [DictationResult] {
+        try withDatabase { db in
+            var results: [DictationResult] = []
+            try transaction(db: db) {
+                // Upgrade an existing resultReady without replaying old history.
+                if let data = try valueData(key: .keyboardHandoffState, db: db) {
+                    let state = try decoder.decode(KeyboardHandoffState.self, from: data)
+                    if state.phase == .resultReady, let id = state.requestID {
+                        try enqueueKeyboardDelivery(for: id, db: db)
+                    }
+                }
+                results = try queryBlobs("""
+                    SELECT h.payload FROM keyboard_deliveries d
+                    JOIN result_history h ON h.request_id = d.request_id
+                    WHERE h.deleted_at IS NULL ORDER BY d.queued_at, d.rowid
+                    """, db: db) { _ in }
+                    .map { try decoder.decode(DictationResult.self, from: $0) }
+            }
+            return results
+        }
+    }
+
+    func acknowledgeKeyboardDelivery(for requestID: UUID) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                try deleteKeyboardDelivery(for: requestID, db: db)
+                guard let data = try valueData(key: .keyboardHandoffState, db: db) else { return }
+                let current = try decoder.decode(KeyboardHandoffState.self, from: data)
+                let inserted = current.advanced(to: .inserted, message: "Inserted")
+                guard current.requestID == requestID, current.phase == .resultReady,
+                      current.accepts(inserted) else { return }
+                try upsertValue(encoder.encode(inserted), key: .keyboardHandoffState, db: db)
             }
         }
     }
@@ -938,6 +1012,7 @@ private struct SharedStoreDatabase {
                     try bind(requestID.uuidString, to: statement, at: 4)
                 }
 
+                try deleteKeyboardDelivery(for: requestID, db: db)
                 try execute(
                     "DELETE FROM result_pickups WHERE request_id = ?",
                     db: db
@@ -3067,6 +3142,11 @@ private struct SharedStoreDatabase {
         key TEXT PRIMARY KEY NOT NULL,
         payload BLOB NOT NULL,
         updated_at REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS keyboard_deliveries (
+        request_id TEXT PRIMARY KEY NOT NULL,
+        queued_at REAL NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS result_pickups (

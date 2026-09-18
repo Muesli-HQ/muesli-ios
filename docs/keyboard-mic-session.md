@@ -89,6 +89,19 @@ The visible keyboard displays Action Button recording levels from the same pipel
 No new recording states are needed: resultReady authorizes insertion; copyRequired
 or copied completion does not. A resultChanged notification alone cannot insert text.
 
+## Recorder startup recovery
+
+Checkpointed dictation retries the observed Core Audio `2003329396` engine-start
+failure at most twice, after 250 ms and 500 ms. Each attempt creates a fresh recorder
+under the same request. Permission, storage, Live Activity, unrelated audio errors,
+and failures after microphone buffers arrive are not retried. Ownership loss,
+Cancel/Stop, task cancellation, and mic-off invalidate startup before another attempt.
+After engine start, microphone buffers (including silence) must arrive within one
+second before Listening is published. Input readiness failure ends startup without
+restarting captured audio. Route/interruption events and startup route characteristics
+are logged without transcript or audio content. This is bounded recovery, not a
+claim that the underlying intermittent iOS failure has been eliminated.
+
 ## Waveforms and activities
 
 Keyboard and Action Button activities reuse the status row, microphone tint, and

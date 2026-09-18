@@ -215,3 +215,39 @@ enum ActionButtonCaptureStartup {
         }
     }
 }
+
+/// Retry only the observed pre-capture engine failure, never an established recording.
+@MainActor
+enum AudioEngineStartupRecovery {
+    static func isRetryable(_ error: Error) -> Bool {
+        guard case AudioRecorder.RecordingError.recorderSetupFailed(let stage, let underlying) = error,
+              stage == "realtime dictation (audio engine)" else { return false }
+        let error = underlying as NSError
+        return error.domain == "com.apple.coreaudio.avfaudio" && error.code == 2003329396
+    }
+
+    static func run(
+        validate: () throws -> Void,
+        start: () throws -> Void,
+        hasReceivedAudio: () -> Bool,
+        cleanup: () -> Void,
+        wait: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) async throws {
+        // At most three attempts under the original request and intent assertion.
+        for attempt in 1...3 {
+            try Task.checkCancellation()
+            try validate()
+            do {
+                try start()
+                return
+            } catch {
+                let retry = attempt < 3 && !hasReceivedAudio() && isRetryable(error)
+                cleanup()
+                guard retry else { throw error }
+                try validate()
+                KeyboardDiagnosticsLog.record("recording.startRetry", ["attempt": String(attempt + 1)])
+                try await wait(.milliseconds(attempt * 250))
+            }
+        }
+    }
+}

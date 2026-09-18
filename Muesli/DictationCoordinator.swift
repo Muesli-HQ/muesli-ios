@@ -379,7 +379,9 @@ final class DictationCoordinator {
             forName: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(),
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+            KeyboardDiagnosticsLog.record("audioSession.routeChanged", ["reason": String(reason)])
             Task { @MainActor in
                 self?.refreshAudioInputRoute()
             }
@@ -395,6 +397,10 @@ final class DictationCoordinator {
             let reason = rawReason.flatMap(AVAudioSession.InterruptionReason.init(rawValue:))
             let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             let shouldResume = AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume)
+            KeyboardDiagnosticsLog.record("audioSession.interruption", [
+                "type": String(type.rawValue), "reason": String(rawReason ?? 0),
+                "should_resume": String(shouldResume)
+            ])
             Task { @MainActor in
                 self?.handleAudioSessionInterruption(
                     type: type,
@@ -4481,7 +4487,8 @@ final class DictationCoordinator {
         audioURL: URL,
         sessionID: UUID,
         enablesRealtimeTranscription: Bool,
-        usesDurableCheckpoints: Bool
+        usesDurableCheckpoints: Bool,
+        validateStartup: () throws -> Void
     ) async throws {
         realtimeDictationCommittedText = ""
         liveDictationTranscript = ""
@@ -4511,17 +4518,8 @@ final class DictationCoordinator {
             try FileManager.default.createDirectory(at: chunksDirectory, withIntermediateDirectories: true)
         }
 
-        let streamingRecorder = StreamingMeetingRecorder()
-        streamingRecorder.onRecordingFailure = { [weak self] failure in
-            Task { @MainActor in
-                self?.handleVoiceNoteWriterFailure(failure)
-            }
-        }
         if enablesRealtimeTranscription {
             let pipe = RealtimeAudioBufferPipe()
-            streamingRecorder.onAudioBuffer = { [pipe] buffer in
-                pipe.append(buffer)
-            }
             realtimeDictationBufferPipe = pipe
             realtimeDictationProcessingTask = Task { [engine, pipe] in
                 for await audioBuffer in pipe.stream {
@@ -4542,11 +4540,42 @@ final class DictationCoordinator {
             }
         }
 
-        try streamingRecorder.start(
-            chunksDirectory: chunksDirectory,
-            retainedAudioURL: audioURL,
-            routeStage: "realtime dictation"
-        )
+        var candidate: StreamingMeetingRecorder?
+        try await AudioEngineStartupRecovery.run(validate: validateStartup) {
+            let fresh = StreamingMeetingRecorder()
+            candidate = fresh
+            fresh.onRecordingFailure = { [weak self] failure in
+                Task { @MainActor in self?.handleVoiceNoteWriterFailure(failure) }
+            }
+            if let pipe = realtimeDictationBufferPipe {
+                fresh.onAudioBuffer = { [pipe] buffer in pipe.append(buffer) }
+            }
+            try fresh.start(chunksDirectory: chunksDirectory, retainedAudioURL: audioURL,
+                            routeStage: "realtime dictation")
+        } hasReceivedAudio: {
+            candidate?.hasReceivedAudio == true
+        } cleanup: {
+            candidate?.cancel()
+            candidate = nil
+        }
+        guard let streamingRecorder = candidate else { throw CancellationError() }
+        // Silence still produces buffers. Do not claim Listening until capture works.
+        do {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+            while !streamingRecorder.hasReceivedAudio {
+                try Task.checkCancellation()
+                try validateStartup()
+                guard ContinuousClock.now < deadline else {
+                    throw AudioRecorder.RecordingError.startFailed(stage: "microphone input readiness")
+                }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            try validateStartup()
+        } catch {
+            streamingRecorder.cancel()
+            throw error
+        }
+        KeyboardDiagnosticsLog.record("recording.inputReady")
         realtimeDictationRecorder = streamingRecorder
         realtimeDictationChunksDirectory = chunksDirectory
         isRealtimeDictationSessionActive = enablesRealtimeTranscription
@@ -4681,6 +4710,7 @@ final class DictationCoordinator {
             )
         }
 
+        let startupGeneration = keyboardMicSession.generation
         Task {
             defer { recordingStartupInProgress = false }
             let startupTime = Date()
@@ -4742,7 +4772,17 @@ final class DictationCoordinator {
                             audioURL: audioURL,
                             sessionID: session.id,
                             enablesRealtimeTranscription: selectedTranscriptionModel.supportsRealtimeStreaming,
-                            usesDurableCheckpoints: longModeThreshold != nil
+                            usesDurableCheckpoints: longModeThreshold != nil,
+                            validateStartup: {
+                                guard self.activeRequest?.id == request.id,
+                                      self.keyboardMicSession.generation == startupGeneration else { throw CancellationError() }
+                                if deliversToKeyboard {
+                                    let handoff = try self.store.keyboardHandoffState()
+                                    guard handoff.requestID == request.id,
+                                          [.startRequested, .startAcknowledged].contains(handoff.phase),
+                                          handoff.recoveryAction != .cancel else { throw CancellationError() }
+                                }
+                            }
                         )
                     } else {
                         try recorder.start(
@@ -4848,7 +4888,7 @@ final class DictationCoordinator {
                         dismissal: .immediate
                     )
                 }
-                session.phase = .failed
+                session.phase = error is CancellationError ? .cancelled : .failed
                 session.errorMessage = error.localizedDescription
                 cleanupNonRetainedAudio(for: &session)
                 try? store.saveSession(session)
@@ -4883,7 +4923,7 @@ final class DictationCoordinator {
                     }
                     saveKeyboardHandoff(
                         requestID: request.id,
-                        phase: .failed,
+                        phase: error is CancellationError ? .cancelled : .failed,
                         message: error.localizedDescription
                     )
                 }
@@ -7433,6 +7473,12 @@ final class DictationCoordinator {
                 )
             }
             saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
+            return
+        }
+        if recordingStartupInProgress && activeSession == nil {
+            // The startup task observes ownership loss before its next attempt.
+            saveKeyboardHandoff(requestID: requestID, phase: .cancelled, message: "Cancelled")
+            activeRequest = nil
             return
         }
         if let session = activeSession {

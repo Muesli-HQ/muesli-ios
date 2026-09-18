@@ -42,6 +42,79 @@ final class ActionButtonDictationTests: XCTestCase {
         }
     }
 
+    private var transientEngineError: Error {
+        AudioRecorder.RecordingError.recorderSetupFailed(
+            stage: "realtime dictation (audio engine)",
+            underlying: NSError(domain: "com.apple.coreaudio.avfaudio", code: 2003329396))
+    }
+
+    func testStartupRecoversTwoFailuresWithoutPublishingActivityEarly() async throws {
+        var attempts = 0
+        var cleanups = 0
+        var waits: [Duration] = []
+        var published = false
+        try await ActionButtonCaptureStartup.run {
+            try await AudioEngineStartupRecovery.run(validate: {}) {
+                attempts += 1
+                XCTAssertFalse(published)
+                if attempts < 3 { throw self.transientEngineError }
+            } hasReceivedAudio: { false } cleanup: {
+                cleanups += 1
+            } wait: { waits.append($0) }
+        } publishActivity: { published = true } cancelAudio: { XCTFail("Unexpected cancellation") }
+        XCTAssertEqual(attempts, 3)
+        XCTAssertEqual(cleanups, 2)
+        XCTAssertEqual(waits, [.milliseconds(250), .milliseconds(500)])
+        XCTAssertTrue(published)
+    }
+
+    func testStartupRetriesAreBoundedAndExcludeAudioAlreadyReceived() async {
+        for received in [false, true] {
+            var attempts = 0
+            var cleanups = 0
+            do {
+                try await AudioEngineStartupRecovery.run(validate: {}) {
+                    attempts += 1
+                    throw self.transientEngineError
+                } hasReceivedAudio: { received } cleanup: { cleanups += 1 } wait: { _ in }
+                XCTFail("Expected failure")
+            } catch {
+                XCTAssertEqual(attempts, received ? 1 : 3)
+                XCTAssertEqual(cleanups, attempts)
+            }
+        }
+    }
+
+    func testStartupCancellationDuringBackoffPreventsAnotherAttempt() async {
+        var ownsRequest = true
+        var attempts = 0
+        do {
+            try await AudioEngineStartupRecovery.run(validate: {
+                guard ownsRequest else { throw CancellationError() }
+            }) {
+                attempts += 1
+                throw self.transientEngineError
+            } hasReceivedAudio: { false } cleanup: {} wait: { _ in ownsRequest = false }
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            XCTAssertEqual(attempts, 1)
+        } catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testStartupDoesNotRetryPermissionOrUnrelatedFailures() async {
+        for error in [AudioRecorder.RecordingError.microphonePermissionDenied,
+                      AudioRecorder.RecordingError.startFailed(stage: "microphone input readiness")] {
+            var attempts = 0
+            do {
+                try await AudioEngineStartupRecovery.run(validate: {}) {
+                    attempts += 1
+                    throw error
+                } hasReceivedAudio: { false } cleanup: {} wait: { _ in XCTFail("Must not retry") }
+                XCTFail("Expected failure")
+            } catch { XCTAssertEqual(attempts, 1) }
+        }
+    }
+
     func testRecorderCapturesSamplesWithPlaybackDisabled() async throws {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             throw XCTSkip("Grant microphone permission to the simulator host before running the hardware capture test.")

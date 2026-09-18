@@ -13,7 +13,7 @@ struct KeyboardMicLiveActivity: Widget {
             DynamicIsland {
                 DynamicIslandExpandedRegion(.bottom) { controls(context) }
             } compactLeading: {
-                Image(systemName: "mic.fill").foregroundStyle(LiveActivityInputWaveform.tint)
+                LiveActivityMicrophoneMark()
                     .accessibilityLabel("Muesli microphone on")
             } compactTrailing: {
                 if context.state.isRecording {
@@ -31,7 +31,7 @@ struct KeyboardMicLiveActivity: Widget {
                     LiveActivityInputWaveform(samples: context.state.waveform)
                         .frame(width: 24, height: 20)
                 } else {
-                    Image(systemName: "mic.fill").foregroundStyle(LiveActivityInputWaveform.tint)
+                    LiveActivityMicrophoneMark()
                         .accessibilityLabel(context.state.title)
                 }
             }
@@ -39,17 +39,12 @@ struct KeyboardMicLiveActivity: Widget {
     }
 
     private func controls(_ context: ActivityViewContext<KeyboardMicActivityAttributes>) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "mic.fill").foregroundStyle(LiveActivityInputWaveform.tint)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(context.state.title).font(.headline)
-                Text("Muesli keyboard").font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 4)
-            if context.state.isRecording {
-                LiveActivityInputWaveform(samples: context.state.waveform)
-                        .frame(width: 24, height: 20)
-            }
+        LiveActivityStatusRow(
+            title: context.state.title,
+            subtitle: "muesli",
+            isRecording: context.state.isRecording,
+            samples: context.state.waveform
+        ) {
             Button(intent: TurnOffKeyboardMicIntent(sessionID: context.attributes.sessionID)) {
                 Label("Turn mic off", systemImage: "mic.slash.fill")
                     .font(.caption.weight(.semibold))

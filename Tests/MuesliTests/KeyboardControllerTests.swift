@@ -394,7 +394,7 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertEqual(try store.result(for: requestID)?.text, result.text)
     }
 
-    func testActionButtonResultInsertsOnceThroughActiveKeyboard() throws {
+    func testActionButtonResultNeverAutomaticallyInsertsThroughActiveKeyboard() throws {
         let result = DictationResult(requestID: requestID, text: "From the button", engineIdentifier: "test", source: "action_button")
         try store.saveResult(result)
         try store.saveKeyboardHandoffState(handoff(.resultReady))
@@ -402,7 +402,26 @@ final class KeyboardControllerTests: XCTestCase {
         controller.prepareInitialPresentationState()
         controller.prepareInitialPresentationState()
 
-        XCTAssertEqual(insertedText, [result.text])
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+    }
+
+    func testVisibleKeyboardTracksActionButtonAudioWithoutInsertingItsResult() throws {
+        for source in [ActionButtonCaptureSource.standard, ActionButtonCaptureSource.clipboard] {
+            let request = UUID()
+            try store.claimRequest(.init(id: request))
+            try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.7, request: request))
+            try store.saveKeyboardHandoffState(.init(requestID: request, phase: .recordingStarted))
+            controller.prepareInitialPresentationState()
+            XCTAssertEqual(controller.dictationPhase, .recording)
+            XCTAssertEqual(controller.inputLevel, 0.7, accuracy: 0.001)
+            try store.saveResult(.init(requestID: request, text: "Clipboard speech", engineIdentifier: "test", source: source))
+            try store.saveKeyboardHandoffState(.init(requestID: request, phase: .copyRequired))
+            controller.prepareInitialPresentationState()
+            XCTAssertFalse(controller.showsActiveWaveform)
+            XCTAssertTrue(insertedText.isEmpty)
+            XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+        }
     }
 
     func testACompletedResultIsInsertedOnce() throws {

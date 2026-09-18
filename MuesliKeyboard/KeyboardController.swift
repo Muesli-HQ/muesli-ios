@@ -591,7 +591,7 @@ final class KeyboardController {
             let requestIDs = Set([runtimeStatus?.activeRequestID, status.requestID, handoffState.requestID].compactMap { $0 })
             for requestID in requestIDs where !completedClipboardRequestIDs.contains(requestID) {
                 if let result = try store.completedResult(for: requestID),
-                   result.source == ActionButtonCaptureSource.clipboard {
+                   ActionButtonCaptureSource.isActionButton(result.source) {
                     completedClipboardRequestIDs.insert(requestID)
                     if activeRequestID == requestID {
                         activeRequestID = nil
@@ -1109,7 +1109,7 @@ final class KeyboardController {
         // A resultChanged event can arrive before the host publishes its final
         // clipboard handoff. The delivery choice travels with the recording,
         // so the keyboard must not insert this result during that interval.
-        if result.source == ActionButtonCaptureSource.clipboard {
+        if ActionButtonCaptureSource.isActionButton(result.source) {
             completedClipboardRequestIDs.insert(result.requestID)
             activeRequestID = nil
             liveTranscript = ""

@@ -34,7 +34,6 @@ enum MuesliPreferences {
     static let pinnedSectionsKey = "muesli.navigation.pinnedSections"
     static let actionButtonOnboardingCompletedKey = "muesli.actionButton.onboarding.completed"
     static let actionButtonSelectedModeKey = "muesli.actionButton.selectedMode"
-    static let actionButtonDeliveryKey = "muesli.actionButton.delivery"
     static let actionButtonVerifiedModePrefix = "muesli.actionButton.verified."
     static let actionButtonInvitationDismissedKey = "muesli.actionButton.invitation.dismissed"
 

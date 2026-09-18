@@ -1410,8 +1410,7 @@ final class DictationCoordinator {
         let outcome = await withCheckedContinuation { continuation in
             startRecording(
                 for: request,
-                source: UserDefaults.standard.string(forKey: MuesliPreferences.actionButtonDeliveryKey) == "clipboard"
-                    ? ActionButtonCaptureSource.clipboard : ActionButtonCaptureSource.standard,
+                source: ActionButtonCaptureSource.clipboard,
                 requiresLiveActivity: true
             ) { outcome in
                 continuation.resume(returning: outcome)
@@ -6927,7 +6926,7 @@ final class DictationCoordinator {
         let generation = liveActivityMeterGeneration
         // At most one ActivityKit update in flight. Skip intermediate envelopes
         // if the system is slow instead of queueing updates behind the recorder.
-        let micSessionID = session.kind == .keyboardDictation && keyboardSessionKeeper.isRecordingSegment
+        let micSessionID = session.source == "keyboard" && keyboardSessionKeeper.isRecordingSegment
             ? keyboardMicSession.id : nil
         liveActivityMeterTask = Task { [weak self, liveActivityController, keyboardMicActivity] in
             if let micSessionID, keyboardMicActivity.hasActivity(sessionID: micSessionID) {
@@ -7222,7 +7221,7 @@ final class DictationCoordinator {
 
     private func saveKeyboardLiveTranscript(text: String, isFinal: Bool) {
         guard isKeyboardHandoffActive, let requestID = activeRequest?.id else { return }
-        if activeSession?.source == ActionButtonCaptureSource.clipboard {
+        if ActionButtonCaptureSource.isActionButton(activeSession?.source) {
             clearKeyboardLiveTranscript()
             return
         }
@@ -7278,7 +7277,7 @@ final class DictationCoordinator {
     private func deliverKeyboardTranscript(_ text: String, requestID: UUID) {
         let extensionStatus = try? store.keyboardExtensionStatus()
         let session = try? store.recordingSession(requestID: requestID)
-        let copiesActionButtonText = session?.source == ActionButtonCaptureSource.clipboard
+        let copiesActionButtonText = ActionButtonCaptureSource.isActionButton(session?.source)
         let keyboardCanInsertDirectly = !copiesActionButtonText && extensionStatus?.hasOpenAccess == true
             && extensionStatus?.isVisible == true
             && extensionStatus.map { Date.now.timeIntervalSince($0.lastSeenAt) < 3.5 } == true

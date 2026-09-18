@@ -73,8 +73,27 @@ received after app relaunch resolves persisted audio through the existing recove
 pipeline before adopting the request. If no recoverable recording exists, it marks
 the request failed and releases it instead of waiting for a nonexistent recorder.
 
+## Delivery destination
+
+Keyboard-originated dictation inserts into the currently focused field, including
+when the user switches screens before delivery. This is intentional product behavior.
+Action Button dictation always uses clipboard delivery, even with the keyboard open;
+legacy and current Action Button source identifiers follow the same rule. The bundled
+shortcut copies its returned transcript. When the app cannot copy in the background,
+the existing Open to copy fallback remains available. Explicit Insert latest still
+allows the user to insert any saved transcript.
+
+The visible keyboard may display Action Button recording levels without acquiring
+its delivery destination. Starting method controls delivery; keyboard visibility
+only affects presentation.
+
 ## Waveforms and activities
 
+Keyboard and Action Button activities reuse the status row, microphone tint, and
+waveform renderer across Lock Screen and expanded Dynamic Island. They retain
+separate ActivityAttributes because persistent standby and a single recording have
+different lifetimes and controls. Action Button samples always update its recording
+activity; keyboard-originated samples update the persistent mic activity.
 A mic session has its own ActivityAttributes rather than a synthetic recording or
 history row. It shows Listening, Mic ready, or Mic paused. Recording uses the same
 five-bar amplitude envelope, sampler, renderer, and tint as Action Button activities.

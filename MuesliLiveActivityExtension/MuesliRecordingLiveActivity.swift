@@ -17,24 +17,13 @@ struct MuesliRecordingLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack(spacing: 12) {
-                        LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoSmall")
-                            .frame(width: 28, height: 28)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(context.state.phase)
-                                .font(.subheadline.weight(.semibold))
-                                .lineLimit(1)
-                            Text(context.state.copyURL == nil ? "muesli" : "Saved on this iPhone")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 4)
+                    LiveActivityStatusRow(
+                        title: context.state.phase,
+                        subtitle: context.state.copyURL == nil ? "muesli" : "Saved on this iPhone",
+                        isRecording: context.state.isCapturingAudio && context.attributes.showsDictationWaveform == true,
+                        samples: context.state.waveform
+                    ) {
                         if context.state.isCapturingAudio {
-                            if context.attributes.showsDictationWaveform == true {
-                                LiveActivityInputWaveform(samples: context.state.waveform)
-                                    .frame(width: 30, height: 22)
-                            }
                             Text(context.state.startedAt, style: .timer)
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
@@ -56,8 +45,12 @@ struct MuesliRecordingLiveActivity: Widget {
                     .padding(.bottom, 4)
                 }
             } compactLeading: {
-                LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoSmall")
-                    .frame(width: 22, height: 22)
+                if context.attributes.showsDictationWaveform == true {
+                    LiveActivityMicrophoneMark()
+                } else {
+                    LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoSmall")
+                        .frame(width: 22, height: 22)
+                }
             } compactTrailing: {
                 if context.attributes.showsDictationWaveform == true && context.state.isCapturingAudio {
                     LiveActivityInputWaveform(samples: context.state.waveform)
@@ -102,6 +95,30 @@ private struct LockScreenLiveActivityView: View {
     let showsWaveform: Bool
 
     var body: some View {
+        if showsWaveform {
+            LiveActivityStatusRow(
+                title: state.phase,
+                subtitle: state.copyURL == nil ? "muesli" : "Saved on this iPhone",
+                isRecording: state.isCapturingAudio,
+                samples: state.waveform
+            ) {
+                if state.isCapturingAudio {
+                    Text(state.startedAt, style: .timer)
+                        .font(.caption.monospacedDigit()).frame(width: 48)
+                    if showsStopControl {
+                        StopMeetingButton(sessionID: sessionID, kind: kind, size: 44)
+                    }
+                } else if let url = state.copyURL {
+                    Link("Open to copy", destination: url).font(.caption.weight(.semibold))
+                }
+            }
+            .padding()
+        } else {
+            meetingBody
+        }
+    }
+
+    private var meetingBody: some View {
         HStack(spacing: 14) {
             LiveActivityBrandMark(assetName: "MuesliLiveActivityLogoLarge")
                 .frame(width: 54, height: 54)
@@ -140,6 +157,39 @@ private struct LockScreenLiveActivityView: View {
             }
         }
         .padding()
+    }
+}
+
+/// Shared dictation presentation; callers supply controls for their session lifetime.
+struct LiveActivityStatusRow<Controls: View>: View {
+    let title: String
+    let subtitle: String
+    let isRecording: Bool
+    let samples: [Double]?
+    @ViewBuilder var controls: () -> Controls
+
+    var body: some View {
+        HStack(spacing: 12) {
+            LiveActivityMicrophoneMark()
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if isRecording {
+                LiveActivityInputWaveform(samples: samples).frame(width: 30, height: 22)
+            }
+            controls()
+        }
+        .foregroundStyle(.white)
+    }
+}
+
+struct LiveActivityMicrophoneMark: View {
+    var body: some View {
+        Image(systemName: "mic.fill")
+            .foregroundStyle(LiveActivityInputWaveform.tint)
+            .accessibilityLabel("Muesli microphone")
     }
 }
 

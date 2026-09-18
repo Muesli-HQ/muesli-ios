@@ -3,6 +3,21 @@ import SQLite3
 @testable import Muesli
 
 final class SharedStoreTests: XCTestCase {
+    func testLegacyAndCurrentActionButtonResultsNeverEnterKeyboardDeliveryQueue() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        for source in [ActionButtonCaptureSource.standard, ActionButtonCaptureSource.clipboard] {
+            let request = Muesli.DictationRequest()
+            try store.claimRequest(request)
+            try store.saveResult(.init(requestID: request.id, text: "Clipboard speech", engineIdentifier: "test", source: source))
+            // Even a delayed legacy resultReady must not change the destination.
+            try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .resultReady))
+            XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+            XCTAssertEqual(try store.result(for: request.id)?.text, "Clipboard speech")
+        }
+    }
+
     func testPendingDeliveriesSurviveNewOwnersAndPickupConsumption() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

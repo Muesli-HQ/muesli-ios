@@ -12,7 +12,6 @@ struct ActionButtonOnboardingView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage(MuesliPreferences.actionButtonOnboardingCompletedKey) private var setupCompleted = false
     @AppStorage(MuesliPreferences.actionButtonSelectedModeKey) private var selectedMode = ActionButtonCaptureMode.dictation.rawValue
-    @AppStorage(MuesliPreferences.actionButtonDeliveryKey) private var delivery = "automatic"
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var dictationActivities = true
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var meetingActivities = true
     @AppStorage("actionButton.guidedSetup.step.v1") private var savedStep = 0
@@ -189,7 +188,6 @@ struct ActionButtonOnboardingView: View {
     private func primaryAction() {
         switch step {
         case .choose:
-            if mode == .dictation { delivery = "clipboard" }
             go(.prepare)
         case .prepare:
             if !microphoneReady {
@@ -297,7 +295,7 @@ private struct ActionButtonOutputPreview: View {
             Rectangle().fill(tint).frame(width: 32, height: 3).accessibilityHidden(true)
             Text(mode == .dictation ? "Let's make space for a good idea." : "Monday's next big idea")
                 .font(.title3.weight(.medium)).fixedSize(horizontal: false, vertical: true)
-            Label(mode == .dictation ? "Ready for your keyboard or clipboard" : "Recording, transcript, and notes in Meetings",
+            Label(mode == .dictation ? "Ready to paste from your clipboard" : "Recording, transcript, and notes in Meetings",
                   systemImage: mode == .dictation ? "text.cursor" : "note.text")
                 .font(.footnote).foregroundStyle(MuesliTheme.textSecondary)
         }

@@ -586,21 +586,6 @@ final class KeyboardController {
             latestRuntimeStatus = runtimeStatus
             let status = try store.status()
             let handoffState = try store.keyboardHandoffState()
-            // Restore terminal clipboard ownership before stale snapshots can
-            // re-adopt a request after iOS rebuilds the extension.
-            let requestIDs = Set([runtimeStatus?.activeRequestID, status.requestID, handoffState.requestID].compactMap { $0 })
-            for requestID in requestIDs where !completedClipboardRequestIDs.contains(requestID) {
-                if let result = try store.completedResult(for: requestID),
-                   ActionButtonCaptureSource.isActionButton(result.source) {
-                    completedClipboardRequestIDs.insert(requestID)
-                    if activeRequestID == requestID {
-                        activeRequestID = nil
-                        liveTranscript = ""
-                        dictationPhase = .finished
-                        inputLevel = 0
-                    }
-                }
-            }
             if handoffState.phase == .copyRequired, let requestID = handoffState.requestID {
                 completedClipboardRequestIDs.insert(requestID)
             }
@@ -1106,17 +1091,8 @@ final class KeyboardController {
 
     private func insertCompletedResult(_ result: DictationResult) {
         guard textInserter != nil, !pendingCancellationIDs.contains(result.requestID) else { return }
-        // A resultChanged event can arrive before the host publishes its final
-        // clipboard handoff. The delivery choice travels with the recording,
-        // so the keyboard must not insert this result during that interval.
-        if ActionButtonCaptureSource.isActionButton(result.source) {
-            completedClipboardRequestIDs.insert(result.requestID)
-            activeRequestID = nil
-            liveTranscript = ""
-            dictationPhase = .finished
-            statusText = "Saved to Voice Notes"
-            return
-        }
+        // Only an explicit resultReady handoff queues automatic insertion.
+        // Capture source does not determine whether the keyboard may deliver it.
         let shortID = result.requestID.uuidString.prefix(8).lowercased()
 
         guard !insertedRequestIDs.contains(result.requestID) else {

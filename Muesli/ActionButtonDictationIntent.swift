@@ -6,7 +6,7 @@ import UserNotifications
 struct ToggleMuesliDictationIntent: AudioRecordingIntent, LiveActivityIntent {
     static let title: LocalizedStringResource = "Muesli Dictation"
     static let description = IntentDescription(
-        "Starts or stops dictation and returns the transcript for Copy to Clipboard. Offers Open to copy when needed."
+        "Starts or stops dictation, returns text for Copy to Clipboard, and also inserts through an open Muesli keyboard."
     )
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
     static let openAppWhenRun = false

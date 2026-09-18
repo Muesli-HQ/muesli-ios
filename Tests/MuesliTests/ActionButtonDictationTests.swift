@@ -5,6 +5,43 @@ import AVFoundation
 
 @MainActor
 final class ActionButtonDictationTests: XCTestCase {
+    func testActionButtonDeliveryUsesVisibleFreshKeyboardAndPreservesClipboardOutput() throws {
+        let statuses: [KeyboardExtensionStatus?] = [
+            .init(lastSeenAt: .now, hasOpenAccess: true),
+            .init(lastSeenAt: .now, hasOpenAccess: true, isVisible: false),
+            .init(lastSeenAt: .now.addingTimeInterval(-10), hasOpenAccess: true),
+            .init(lastSeenAt: .now, hasOpenAccess: false),
+            nil
+        ]
+        for (index, status) in statuses.enumerated() {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let bus = ActionButtonStubEventBus()
+            let store = SharedStore(containerURL: directory, eventPoster: bus)
+            let request = DictationRequest()
+            try store.claimRequest(request)
+            let session = RecordingSession(requestID: request.id, kind: .keyboardDictation, phase: .completed,
+                                           source: ActionButtonCaptureSource.clipboard)
+            try store.saveSession(session)
+            try store.saveResult(.init(requestID: request.id, sessionID: session.id, text: "Both destinations",
+                                       engineIdentifier: "test", source: session.source))
+            if let status { try store.saveKeyboardExtensionStatus(status) }
+            let coordinator = DictationCoordinator(store: Muesli.SharedStore(containerURL: directory))
+            coordinator.deliverKeyboardTranscript("Both destinations", requestID: request.id)
+            XCTAssertEqual(try store.pendingKeyboardDeliveries().count, index == 0 ? 1 : 0)
+            // Reopening after clipboard-only completion must not retroactively insert.
+            try store.saveKeyboardExtensionStatus(.init(lastSeenAt: .now, hasOpenAccess: true))
+            var inserted: [String] = []
+            for _ in 0..<2 {
+                let keyboard = KeyboardController(store: store, eventBus: bus)
+                keyboard.textInserter = { inserted.append($0) }
+                keyboard.prepareInitialPresentationState()
+            }
+            XCTAssertEqual(inserted, index == 0 ? ["Both destinations"] : [])
+            XCTAssertEqual(try store.result(for: request.id)?.text, "Both destinations")
+        }
+    }
+
     func testRecorderCapturesSamplesWithPlaybackDisabled() async throws {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             throw XCTSkip("Grant microphone permission to the simulator host before running the hardware capture test.")

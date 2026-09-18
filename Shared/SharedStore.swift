@@ -894,12 +894,10 @@ private struct SharedStoreDatabase {
     }
 
     private func enqueueKeyboardDelivery(for requestID: UUID, db: OpaquePointer) throws {
-        guard let data = try querySingleBlob(
+        guard try querySingleBlob(
             "SELECT payload FROM result_history WHERE request_id = ? AND deleted_at IS NULL", db: db,
             bindValues: { try bind(requestID.uuidString, to: $0, at: 1) }
-        ) else { return }
-        let result = try decoder.decode(DictationResult.self, from: data)
-        guard !ActionButtonCaptureSource.isActionButton(result.source) else { return }
+        ) != nil else { return }
         try execute("INSERT OR IGNORE INTO keyboard_deliveries (request_id, queued_at) VALUES (?, ?)", db: db) {
             try bind(requestID.uuidString, to: $0, at: 1)
             try bind(Date.now.timeIntervalSince1970, to: $0, at: 2)

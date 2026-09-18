@@ -77,15 +77,17 @@ the request failed and releases it instead of waiting for a nonexistent recorder
 
 Keyboard-originated dictation inserts into the currently focused field, including
 when the user switches screens before delivery. This is intentional product behavior.
-Action Button dictation always uses clipboard delivery, even with the keyboard open;
-legacy and current Action Button source identifiers follow the same rule. The bundled
-shortcut copies its returned transcript. When the app cannot copy in the background,
-the existing Open to copy fallback remains available. Explicit Insert latest still
-allows the user to insert any saved transcript.
+Action Button dictation always returns text for the shortcut's Copy to Clipboard
+action. When the keyboard is visible with Full Access and a fresh heartbeat at
+completion, it also queues automatic insertion. Hidden, absent, stale, or restricted
+keyboards use clipboard-only delivery and do not insert when opened later. Insertion
+acknowledgement leaves the shortcut result pickup intact. The Open to copy fallback
+remains available when foreground clipboard access is needed. Explicit Insert latest
+still allows the user to insert any saved transcript.
 
-The visible keyboard may display Action Button recording levels without acquiring
-its delivery destination. Starting method controls delivery; keyboard visibility
-only affects presentation.
+The visible keyboard displays Action Button recording levels from the same pipeline.
+No new recording states are needed: resultReady authorizes insertion; copyRequired
+or copied completion does not. A resultChanged notification alone cannot insert text.
 
 ## Waveforms and activities
 

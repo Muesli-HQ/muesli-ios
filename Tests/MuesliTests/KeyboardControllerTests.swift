@@ -178,7 +178,7 @@ final class KeyboardControllerTests: XCTestCase {
     }
 
     func testCompletedClipboardRequestIgnoresLateHandoffAndRuntime() throws {
-        try store.saveKeyboardHandoffState(handoff(.resultReady))
+        try store.saveKeyboardHandoffState(handoff(.copyRequired))
         try store.saveResult(.init(requestID: requestID, text: "Clipboard only", engineIdentifier: "test", source: ActionButtonCaptureSource.clipboard))
         controller.prepareInitialPresentationState()
         XCTAssertFalse(controller.showsActiveWaveform)
@@ -394,7 +394,7 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertEqual(try store.result(for: requestID)?.text, result.text)
     }
 
-    func testActionButtonResultNeverAutomaticallyInsertsThroughActiveKeyboard() throws {
+    func testActionButtonResultInsertsOnceThroughActiveKeyboard() throws {
         let result = DictationResult(requestID: requestID, text: "From the button", engineIdentifier: "test", source: "action_button")
         try store.saveResult(result)
         try store.saveKeyboardHandoffState(handoff(.resultReady))
@@ -402,7 +402,8 @@ final class KeyboardControllerTests: XCTestCase {
         controller.prepareInitialPresentationState()
         controller.prepareInitialPresentationState()
 
-        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertEqual(insertedText, [result.text])
+        XCTAssertEqual(try store.result(for: requestID)?.text, result.text)
         XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
     }
 

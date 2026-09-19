@@ -22,6 +22,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
 
     private struct FileState {
         var latestPowerDB: Float = -160
+        var hasReceivedAudio = false
     }
 
     private let engine = AVAudioEngine()
@@ -99,7 +100,10 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
                 "domain": nsError.domain,
                 "code": String(nsError.code),
                 "sample_rate": String(engine.inputNode.outputFormat(forBus: 0).sampleRate),
-                "channels": String(engine.inputNode.outputFormat(forBus: 0).channelCount)
+                "channels": String(engine.inputNode.outputFormat(forBus: 0).channelCount),
+                "input_available": String(AVAudioSession.sharedInstance().isInputAvailable),
+                "other_audio": String(AVAudioSession.sharedInstance().isOtherAudioPlaying),
+                "input_ports": AVAudioSession.sharedInstance().currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
             ])
             cleanupAfterFailedStart()
             if error is AudioRecorder.RecordingError {
@@ -121,6 +125,12 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         guard unit.isInputEnabled && !unit.isOutputEnabled else {
             throw AudioRecorder.RecordingError.startFailed(stage: "microphone-only configuration")
         }
+    }
+
+    var hasReceivedAudio: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return state.hasReceivedAudio
     }
 
     var isPlaybackEnabled: Bool { engine.inputNode.auAudioUnit.isOutputEnabled }
@@ -244,6 +254,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         lock.lock()
         audioWriter?.append(monoBuffer)
         state.latestPowerDB = powerDB
+        state.hasReceivedAudio = true
         lock.unlock()
 
         if let audioBuffer = Self.copyBuffer(monoBuffer) {
@@ -284,7 +295,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         lock.lock()
         let writer = audioWriter
         audioWriter = nil
-        state = FileState()
+        state = FileState(hasReceivedAudio: state.hasReceivedAudio)
         lock.unlock()
         writer?.cancel()
         isRunning = false

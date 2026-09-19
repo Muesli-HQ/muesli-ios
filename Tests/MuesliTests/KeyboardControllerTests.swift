@@ -40,6 +40,83 @@ final class KeyboardControllerTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testCopyFallbackSettlesExistingKeyboardAfterReturningToHost() throws {
+        try store.claimRequest(.init(id: requestID))
+        try store.saveKeyboardHandoffState(handoff(.recordingStarted))
+        controller.prepareInitialPresentationState()
+        try store.saveResult(.init(requestID: requestID, text: "Saved speech", engineIdentifier: "test"))
+        try store.saveKeyboardHandoffState(handoff(.copyRequired))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.dictationPhase, .finished)
+        XCTAssertFalse(controller.showsActiveWaveform)
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertNoThrow(try store.claimRequest(.init()))
+    }
+
+    func testRecreatedKeyboardDeliversOlderResultWithoutDisturbingNewCapture() throws {
+        let old = DictationRequest()
+        try store.claimRequest(old)
+        try store.saveKeyboardHandoffState(.init(requestID: old.id, phase: .recordingStarted))
+        controller.prepareInitialPresentationState()
+        try store.saveResult(.init(requestID: old.id, text: "Old speech", engineIdentifier: "test"))
+        try store.saveKeyboardHandoffState(.init(requestID: old.id, phase: .resultReady))
+        let next = DictationRequest(sourceBundleIdentifier: "muesli.action-button")
+        try store.claimRequest(next)
+        try store.saveKeyboardHandoffState(.init(requestID: next.id, phase: .recordingStarted))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.dictationPhase, .recording)
+        XCTAssertEqual(insertedText, ["Old speech"])
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, next.id)
+        XCTAssertEqual(try store.keyboardHandoffState().phase, .recordingStarted)
+        let rebuilt = KeyboardController(store: store, eventBus: bus)
+        rebuilt.textInserter = { [weak self] in self?.insertedText.append($0) }
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertEqual(insertedText, ["Old speech"])
+        XCTAssertEqual(rebuilt.dictationPhase, .recording)
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+        XCTAssertEqual(try store.result(for: old.id)?.text, "Old speech")
+    }
+
+    func testPendingDeliveryWaitsForTextInserterAndManualInsertionAcknowledgesIt() throws {
+        try store.claimRequest(.init(id: requestID))
+        try store.saveResult(.init(requestID: requestID, text: "Waiting speech", engineIdentifier: "test"))
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+        controller.textInserter = nil
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(try store.pendingKeyboardDeliveries().count, 1)
+        controller.textInserter = { [weak self] in self?.insertedText.append($0) }
+        controller.insertLatestDictation()
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(insertedText, ["Waiting speech"])
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+        XCTAssertEqual(controller.dictationPhase, .idle)
+    }
+
+    func testRecoveryRefreshPreservesStopAndCancelActions() throws {
+        for action in [DictationCommandAction.stop, .cancel] {
+            try store.clearKeyboardHandoffState()
+            try store.saveKeyboardHandoffState(.init(
+                requestID: requestID, phase: .recoveryRequested, recoveryAction: action
+            ))
+            controller.prepareInitialPresentationState()
+            let url = try XCTUnwrap(controller.launchURL)
+            let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+            XCTAssertEqual(components.queryItems?.first { $0.name == MuesliAppConstants.actionQueryItem }?.value,
+                           action == .stop ? MuesliAppConstants.stopAction : MuesliAppConstants.cancelAction)
+        }
+    }
+
+    func testPreparingKeyboardDoesNotClaimOrReplaceActionButtonRequest() throws {
+        controller.prepareLaunchRequestIfNeeded()
+        XCTAssertNil(try store.pendingRequest())
+        let actionButton = DictationRequest(sourceBundleIdentifier: "muesli.action-button")
+        try store.claimRequest(actionButton)
+        controller.startDictation()
+        XCTAssertEqual(try store.pendingRequest()?.id, actionButton.id)
+        XCTAssertEqual(try store.keyboardHandoffState().requestID, actionButton.id)
+        XCTAssertNil(try store.pendingCommand())
+    }
+
     func testHeartbeatUsesCurrentAccessWithoutOverwritingStatus() throws {
         var access = false
         controller.currentFullAccess = { access }
@@ -87,8 +164,21 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertTrue(insertedText.isEmpty)
     }
 
-    func testCompletedClipboardRequestIgnoresLateHandoffAndRuntime() throws {
+    func testAcknowledgedCancellationCannotResurrectAfterKeyboardRecreation() throws {
+        try store.saveKeyboardHandoffState(handoff(.cancelled))
+        try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.5))
         try store.saveKeyboardHandoffState(handoff(.resultReady))
+        try store.saveResult(.init(requestID: requestID, text: "Cancelled speech", engineIdentifier: "test"))
+        let rebuilt = KeyboardController(store: store, eventBus: bus)
+        rebuilt.textInserter = { [weak self] in self?.insertedText.append($0) }
+        rebuilt.prepareInitialPresentationState()
+        XCTAssertEqual(rebuilt.dictationPhase, .idle)
+        XCTAssertFalse(rebuilt.canCancelActiveDictation)
+        XCTAssertTrue(insertedText.isEmpty)
+    }
+
+    func testCompletedClipboardRequestIgnoresLateHandoffAndRuntime() throws {
+        try store.saveKeyboardHandoffState(handoff(.copyRequired))
         try store.saveResult(.init(requestID: requestID, text: "Clipboard only", engineIdentifier: "test", source: ActionButtonCaptureSource.clipboard))
         controller.prepareInitialPresentationState()
         XCTAssertFalse(controller.showsActiveWaveform)
@@ -313,6 +403,26 @@ final class KeyboardControllerTests: XCTestCase {
         controller.prepareInitialPresentationState()
 
         XCTAssertEqual(insertedText, [result.text])
+        XCTAssertEqual(try store.result(for: requestID)?.text, result.text)
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+    }
+
+    func testVisibleKeyboardTracksActionButtonAudioWithoutInsertingItsResult() throws {
+        for source in [ActionButtonCaptureSource.standard, ActionButtonCaptureSource.clipboard] {
+            let request = UUID()
+            try store.claimRequest(.init(id: request))
+            try store.saveKeyboardRuntimeStatus(recordingStatus(level: 0.7, request: request))
+            try store.saveKeyboardHandoffState(.init(requestID: request, phase: .recordingStarted))
+            controller.prepareInitialPresentationState()
+            XCTAssertEqual(controller.dictationPhase, .recording)
+            XCTAssertEqual(controller.inputLevel, 0.7, accuracy: 0.001)
+            try store.saveResult(.init(requestID: request, text: "Clipboard speech", engineIdentifier: "test", source: source))
+            try store.saveKeyboardHandoffState(.init(requestID: request, phase: .copyRequired))
+            controller.prepareInitialPresentationState()
+            XCTAssertFalse(controller.showsActiveWaveform)
+            XCTAssertTrue(insertedText.isEmpty)
+            XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+        }
     }
 
     func testACompletedResultIsInsertedOnce() throws {
@@ -328,21 +438,29 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertEqual(insertedText, ["hello there"])
     }
 
-    /// Known defect, pinned rather than left undocumented.
-    ///
-    /// Both processes write `keyboard_handoff_state` with no sequence number,
-    /// and `KeyboardHandoffState.advanced(to:)` performs no ordering check. So
-    /// a late `.resultReady` from the app can land after the extension has
-    /// already written `.inserted`, regressing a terminal phase. The extension
-    /// re-adopts the request it just finished, `insertCompletedResult` returns
-    /// early on its idempotency latch without reconciling, and the keyboard
-    /// strands on "Transcribing" with its primary button disabled.
-    ///
-    /// This is the defect behind the original bug report. It is unfixed on
-    /// `main`; fixing it needs monotonic transitions at the storage layer.
-    /// When that lands this test fails as an unexpected pass -- delete the
-    /// `XCTExpectFailure` then.
-    func testLateResultReadyStrandsTheKeyboard() throws {
+    func testInsertedHandoffSurvivesKeyboardRecreationAndLateStatus() throws {
+        let result = DictationResult(requestID: requestID, text: "already sent", engineIdentifier: "test")
+        try store.saveResult(result)
+        try store.saveKeyboardHandoffState(handoff(.resultReady))
+        controller.prepareInitialPresentationState()
+        controller = KeyboardController(store: store, eventBus: bus)
+        controller.textInserter = { [weak self] text in self?.insertedText.append(text) }
+        for phase: KeyboardHandoffPhase in [.transcribingStarted, .resultReady, .recordingStarted] {
+            try store.saveKeyboardHandoffState(handoff(phase))
+            controller.prepareInitialPresentationState()
+            XCTAssertEqual(try store.keyboardHandoffState().phase, .inserted)
+            XCTAssertEqual(controller.dictationPhase, .idle)
+            XCTAssertFalse(controller.isPrimaryButtonDisabled)
+        }
+        XCTAssertEqual(insertedText, ["already sent"])
+        let next = UUID()
+        try store.claimRequest(.init(id: next))
+        try store.saveKeyboardHandoffState(.init(requestID: next, phase: .recordingStarted))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.dictationPhase, .recording, "A completed request must not block the next one")
+    }
+
+    func testLateResultReadyCannotReopenInsertedRequest() throws {
         let result = DictationResult(requestID: requestID, text: "already sent", engineIdentifier: "test")
         try store.saveResult(result)
         try store.saveKeyboardHandoffState(handoff(.resultReady))
@@ -354,7 +472,7 @@ final class KeyboardControllerTests: XCTestCase {
         // the keyboard has already inserted and marked .inserted.
         try store.saveKeyboardHandoffState(handoff(.resultReady))
 
-        XCTExpectFailure("Terminal handoff phases are not yet monotonic; see Context/findings-2026-07-26") {
+        do {
             controller.prepareInitialPresentationState()
             XCTAssertEqual(
                 controller.dictationPhase,

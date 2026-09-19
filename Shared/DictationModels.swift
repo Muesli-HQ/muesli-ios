@@ -229,6 +229,47 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         self.updatedAt = updatedAt
     }
 
+    /// Stop retains capture ownership: finish startup, then consume the pending
+    /// command to save and transcribe audio. Cancellation must abort startup.
+    func permitsCaptureStartup(for requestID: UUID) -> Bool {
+        self.requestID == requestID
+            && [.startRequested, .startAcknowledged, .stopRequested].contains(phase)
+            && recoveryAction != .cancel
+    }
+
+    /// Saved results no longer reserve capture ownership. Recovery and
+    /// cancellation-in-progress retain ownership until they settle.
+    var canReleaseRequest: Bool {
+        [.idle, .resultReady, .inserted, .cancelled, .copyRequired, .failed].contains(phase)
+    }
+
+    /// Shared by both writers; ordinary progress can skip stages but cannot
+    /// reverse them. Recovery remains an explicit escape path in existing states.
+    func accepts(_ next: KeyboardHandoffState) -> Bool {
+        guard requestID == next.requestID else { return true }
+        if phase == .inserted || phase == .cancelled { return next.phase == phase }
+        if phase == .copyRequired { return [.copyRequired, .inserted].contains(next.phase) }
+        if phase == .resultReady {
+            return [.resultReady, .copyRequired, .inserted, .cancelRequested, .cancelled].contains(next.phase)
+                || (next.phase == .recoveryRequested && next.recoveryAction == .cancel)
+        }
+        if phase == .cancelRequested || (phase == .recoveryRequested && recoveryAction == .cancel) {
+            return [.cancelRequested, .cancelled, .failed].contains(next.phase)
+                || (next.phase == .recoveryRequested && next.recoveryAction == .cancel)
+        }
+        if next.phase == .cancelRequested || next.phase == .cancelled { return true }
+        if next.phase == .failed || next.phase == .recoveryRequested { return true }
+        if phase == .failed || phase == .recoveryRequested { return true }
+        let progress: [KeyboardHandoffPhase] = [
+            .idle, .startRequested, .startAcknowledged, .recordingStarted,
+            .stopRequested, .stopAcknowledged, .audioSaved, .transcribingStarted,
+            .resultReady, .copyRequired, .inserted
+        ]
+        guard let currentIndex = progress.firstIndex(of: phase),
+              let nextIndex = progress.firstIndex(of: next.phase) else { return false }
+        return nextIndex >= currentIndex
+    }
+
     func advanced(
         to phase: KeyboardHandoffPhase,
         message: String? = nil,

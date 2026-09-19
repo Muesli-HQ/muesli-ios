@@ -6,7 +6,7 @@ import UserNotifications
 struct ToggleMuesliDictationIntent: AudioRecordingIntent, LiveActivityIntent {
     static let title: LocalizedStringResource = "Muesli Dictation"
     static let description = IntentDescription(
-        "Starts or stops dictation. Inserts text through the active Muesli keyboard, or offers Open to copy when the transcript is ready."
+        "Starts or stops dictation, returns text for Copy to Clipboard, and also inserts through an open Muesli keyboard."
     )
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
     static let openAppWhenRun = false
@@ -198,20 +198,60 @@ enum ActionButtonShortcutOutput {
 @MainActor
 enum ActionButtonCaptureStartup {
     static func run(
+        validateOwnership: () throws -> Void,
         startAudio: () async throws -> Void,
         publishActivity: () async throws -> Void,
         cancelAudio: () -> Void
     ) async throws {
         do {
             try Task.checkCancellation()
+            try validateOwnership()
             try await startAudio()
             KeyboardDiagnosticsLog.record("recording.audioEstablished")
             try Task.checkCancellation()
+            try validateOwnership()
             try await publishActivity()
             try Task.checkCancellation()
+            try validateOwnership()
         } catch {
             cancelAudio()
             throw error
+        }
+    }
+}
+
+/// Retry only the observed pre-capture engine failure, never an established recording.
+@MainActor
+enum AudioEngineStartupRecovery {
+    static func isRetryable(_ error: Error) -> Bool {
+        guard case AudioRecorder.RecordingError.recorderSetupFailed(let stage, let underlying) = error,
+              stage == "realtime dictation (audio engine)" else { return false }
+        let error = underlying as NSError
+        return error.domain == "com.apple.coreaudio.avfaudio" && error.code == 2003329396
+    }
+
+    static func run(
+        validate: () throws -> Void,
+        start: () throws -> Void,
+        hasReceivedAudio: () -> Bool,
+        cleanup: () -> Void,
+        wait: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) async throws {
+        // At most three attempts under the original request and intent assertion.
+        for attempt in 1...3 {
+            try Task.checkCancellation()
+            try validate()
+            do {
+                try start()
+                return
+            } catch {
+                let retry = attempt < 3 && !hasReceivedAudio() && isRetryable(error)
+                cleanup()
+                guard retry else { throw error }
+                try validate()
+                KeyboardDiagnosticsLog.record("recording.startRetry", ["attempt": String(attempt + 1)])
+                try await wait(.milliseconds(attempt * 250))
+            }
         }
     }
 }

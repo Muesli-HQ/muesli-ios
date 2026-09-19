@@ -2,6 +2,34 @@ import XCTest
 @testable import Muesli
 
 final class MuesliPreferencesTests: XCTestCase {
+    func testKeyboardPreferenceMigrationPreservesLatestChoiceAndRemovesDuplicate() {
+        let name = UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(true, forKey: MuesliPreferences.keyboardSessionModeKey)
+        defaults.set(false, forKey: MuesliPreferences.retiredKeyboardSessionModeKey)
+        MuesliPreferences.migrateKeyboardSessionPreference(in: defaults)
+        XCTAssertFalse(defaults.bool(forKey: MuesliPreferences.keyboardSessionModeKey))
+        XCTAssertNil(defaults.object(forKey: MuesliPreferences.retiredKeyboardSessionModeKey))
+        defaults.set(true, forKey: MuesliPreferences.keyboardSessionModeKey)
+        MuesliPreferences.migrateKeyboardSessionPreference(in: defaults)
+        XCTAssertTrue(defaults.bool(forKey: MuesliPreferences.keyboardSessionModeKey))
+    }
+
+    func testKeyboardPersistenceDefaultsOnButPreservesExplicitOptOut() {
+        let defaults = UserDefaults.standard
+        let key = MuesliPreferences.keyboardSessionModeKey
+        let original = defaults.object(forKey: key)
+        defer {
+            if let original { defaults.set(original, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+        }
+        defaults.removeObject(forKey: key)
+        XCTAssertTrue(MuesliPreferences.keyboardSessionModeEnabled)
+        defaults.set(false, forKey: key)
+        XCTAssertFalse(MuesliPreferences.keyboardSessionModeEnabled)
+    }
+
     func testLongVoiceNoteThresholdClampsToSupportedRange() {
         XCTAssertEqual(MuesliPreferences.clampedLongVoiceNoteThreshold(5), 30)
         XCTAssertEqual(MuesliPreferences.clampedLongVoiceNoteThreshold(60), 60)

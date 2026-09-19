@@ -10,7 +10,7 @@ struct SettingsView: View {
 
     @AppStorage(MuesliPreferences.liveActivitiesForDictationsKey) private var liveActivitiesForDictations = true
     @AppStorage(MuesliPreferences.liveActivitiesForMeetingsKey) private var liveActivitiesForMeetings = true
-    @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
+    @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = true
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
     @AppStorage(MuesliPreferences.keepDictationAudioRecordingsKey) private var keepDictationAudioRecordings = false
     @AppStorage(MuesliPreferences.longVoiceNoteModeEnabledKey) private var longVoiceNoteModeEnabled = true
@@ -75,10 +75,6 @@ struct SettingsView: View {
                 }
                 .onChange(of: liveActivitiesForMeetings) { _, _ in
                     coordinator.applyLiveActivityPreferences()
-                }
-                .onChange(of: keyboardSessionMode) { _, enabled in
-                    guard isActive else { return }
-                    coordinator.setKeyboardSessionModeEnabled(enabled)
                 }
                 .onChange(of: microphonePreference) { _, newValue in
                     guard isActive else { return }
@@ -273,10 +269,16 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                     SettingsToggleRow(
                         icon: "keyboard.badge.ellipsis",
-                        title: "Keyboard Session Mode",
+                        title: "Turn mic off after each dictation",
                         detail: keyboardSessionModeDetail,
-                        isOn: $keyboardSessionMode
+                        isOn: keyboardSessionBinding
                     )
+                    if coordinator.isKeyboardMicOn {
+                        Button("Turn mic off", systemImage: "mic.slash.fill") {
+                            Task { await coordinator.turnOffKeyboardMic() }
+                        }
+                        .frame(minHeight: 44)
+                    }
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsMicrophonePicker(selection: $microphonePreference)
                     Divider().overlay(MuesliTheme.surfaceBorder)
@@ -304,26 +306,14 @@ struct SettingsView: View {
         }
     }
 
+    private var keyboardSessionBinding: Binding<Bool> {
+        Binding(get: { !keyboardSessionMode }, set: { stopAfterEach in
+            coordinator.setKeyboardSessionModeEnabled(!stopAfterEach)
+        })
+    }
+
     private var keyboardSessionModeDetail: String {
-        let baseDetail = "Keeps an app-owned microphone session live so the keyboard can start and stop voice notes without reopening Muesli."
-        let status = coordinator.keyboardSessionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !status.isEmpty, status != "Off" {
-            switch status {
-            case "Ready", "Starting", "Recording", "Transcribing":
-                return "\(status). \(baseDetail)"
-            default:
-                if status.hasPrefix("Retrying session standby") || status.hasPrefix("Session standby unavailable") {
-                    return "\(status). \(baseDetail)"
-                }
-                return "\(status). Tap Start to record normally, or toggle this off and on to retry."
-            }
-        }
-
-        guard keyboardSessionMode else {
-            return "When off, keyboard Start opens Muesli because iOS keyboards cannot own microphone access."
-        }
-
-        return "Starting. \(baseDetail)"
+        "When enabled, each keyboard dictation opens Muesli. Otherwise the mic stays ready until you tap Turn mic off in Muesli, on the Lock Screen, or in the expanded Dynamic Island."
     }
 
     private var meetingSettings: some View {

@@ -3,9 +3,12 @@ import SQLite3
 
 enum SharedStoreError: Error, LocalizedError {
     case appGroupUnavailable(String)
+    case requestInProgress
 
     var errorDescription: String? {
         switch self {
+        case .requestInProgress:
+            "Muesli is already handling another dictation."
         case .appGroupUnavailable(let identifier):
             "App Group container is unavailable for \(identifier)."
         }
@@ -37,20 +40,31 @@ struct SharedStore: Sendable {
         self.decoder = JSONDecoder()
     }
 
-    func saveRequest(_ request: DictationRequest) throws {
-        try database().saveValue(request, key: .pendingRequest)
+    /// Atomically acquires the existing handoff and pending-request slot.
+    /// Re-adopting the current request is idempotent; competing starts fail.
+    func claimRequest(_ request: DictationRequest) throws {
+        try database().claimRequest(request)
+    }
+
+    /// Resumes only the current owner, pinning it before any async recovery work.
+    func claimRecovery(_ request: DictationRequest) throws {
+        try database().claimRecovery(request)
+    }
+
+    func clearPendingCommand(ifMatching command: DictationCommand) throws {
+        try database().clearPendingCommand(ifMatching: command)
     }
 
     func pendingRequest() throws -> DictationRequest? {
         try database().value(DictationRequest.self, key: .pendingRequest)
     }
 
-    func clearPendingRequest() throws {
-        try database().clearValue(key: .pendingRequest)
+    func clearPendingRequest(matching requestID: UUID) throws {
+        try database().clearPendingRequest(matching: requestID)
     }
 
     func saveCommand(_ command: DictationCommand) throws {
-        try database().saveValue(command, key: .pendingCommand)
+        try database().saveCommand(command)
         eventPoster.post(.commandChanged)
     }
 
@@ -58,12 +72,16 @@ struct SharedStore: Sendable {
         try database().value(DictationCommand.self, key: .pendingCommand)
     }
 
-    func clearPendingCommand() throws {
-        try database().clearValue(key: .pendingCommand)
+    func clearPendingCommand(matching requestID: UUID? = nil) throws {
+        if let requestID {
+            try database().clearPendingCommand(matching: requestID)
+        } else {
+            try database().clearValue(key: .pendingCommand)
+        }
     }
 
     func saveKeyboardHandoffState(_ state: KeyboardHandoffState) throws {
-        try database().saveValue(state, key: .keyboardHandoffState)
+        try database().saveKeyboardHandoffState(state)
         eventPoster.post(.handoffStatusChanged)
     }
 
@@ -88,6 +106,15 @@ struct SharedStore: Sendable {
     func saveResult(_ result: DictationResult) throws {
         try database().saveResult(result)
         eventPoster.post(.resultChanged)
+    }
+
+    func pendingKeyboardDeliveries() throws -> [DictationResult] {
+        try database().pendingKeyboardDeliveries()
+    }
+
+    func acknowledgeKeyboardDelivery(for requestID: UUID) throws {
+        try database().acknowledgeKeyboardDelivery(for: requestID)
+        eventPoster.post(.handoffStatusChanged)
     }
 
     func result(for requestID: UUID) throws -> DictationResult? {
@@ -613,7 +640,7 @@ private enum SharedStoreDatabaseError: Error, LocalizedError {
 
 private struct SharedStoreDatabase {
     private static let databaseFileName = "Muesli.sqlite"
-    private static let schemaVersion = 5
+    private static let schemaVersion = 6
 
     private static let syncMeetingLookupColumns = """
     s.cloud_record_name, s.title, s.created_at, s.started_at, s.ended_at,
@@ -688,6 +715,158 @@ private struct SharedStoreDatabase {
         }
     }
 
+    func saveCommand(_ command: DictationCommand) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                if let data = try valueData(key: .keyboardHandoffState, db: db) {
+                    let owner = try decoder.decode(KeyboardHandoffState.self, from: data)
+                    guard owner.requestID == command.requestID, !owner.canReleaseRequest else { return }
+                    if command.action == .start {
+                        guard [.startRequested, .startAcknowledged].contains(owner.phase)
+                            || (owner.phase == .recoveryRequested && owner.recoveryAction == .start) else { return }
+                    }
+                    if command.action != .cancel,
+                       owner.phase == .cancelRequested || owner.recoveryAction == .cancel { return }
+                }
+                if let data = try valueData(key: .pendingCommand, db: db) {
+                    let pending = try decoder.decode(DictationCommand.self, from: data)
+                    if pending.requestID == command.requestID, pending.action == .cancel,
+                       command.action != .cancel { return }
+                }
+                try upsertValue(encoder.encode(command), key: .pendingCommand, db: db)
+            }
+        }
+    }
+
+    func claimRecovery(_ request: DictationRequest) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                guard let data = try valueData(key: .keyboardHandoffState, db: db) else {
+                    throw SharedStoreError.requestInProgress
+                }
+                let current = try decoder.decode(KeyboardHandoffState.self, from: data)
+                guard current.requestID == request.id,
+                      ![.idle, .resultReady, .inserted, .copyRequired, .cancelled, .cancelRequested].contains(current.phase),
+                      current.recoveryAction != .cancel else { throw SharedStoreError.requestInProgress }
+                try upsertValue(encoder.encode(request), key: .pendingRequest, db: db)
+                try upsertValue(encoder.encode(current.advanced(to: .transcribingStarted)),
+                                key: .keyboardHandoffState, db: db)
+            }
+        }
+    }
+
+    func clearPendingCommand(ifMatching command: DictationCommand) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                guard let data = try valueData(key: .pendingCommand, db: db),
+                      try decoder.decode(DictationCommand.self, from: data) == command else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
+                }
+            }
+        }
+    }
+
+    func claimRequest(_ request: DictationRequest) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                let current = try valueData(key: .keyboardHandoffState, db: db)
+                    .map { try decoder.decode(KeyboardHandoffState.self, from: $0) }
+                if let current, current.requestID == request.id {
+                    // Never restart a delivered or cancelled request from a delayed URL.
+                    guard ![.inserted, .cancelled, .copyRequired, .resultReady,
+                            .cancelRequested].contains(current.phase),
+                          !(current.phase == .recoveryRequested && current.recoveryAction == .cancel)
+                    else { throw SharedStoreError.requestInProgress }
+                    try upsertValue(encoder.encode(request), key: .pendingRequest, db: db)
+                    if current.phase == .failed || current.phase == .idle {
+                        // Retrying the same ID must reserve it just as a new
+                        // claim does, before another process can claim a start.
+                        try upsertValue(encoder.encode(current.advanced(to: .startRequested)),
+                                        key: .keyboardHandoffState, db: db)
+                    }
+                    return
+                }
+                if let current, current.requestID != nil {
+                    guard current.canReleaseRequest else { throw SharedStoreError.requestInProgress }
+                    if current.phase == .resultReady, let requestID = current.requestID {
+                        try enqueueKeyboardDelivery(for: requestID, db: db)
+                    }
+                } else if let data = try valueData(key: .pendingRequest, db: db),
+                          try decoder.decode(DictationRequest.self, from: data).id != request.id {
+                    throw SharedStoreError.requestInProgress
+                }
+                try upsertValue(encoder.encode(request), key: .pendingRequest, db: db)
+                try upsertValue(encoder.encode(KeyboardHandoffState(
+                    requestID: request.id, phase: .startRequested
+                )), key: .keyboardHandoffState, db: db)
+                // Clear an earlier owner's command inside acquisition. Clearing
+                // later in the keyboard could erase a new Stop/Cancel.
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
+                }
+            }
+        }
+    }
+
+    func clearPendingCommand(matching requestID: UUID) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                guard let data = try valueData(key: .pendingCommand, db: db),
+                      try decoder.decode(DictationCommand.self, from: data).requestID == requestID else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
+                }
+            }
+        }
+    }
+
+    func clearPendingRequest(matching requestID: UUID) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                guard let data = try valueData(key: .pendingRequest, db: db),
+                      try decoder.decode(DictationRequest.self, from: data).id == requestID else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.pendingRequest.rawValue, to: statement, at: 1)
+                }
+            }
+        }
+    }
+
+    func saveKeyboardHandoffState(_ state: KeyboardHandoffState) throws {
+        try withDatabase { db in
+            // Both processes publish handoffs. Read and write under the same
+            // SQLite transaction so a delayed app update cannot undo insertion.
+            try transaction(db: db) {
+                var state = state
+                if let data = try valueData(key: .keyboardHandoffState, db: db) {
+                    let current = try decoder.decode(KeyboardHandoffState.self, from: data)
+                    if current.requestID != nil, current.requestID != state.requestID {
+                        // Only claimRequest may transfer ownership. Progress from
+                        // an old request can never acquire another request's slot.
+                        return
+                    }
+                    if !current.accepts(state) {
+                        return
+                    }
+                    if state.phase == .failed,
+                       current.phase == .cancelRequested || current.recoveryAction == .cancel {
+                        state = current.advanced(to: .cancelled, message: "Cancelled")
+                    }
+                }
+                if let requestID = state.requestID {
+                    if state.phase == .resultReady {
+                        try enqueueKeyboardDelivery(for: requestID, db: db)
+                    } else if [.inserted, .cancelRequested, .cancelled, .copyRequired].contains(state.phase)
+                                || state.recoveryAction == .cancel {
+                        try deleteKeyboardDelivery(for: requestID, db: db)
+                    }
+                }
+                try upsertValue(encoder.encode(state), key: .keyboardHandoffState, db: db)
+            }
+        }
+    }
+
     func value<T: Decodable>(_ type: T.Type, key: SharedStoreKey) throws -> T? {
         try withDatabase { db in
             guard let data = try valueData(key: key, db: db) else { return nil }
@@ -710,6 +889,59 @@ private struct SharedStoreDatabase {
                 try upsertResultHistory(result, db: db)
                 let status = DictationStatus(requestID: result.requestID, phase: .finished)
                 try upsertValue(try encoder.encode(status), key: .dictationStatus, db: db)
+            }
+        }
+    }
+
+    private func enqueueKeyboardDelivery(for requestID: UUID, db: OpaquePointer) throws {
+        guard try querySingleBlob(
+            "SELECT payload FROM result_history WHERE request_id = ? AND deleted_at IS NULL", db: db,
+            bindValues: { try bind(requestID.uuidString, to: $0, at: 1) }
+        ) != nil else { return }
+        try execute("INSERT OR IGNORE INTO keyboard_deliveries (request_id, queued_at) VALUES (?, ?)", db: db) {
+            try bind(requestID.uuidString, to: $0, at: 1)
+            try bind(Date.now.timeIntervalSince1970, to: $0, at: 2)
+        }
+    }
+
+    private func deleteKeyboardDelivery(for requestID: UUID, db: OpaquePointer) throws {
+        try execute("DELETE FROM keyboard_deliveries WHERE request_id = ?", db: db) {
+            try bind(requestID.uuidString, to: $0, at: 1)
+        }
+    }
+
+    func pendingKeyboardDeliveries() throws -> [DictationResult] {
+        try withDatabase { db in
+            var results: [DictationResult] = []
+            try transaction(db: db) {
+                // Upgrade an existing resultReady without replaying old history.
+                if let data = try valueData(key: .keyboardHandoffState, db: db) {
+                    let state = try decoder.decode(KeyboardHandoffState.self, from: data)
+                    if state.phase == .resultReady, let id = state.requestID {
+                        try enqueueKeyboardDelivery(for: id, db: db)
+                    }
+                }
+                results = try queryBlobs("""
+                    SELECT h.payload FROM keyboard_deliveries d
+                    JOIN result_history h ON h.request_id = d.request_id
+                    WHERE h.deleted_at IS NULL ORDER BY d.queued_at, d.rowid
+                    """, db: db) { _ in }
+                    .map { try decoder.decode(DictationResult.self, from: $0) }
+            }
+            return results
+        }
+    }
+
+    func acknowledgeKeyboardDelivery(for requestID: UUID) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                try deleteKeyboardDelivery(for: requestID, db: db)
+                guard let data = try valueData(key: .keyboardHandoffState, db: db) else { return }
+                let current = try decoder.decode(KeyboardHandoffState.self, from: data)
+                let inserted = current.advanced(to: .inserted, message: "Inserted")
+                guard current.requestID == requestID, current.phase == .resultReady,
+                      current.accepts(inserted) else { return }
+                try upsertValue(encoder.encode(inserted), key: .keyboardHandoffState, db: db)
             }
         }
     }
@@ -779,6 +1011,7 @@ private struct SharedStoreDatabase {
                     try bind(requestID.uuidString, to: statement, at: 4)
                 }
 
+                try deleteKeyboardDelivery(for: requestID, db: db)
                 try execute(
                     "DELETE FROM result_pickups WHERE request_id = ?",
                     db: db
@@ -2908,6 +3141,11 @@ private struct SharedStoreDatabase {
         key TEXT PRIMARY KEY NOT NULL,
         payload BLOB NOT NULL,
         updated_at REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS keyboard_deliveries (
+        request_id TEXT PRIMARY KEY NOT NULL,
+        queued_at REAL NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS result_pickups (

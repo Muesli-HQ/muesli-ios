@@ -5,6 +5,116 @@ import AVFoundation
 
 @MainActor
 final class ActionButtonDictationTests: XCTestCase {
+    func testActionButtonDeliveryUsesVisibleFreshKeyboardAndPreservesClipboardOutput() throws {
+        let statuses: [KeyboardExtensionStatus?] = [
+            .init(lastSeenAt: .now, hasOpenAccess: true),
+            .init(lastSeenAt: .now, hasOpenAccess: true, isVisible: false),
+            .init(lastSeenAt: .now.addingTimeInterval(-10), hasOpenAccess: true),
+            .init(lastSeenAt: .now, hasOpenAccess: false),
+            nil
+        ]
+        for (index, status) in statuses.enumerated() {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let bus = ActionButtonStubEventBus()
+            let store = SharedStore(containerURL: directory, eventPoster: bus)
+            let request = DictationRequest()
+            try store.claimRequest(request)
+            let session = RecordingSession(requestID: request.id, kind: .keyboardDictation, phase: .completed,
+                                           source: ActionButtonCaptureSource.clipboard)
+            try store.saveSession(session)
+            try store.saveResult(.init(requestID: request.id, sessionID: session.id, text: "Both destinations",
+                                       engineIdentifier: "test", source: session.source))
+            if let status { try store.saveKeyboardExtensionStatus(status) }
+            let coordinator = DictationCoordinator(store: Muesli.SharedStore(containerURL: directory))
+            coordinator.deliverKeyboardTranscript("Both destinations", requestID: request.id)
+            XCTAssertEqual(try store.pendingKeyboardDeliveries().count, index == 0 ? 1 : 0)
+            // Reopening after clipboard-only completion must not retroactively insert.
+            try store.saveKeyboardExtensionStatus(.init(lastSeenAt: .now, hasOpenAccess: true))
+            var inserted: [String] = []
+            for _ in 0..<2 {
+                let keyboard = KeyboardController(store: store, eventBus: bus)
+                keyboard.textInserter = { inserted.append($0) }
+                keyboard.prepareInitialPresentationState()
+            }
+            XCTAssertEqual(inserted, index == 0 ? ["Both destinations"] : [])
+            XCTAssertEqual(try store.result(for: request.id)?.text, "Both destinations")
+        }
+    }
+
+    private var transientEngineError: Error {
+        AudioRecorder.RecordingError.recorderSetupFailed(
+            stage: "realtime dictation (audio engine)",
+            underlying: NSError(domain: "com.apple.coreaudio.avfaudio", code: 2003329396))
+    }
+
+    func testStartupRecoversTwoFailuresWithoutPublishingActivityEarly() async throws {
+        var attempts = 0
+        var cleanups = 0
+        var waits: [Duration] = []
+        var published = false
+        try await ActionButtonCaptureStartup.run(validateOwnership: {}) {
+            try await AudioEngineStartupRecovery.run(validate: {}) {
+                attempts += 1
+                XCTAssertFalse(published)
+                if attempts < 3 { throw self.transientEngineError }
+            } hasReceivedAudio: { false } cleanup: {
+                cleanups += 1
+            } wait: { waits.append($0) }
+        } publishActivity: { published = true } cancelAudio: { XCTFail("Unexpected cancellation") }
+        XCTAssertEqual(attempts, 3)
+        XCTAssertEqual(cleanups, 2)
+        XCTAssertEqual(waits, [.milliseconds(250), .milliseconds(500)])
+        XCTAssertTrue(published)
+    }
+
+    func testStartupRetriesAreBoundedAndExcludeAudioAlreadyReceived() async {
+        for received in [false, true] {
+            var attempts = 0
+            var cleanups = 0
+            do {
+                try await AudioEngineStartupRecovery.run(validate: {}) {
+                    attempts += 1
+                    throw self.transientEngineError
+                } hasReceivedAudio: { received } cleanup: { cleanups += 1 } wait: { _ in }
+                XCTFail("Expected failure")
+            } catch {
+                XCTAssertEqual(attempts, received ? 1 : 3)
+                XCTAssertEqual(cleanups, attempts)
+            }
+        }
+    }
+
+    func testStartupCancellationDuringBackoffPreventsAnotherAttempt() async {
+        var ownsRequest = true
+        var attempts = 0
+        do {
+            try await AudioEngineStartupRecovery.run(validate: {
+                guard ownsRequest else { throw CancellationError() }
+            }) {
+                attempts += 1
+                throw self.transientEngineError
+            } hasReceivedAudio: { false } cleanup: {} wait: { _ in ownsRequest = false }
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            XCTAssertEqual(attempts, 1)
+        } catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testStartupDoesNotRetryPermissionOrUnrelatedFailures() async {
+        for error in [AudioRecorder.RecordingError.microphonePermissionDenied,
+                      AudioRecorder.RecordingError.startFailed(stage: "microphone input readiness")] {
+            var attempts = 0
+            do {
+                try await AudioEngineStartupRecovery.run(validate: {}) {
+                    attempts += 1
+                    throw error
+                } hasReceivedAudio: { false } cleanup: {} wait: { _ in XCTFail("Must not retry") }
+                XCTFail("Expected failure")
+            } catch { XCTAssertEqual(attempts, 1) }
+        }
+    }
+
     func testRecorderCapturesSamplesWithPlaybackDisabled() async throws {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             throw XCTSkip("Grant microphone permission to the simulator host before running the hardware capture test.")
@@ -40,9 +150,96 @@ final class ActionButtonDictationTests: XCTestCase {
         XCTAssertEqual(ActionButtonClipboardConfirmation.nonemptyTranscript("Hello Pico"), "Hello Pico")
     }
 
+    func testStartupOwnershipLossStopsCaptureAtEachBoundary() async {
+        for boundary in ["beforeAudio", "afterAudio", "afterActivity"] {
+            var ownsRequest = boundary != "beforeAudio"
+            var recording = false
+            var published = false
+            var committed = false
+            var cleanups = 0
+            do {
+                try await ActionButtonCaptureStartup.run(validateOwnership: {
+                    guard ownsRequest else { throw CancellationError() }
+                }) {
+                    recording = true
+                    await Task.yield()
+                    if boundary == "afterAudio" { ownsRequest = false }
+                } publishActivity: {
+                    published = true
+                    await Task.yield()
+                    if boundary == "afterActivity" { ownsRequest = false }
+                } cancelAudio: {
+                    recording = false
+                    cleanups += 1
+                }
+                committed = true
+                XCTFail("Ownership loss must abort at \(boundary)")
+            } catch is CancellationError {
+                XCTAssertFalse(recording, boundary)
+                XCTAssertFalse(committed)
+                XCTAssertEqual(cleanups, 1)
+                XCTAssertEqual(published, boundary == "afterActivity")
+            } catch { XCTFail("Unexpected error: \(error)") }
+        }
+    }
+
+    func testStopDuringStartupPreservesCaptureAndPendingStop() async throws {
+        for boundary in ["beforeAudio", "afterAudio", "afterActivity"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = SharedStore(containerURL: directory, eventPoster: ActionButtonStubEventBus())
+            let request = DictationRequest()
+            try store.claimRequest(request)
+            try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .startAcknowledged))
+            let stop = DictationCommand(requestID: request.id, action: .stop)
+            let requestStop = {
+                try store.saveCommand(stop)
+                try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .stopRequested))
+            }
+            var recording = false
+            var cleanups = 0
+            if boundary == "beforeAudio" { try requestStop() }
+            try await ActionButtonCaptureStartup.run(validateOwnership: {
+                guard try store.keyboardHandoffState().permitsCaptureStartup(for: request.id) else {
+                    throw CancellationError()
+                }
+            }) {
+                recording = true
+                await Task.yield()
+                if boundary == "afterAudio" { try requestStop() }
+            } publishActivity: {
+                await Task.yield()
+                if boundary == "afterActivity" { try requestStop() }
+            } cancelAudio: {
+                recording = false
+                cleanups += 1
+            }
+            XCTAssertTrue(recording, boundary)
+            XCTAssertEqual(cleanups, 0, boundary)
+            // Startup publication cannot rewind Stop, and its command remains
+            // available to the coordinator's existing stop/transcribe path.
+            try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .recordingStarted))
+            XCTAssertEqual(try store.keyboardHandoffState().phase, .stopRequested)
+            XCTAssertEqual(try store.pendingCommand(), stop)
+            XCTAssertFalse(KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
+                action: .stop, activeRequestMatches: true, hasActiveSession: true, isRecording: recording
+            ))
+        }
+    }
+
+    func testStartupHandoffRejectsCancellationAndReplacedOwners() {
+        let id = UUID()
+        for phase: KeyboardHandoffPhase in [.cancelRequested, .cancelled, .failed, .resultReady, .stopAcknowledged] {
+            XCTAssertFalse(KeyboardHandoffState(requestID: id, phase: phase).permitsCaptureStartup(for: id))
+        }
+        XCTAssertFalse(KeyboardHandoffState(requestID: UUID(), phase: .stopRequested).permitsCaptureStartup(for: id))
+        XCTAssertFalse(KeyboardHandoffState(requestID: id, phase: .stopRequested, recoveryAction: .cancel)
+            .permitsCaptureStartup(for: id))
+    }
+
     func testCaptureStartsBeforePublishingLiveActivity() async throws {
         var events: [String] = []
-        try await ActionButtonCaptureStartup.run {
+        try await ActionButtonCaptureStartup.run(validateOwnership: {}) {
             events.append("audio")
         } publishActivity: {
             events.append("activity")
@@ -53,7 +250,7 @@ final class ActionButtonDictationTests: XCTestCase {
     func testLiveActivityFailureStopsAudioWithoutRetry() async {
         var events: [String] = []
         do {
-            try await ActionButtonCaptureStartup.run {
+            try await ActionButtonCaptureStartup.run(validateOwnership: {}) {
                 events.append("audio")
             } publishActivity: {
                 events.append("activity")
@@ -68,7 +265,7 @@ final class ActionButtonDictationTests: XCTestCase {
     func testAudioFailureDoesNotPublishListeningActivity() async {
         var events: [String] = []
         do {
-            try await ActionButtonCaptureStartup.run {
+            try await ActionButtonCaptureStartup.run(validateOwnership: {}) {
                 events.append("audio")
                 throw CancellationError()
             } publishActivity: {

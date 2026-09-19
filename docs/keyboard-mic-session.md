@@ -96,6 +96,10 @@ failure at most twice, after 250 ms and 500 ms. Each attempt creates a fresh rec
 under the same request. Permission, storage, Live Activity, unrelated audio errors,
 and failures after microphone buffers arrive are not retried. Ownership loss,
 Cancel/Stop, task cancellation, and mic-off invalidate startup before another attempt.
+All recorder paths validate the same request and mic-session generation before
+audio startup, after audio startup, and after asynchronous Live Activity creation.
+Lost ownership runs the selected recorder cleanup before startup can publish success.
+The wrapper requires this validation; the file recorder cannot bypass it.
 After engine start, microphone buffers (including silence) must arrive within one
 second before Listening is published. Input readiness failure ends startup without
 restarting captured audio. Route/interruption events and startup route characteristics

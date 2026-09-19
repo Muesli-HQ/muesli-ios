@@ -198,17 +198,21 @@ enum ActionButtonShortcutOutput {
 @MainActor
 enum ActionButtonCaptureStartup {
     static func run(
+        validateOwnership: () throws -> Void,
         startAudio: () async throws -> Void,
         publishActivity: () async throws -> Void,
         cancelAudio: () -> Void
     ) async throws {
         do {
             try Task.checkCancellation()
+            try validateOwnership()
             try await startAudio()
             KeyboardDiagnosticsLog.record("recording.audioEstablished")
             try Task.checkCancellation()
+            try validateOwnership()
             try await publishActivity()
             try Task.checkCancellation()
+            try validateOwnership()
         } catch {
             cancelAudio()
             throw error

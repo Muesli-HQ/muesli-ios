@@ -53,7 +53,7 @@ final class ActionButtonDictationTests: XCTestCase {
         var cleanups = 0
         var waits: [Duration] = []
         var published = false
-        try await ActionButtonCaptureStartup.run {
+        try await ActionButtonCaptureStartup.run(validateOwnership: {}) {
             try await AudioEngineStartupRecovery.run(validate: {}) {
                 attempts += 1
                 XCTAssertFalse(published)
@@ -150,9 +150,42 @@ final class ActionButtonDictationTests: XCTestCase {
         XCTAssertEqual(ActionButtonClipboardConfirmation.nonemptyTranscript("Hello Pico"), "Hello Pico")
     }
 
+    func testStartupOwnershipLossStopsCaptureAtEachBoundary() async {
+        for boundary in ["beforeAudio", "afterAudio", "afterActivity"] {
+            var ownsRequest = boundary != "beforeAudio"
+            var recording = false
+            var published = false
+            var committed = false
+            var cleanups = 0
+            do {
+                try await ActionButtonCaptureStartup.run(validateOwnership: {
+                    guard ownsRequest else { throw CancellationError() }
+                }) {
+                    recording = true
+                    await Task.yield()
+                    if boundary == "afterAudio" { ownsRequest = false }
+                } publishActivity: {
+                    published = true
+                    await Task.yield()
+                    if boundary == "afterActivity" { ownsRequest = false }
+                } cancelAudio: {
+                    recording = false
+                    cleanups += 1
+                }
+                committed = true
+                XCTFail("Ownership loss must abort at \(boundary)")
+            } catch is CancellationError {
+                XCTAssertFalse(recording, boundary)
+                XCTAssertFalse(committed)
+                XCTAssertEqual(cleanups, 1)
+                XCTAssertEqual(published, boundary == "afterActivity")
+            } catch { XCTFail("Unexpected error: \(error)") }
+        }
+    }
+
     func testCaptureStartsBeforePublishingLiveActivity() async throws {
         var events: [String] = []
-        try await ActionButtonCaptureStartup.run {
+        try await ActionButtonCaptureStartup.run(validateOwnership: {}) {
             events.append("audio")
         } publishActivity: {
             events.append("activity")
@@ -163,7 +196,7 @@ final class ActionButtonDictationTests: XCTestCase {
     func testLiveActivityFailureStopsAudioWithoutRetry() async {
         var events: [String] = []
         do {
-            try await ActionButtonCaptureStartup.run {
+            try await ActionButtonCaptureStartup.run(validateOwnership: {}) {
                 events.append("audio")
             } publishActivity: {
                 events.append("activity")
@@ -178,7 +211,7 @@ final class ActionButtonDictationTests: XCTestCase {
     func testAudioFailureDoesNotPublishListeningActivity() async {
         var events: [String] = []
         do {
-            try await ActionButtonCaptureStartup.run {
+            try await ActionButtonCaptureStartup.run(validateOwnership: {}) {
                 events.append("audio")
                 throw CancellationError()
             } publishActivity: {

@@ -4711,6 +4711,17 @@ final class DictationCoordinator {
         }
 
         let startupGeneration = keyboardMicSession.generation
+        let validateStartup: () throws -> Void = { [self] in
+            try Task.checkCancellation()
+            guard activeRequest?.id == request.id,
+                  keyboardMicSession.generation == startupGeneration else { throw CancellationError() }
+            if deliversToKeyboard {
+                let handoff = try store.keyboardHandoffState()
+                guard handoff.requestID == request.id,
+                      [.startRequested, .startAcknowledged].contains(handoff.phase),
+                      handoff.recoveryAction != .cancel else { throw CancellationError() }
+            }
+        }
         Task {
             defer { recordingStartupInProgress = false }
             let startupTime = Date()
@@ -4727,7 +4738,7 @@ final class DictationCoordinator {
                 session.startedAt = .now
                 try store.saveSession(session)
                 try await recorder.requestPermission()
-                try await ActionButtonCaptureStartup.run {
+                try await ActionButtonCaptureStartup.run(validateOwnership: validateStartup) {
                     if !usesPersistentKeyboardSession, keyboardSessionKeeper.isRunning {
                         keyboardSessionKeeper.stop(deactivateSession: true)
                         if let sessionID = keyboardMicSession.id {
@@ -4737,6 +4748,7 @@ final class DictationCoordinator {
                         try? store.clearKeyboardRuntimeStatus()
                         try? await Task.sleep(for: .milliseconds(150))
                     }
+                    try validateStartup()
                     if usesPersistentKeyboardSession {
                         if !keyboardSessionKeeper.canAcceptStartCommand {
                             if !keyboardSessionKeeper.isRunning {
@@ -4761,6 +4773,7 @@ final class DictationCoordinator {
                         } else {
                             checkpointDirectory = nil
                         }
+                        try validateStartup()
                         guard keyboardMicSession.owns(micSessionID), !Task.isCancelled else { throw CancellationError() }
                         try keyboardSessionKeeper.beginSegment(
                             outputURL: audioURL,
@@ -4773,16 +4786,7 @@ final class DictationCoordinator {
                             sessionID: session.id,
                             enablesRealtimeTranscription: selectedTranscriptionModel.supportsRealtimeStreaming,
                             usesDurableCheckpoints: longModeThreshold != nil,
-                            validateStartup: {
-                                guard self.activeRequest?.id == request.id,
-                                      self.keyboardMicSession.generation == startupGeneration else { throw CancellationError() }
-                                if deliversToKeyboard {
-                                    let handoff = try self.store.keyboardHandoffState()
-                                    guard handoff.requestID == request.id,
-                                          [.startRequested, .startAcknowledged].contains(handoff.phase),
-                                          handoff.recoveryAction != .cancel else { throw CancellationError() }
-                                }
-                            }
+                            validateStartup: validateStartup
                         )
                     } else {
                         try recorder.start(

@@ -229,6 +229,14 @@ struct KeyboardHandoffState: Codable, Sendable, Equatable {
         self.updatedAt = updatedAt
     }
 
+    /// Stop retains capture ownership: finish startup, then consume the pending
+    /// command to save and transcribe audio. Cancellation must abort startup.
+    func permitsCaptureStartup(for requestID: UUID) -> Bool {
+        self.requestID == requestID
+            && [.startRequested, .startAcknowledged, .stopRequested].contains(phase)
+            && recoveryAction != .cancel
+    }
+
     /// Saved results no longer reserve capture ownership. Recovery and
     /// cancellation-in-progress retain ownership until they settle.
     var canReleaseRequest: Bool {

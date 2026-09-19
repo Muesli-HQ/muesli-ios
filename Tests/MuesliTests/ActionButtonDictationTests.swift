@@ -183,6 +183,60 @@ final class ActionButtonDictationTests: XCTestCase {
         }
     }
 
+    func testStopDuringStartupPreservesCaptureAndPendingStop() async throws {
+        for boundary in ["beforeAudio", "afterAudio", "afterActivity"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = SharedStore(containerURL: directory, eventPoster: ActionButtonStubEventBus())
+            let request = DictationRequest()
+            try store.claimRequest(request)
+            try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .startAcknowledged))
+            let stop = DictationCommand(requestID: request.id, action: .stop)
+            let requestStop = {
+                try store.saveCommand(stop)
+                try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .stopRequested))
+            }
+            var recording = false
+            var cleanups = 0
+            if boundary == "beforeAudio" { try requestStop() }
+            try await ActionButtonCaptureStartup.run(validateOwnership: {
+                guard try store.keyboardHandoffState().permitsCaptureStartup(for: request.id) else {
+                    throw CancellationError()
+                }
+            }) {
+                recording = true
+                await Task.yield()
+                if boundary == "afterAudio" { try requestStop() }
+            } publishActivity: {
+                await Task.yield()
+                if boundary == "afterActivity" { try requestStop() }
+            } cancelAudio: {
+                recording = false
+                cleanups += 1
+            }
+            XCTAssertTrue(recording, boundary)
+            XCTAssertEqual(cleanups, 0, boundary)
+            // Startup publication cannot rewind Stop, and its command remains
+            // available to the coordinator's existing stop/transcribe path.
+            try store.saveKeyboardHandoffState(.init(requestID: request.id, phase: .recordingStarted))
+            XCTAssertEqual(try store.keyboardHandoffState().phase, .stopRequested)
+            XCTAssertEqual(try store.pendingCommand(), stop)
+            XCTAssertFalse(KeyboardCommandArbitration.shouldDeferUntilRecorderStarts(
+                action: .stop, activeRequestMatches: true, hasActiveSession: true, isRecording: recording
+            ))
+        }
+    }
+
+    func testStartupHandoffRejectsCancellationAndReplacedOwners() {
+        let id = UUID()
+        for phase: KeyboardHandoffPhase in [.cancelRequested, .cancelled, .failed, .resultReady, .stopAcknowledged] {
+            XCTAssertFalse(KeyboardHandoffState(requestID: id, phase: phase).permitsCaptureStartup(for: id))
+        }
+        XCTAssertFalse(KeyboardHandoffState(requestID: UUID(), phase: .stopRequested).permitsCaptureStartup(for: id))
+        XCTAssertFalse(KeyboardHandoffState(requestID: id, phase: .stopRequested, recoveryAction: .cancel)
+            .permitsCaptureStartup(for: id))
+    }
+
     func testCaptureStartsBeforePublishingLiveActivity() async throws {
         var events: [String] = []
         try await ActionButtonCaptureStartup.run(validateOwnership: {}) {

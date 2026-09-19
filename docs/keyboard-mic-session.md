@@ -144,3 +144,5 @@ processing, lock/unlock, audio-route changes, and switching to meeting capture.
 Confirm mic-off releases microphone access while captured text can finish delivery.
 Test with Live Activities disabled and with AirPods. Simulator tests do not establish
 all hardware interruption or ActivityKit scheduling behavior.
+
+Startup ownership remains valid when the same request receives Stop. The pending Stop is consumed after capture starts, preserving audio for transcription; cancellation still invalidates startup. Regression coverage injects Stop before audio, after audio, and during Live Activity publication.

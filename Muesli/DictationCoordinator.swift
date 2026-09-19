@@ -4717,9 +4717,7 @@ final class DictationCoordinator {
                   keyboardMicSession.generation == startupGeneration else { throw CancellationError() }
             if deliversToKeyboard {
                 let handoff = try store.keyboardHandoffState()
-                guard handoff.requestID == request.id,
-                      [.startRequested, .startAcknowledged].contains(handoff.phase),
-                      handoff.recoveryAction != .cancel else { throw CancellationError() }
+                guard handoff.permitsCaptureStartup(for: request.id) else { throw CancellationError() }
             }
         }
         Task {

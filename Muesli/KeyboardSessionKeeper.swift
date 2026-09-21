@@ -271,7 +271,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         lock.unlock()
 
         if deactivateSession {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            AudioInputRouteManager.deactivate()
         }
     }
 
@@ -451,7 +451,7 @@ final class KeyboardSessionKeeper: @unchecked Sendable {
         isStarting = false
         isEngineRunning = false
         lock.unlock()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
     }
 
     private func prepareForStart() {

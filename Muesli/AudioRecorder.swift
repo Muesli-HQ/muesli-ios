@@ -62,7 +62,7 @@ final class AudioRecorder {
         recorder?.stop()
         recorder = nil
 
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
 
         guard let outputURL else {
             throw RecordingError.noRecording
@@ -81,7 +81,7 @@ final class AudioRecorder {
         }
         outputURL = nil
 
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
     }
 
     enum RecordingError: LocalizedError {

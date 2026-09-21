@@ -20,7 +20,10 @@ import os
 enum KeyboardDiagnosticsLog {
     /// Roughly a few dictation sessions' worth of history -- enough to see how a
     /// session got into a bad state, small enough to stay cheap to rewrite.
-    static let entryLimit = 200
+    static let entryLimit = 600
+
+    @TaskLocal static var captureRequestID: String?
+    @TaskLocal static var intentInvocationID: String?
 
     private static let logger = Logger(
         subsystem: MuesliAppConstants.appGroupIdentifier,
@@ -38,6 +41,9 @@ enum KeyboardDiagnosticsLog {
         process: String = ProcessInfo.processInfo.processName,
         at date: Date = .now
     ) {
+        var detail = detail
+        if let captureRequestID { detail["capture_request"] = captureRequestID }
+        if let intentInvocationID { detail["intent_invocation"] = intentInvocationID }
         let rendered = detail
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\(sanitize($0.value))" }
@@ -76,7 +82,7 @@ enum KeyboardDiagnosticsLog {
     }
 
     /// Appends, then trims to the newest `entryLimit` lines. Rewriting a
-    /// 200-line file is cheaper than the bookkeeping needed to avoid it, and
+    /// bounded file is cheaper than the bookkeeping needed to avoid it, and
     /// this runs off the main thread.
     private static func append(fields: [String], at date: Date) {
         guard let url = fileURL() else { return }

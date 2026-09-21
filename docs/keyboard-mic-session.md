@@ -146,3 +146,9 @@ Test with Live Activities disabled and with AirPods. Simulator tests do not esta
 all hardware interruption or ActivityKit scheduling behavior.
 
 Startup ownership remains valid when the same request receives Stop. The pending Stop is consumed after capture starts, preserving audio for transcription; cancellation still invalidates startup. Regression coverage injects Stop before audio, after audio, and during Live Activity publication.
+
+### Background audio startup diagnostics
+
+The existing capture path tags startup logs with a task-local capture request ID and, for Action Button, an intent invocation ID. These are diagnostic context, not lifecycle ownership. Notification handlers separately snapshot the coordinator's active request, startup flag, app state, and protected-data availability. Audio-session deactivation logs include the caller even when cleanup runs outside the startup task. Engine preparation and start have separate success markers without changing retry classification. The bounded diagnostic buffer retains 600 entries; transcript text and audio are never logged.
+
+For the recurring background CoreAudio failure, compare Action Button → foreground Quick Note → Action Button on Pico. Correlate configure/activate/input-route events, recorder preparation/start markers, intent capture entry/exit, scene/interruptions, and deactivation callers. A successful simulator test does not validate background recording authorization. This instrumentation does not claim to fix the OS failure or introduce a fallback flow.

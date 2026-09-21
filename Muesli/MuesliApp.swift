@@ -55,6 +55,7 @@ struct MuesliApp: App {
                     coordinator.handleOpenURL(url)
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    coordinator.recordCaptureLifecycle("scene.\(phase)")
                     if phase == .active {
                         coordinator.copyPendingDictationIfActive()
                         #if DEBUG && targetEnvironment(simulator)

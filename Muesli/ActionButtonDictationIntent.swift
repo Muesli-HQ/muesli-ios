@@ -79,19 +79,23 @@ struct ToggleMuesliMeetingIntent: AudioRecordingIntent, LiveActivityIntent {
 
 @MainActor
 private func performActionButtonCapture(_ mode: ActionButtonCaptureMode) async throws -> ActionButtonDictationResult {
-    let result = await ActionButtonCaptureDispatcher.toggle(mode)
-    let store = SetupVerificationStore()
-    switch result {
-    case .started(let sessionID):
-        store.recordActionButtonEvent(.started, mode: mode, sessionID: sessionID)
-    case .stopped(let sessionID):
-        store.recordActionButtonEvent(.stopped, mode: mode, sessionID: sessionID)
-    case .busy(let message), .failed(let message):
-        throw ActionButtonCaptureError.unavailable(message)
-    case .unavailable:
-        throw ActionButtonCaptureError.unavailable("Open Muesli once to finish preparing, then try again.")
+    try await KeyboardDiagnosticsLog.$intentInvocationID.withValue(UUID().uuidString) {
+        KeyboardDiagnosticsLog.record("intent.captureEntered")
+        defer { KeyboardDiagnosticsLog.record("intent.captureExited") }
+        let result = await ActionButtonCaptureDispatcher.toggle(mode)
+        let store = SetupVerificationStore()
+        switch result {
+        case .started(let sessionID):
+            store.recordActionButtonEvent(.started, mode: mode, sessionID: sessionID)
+        case .stopped(let sessionID):
+            store.recordActionButtonEvent(.stopped, mode: mode, sessionID: sessionID)
+        case .busy(let message), .failed(let message):
+            throw ActionButtonCaptureError.unavailable(message)
+        case .unavailable:
+            throw ActionButtonCaptureError.unavailable("Open Muesli once to finish preparing, then try again.")
+        }
+        return result
     }
-    return result
 }
 
 @available(iOS 18.0, *)

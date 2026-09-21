@@ -87,8 +87,11 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
             }
             tapInstalled = true
             startupStep = "audio engine"
+            KeyboardDiagnosticsLog.record("recorder.prepareRequested")
             try prepareInputOnlyEngine()
+            KeyboardDiagnosticsLog.record("recorder.prepareCompleted")
             try engine.start()
+            KeyboardDiagnosticsLog.record("recorder.engineStarted")
             isRunning = true
         } catch {
             // Preserve the OS error before cleanup changes the audio session.
@@ -179,7 +182,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         lock.unlock()
         let result = writer?.finish()
 
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
 
         return StopResult(
             finalChunk: result?.finalCheckpoint,
@@ -202,7 +205,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         state = FileState()
         lock.unlock()
         writer?.cancel()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
     }
 
     func currentPower() -> Float {
@@ -299,7 +302,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         lock.unlock()
         writer?.cancel()
         isRunning = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
     }
 
 }

@@ -57,7 +57,8 @@ struct MuesliRecordingLiveActivity: Widget {
                         .frame(width: 24, height: 20)
                 } else {
                     Image(systemName: iconName(for: context.state.phase))
-                        .foregroundStyle(color(for: context.state.accent))
+                        .foregroundStyle(context.attributes.showsDictationWaveform == true
+                            ? LiveActivityInputWaveform.tint : color(for: context.state.accent))
                 }
             } minimal: {
                 if context.attributes.showsDictationWaveform == true && context.state.isCapturingAudio {
@@ -68,7 +69,8 @@ struct MuesliRecordingLiveActivity: Widget {
                         .frame(width: 22, height: 22)
                 }
             }
-            .keylineTint(color(for: context.state.accent))
+            .keylineTint(context.attributes.showsDictationWaveform == true
+                ? LiveActivityInputWaveform.tint : color(for: context.state.accent))
             .widgetURL(context.state.copyURL)
         }
     }

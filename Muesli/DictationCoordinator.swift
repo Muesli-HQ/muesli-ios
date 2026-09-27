@@ -4557,8 +4557,16 @@ final class DictationCoordinator {
             }
         }
 
+        #if DEBUG
+        let timingExperiment = CaptureStartupTimingExperiment.isAvailable
+            && activeRequest?.sourceBundleIdentifier == "muesli.action-button"
+        let timingDelay = timingExperiment && UserDefaults.standard.bool(forKey: CaptureStartupTimingExperiment.preferenceKey) ? 250 : 0
+        #endif
+        var startupAttempt = 0
         var candidate: StreamingMeetingRecorder?
         try await AudioEngineStartupRecovery.run(validate: validateStartup) {
+            startupAttempt += 1
+            KeyboardDiagnosticsLog.record("recording.engineAttempt", ["attempt": String(startupAttempt)])
             let fresh = StreamingMeetingRecorder()
             candidate = fresh
             fresh.onRecordingFailure = { [weak self] failure in
@@ -4567,8 +4575,21 @@ final class DictationCoordinator {
             if let pipe = realtimeDictationBufferPipe {
                 fresh.onAudioBuffer = { [pipe] buffer in pipe.append(buffer) }
             }
+            #if DEBUG
+            if timingExperiment && startupAttempt == 1 {
+                KeyboardDiagnosticsLog.record("recording.timingExperiment", ["delay_ms": String(timingDelay)])
+                try await fresh.startForTimingExperiment(
+                    chunksDirectory: chunksDirectory, retainedAudioURL: audioURL,
+                    routeStage: "realtime dictation", delayMilliseconds: timingDelay, validate: validateStartup
+                )
+            } else {
+                try fresh.start(chunksDirectory: chunksDirectory, retainedAudioURL: audioURL,
+                                routeStage: "realtime dictation")
+            }
+            #else
             try fresh.start(chunksDirectory: chunksDirectory, retainedAudioURL: audioURL,
                             routeStage: "realtime dictation")
+            #endif
         } hasReceivedAudio: {
             candidate?.hasReceivedAudio == true
         } cleanup: {

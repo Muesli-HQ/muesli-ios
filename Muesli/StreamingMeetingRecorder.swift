@@ -48,6 +48,30 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
 
         _ = try AudioInputRouteManager.configureForRecording(stage: routeStage)
 
+        try startConfigured(routeStage: routeStage, retainedAudioURL: retainedAudioURL, chunksDirectory: chunksDirectory)
+    }
+
+    #if DEBUG
+    @MainActor
+    func startForTimingExperiment(
+        chunksDirectory: URL, retainedAudioURL: URL?, routeStage: String,
+        delayMilliseconds: Int, validate: () throws -> Void
+    ) async throws {
+        guard !isRunning else { return }
+        self.chunksDirectory = chunksDirectory
+        try FileManager.default.createDirectory(at: chunksDirectory, withIntermediateDirectories: true)
+        _ = try AudioInputRouteManager.configureForRecording(stage: routeStage)
+        let activatedAt = ContinuousClock.now
+        try await CaptureStartupTimingExperiment.waitAfterActivation(milliseconds: delayMilliseconds, validate: validate)
+        KeyboardDiagnosticsLog.record("recording.timingPauseCompleted", [
+            "delay_ms": String(delayMilliseconds),
+            "elapsed": String(describing: activatedAt.duration(to: .now))
+        ])
+        try startConfigured(routeStage: routeStage, retainedAudioURL: retainedAudioURL, chunksDirectory: chunksDirectory)
+    }
+    #endif
+
+    private func startConfigured(routeStage: String, retainedAudioURL: URL?, chunksDirectory: URL) throws {
         var startupStep = "format"
         do {
             guard let targetFormat = AVAudioFormat(

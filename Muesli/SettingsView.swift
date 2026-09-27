@@ -37,6 +37,10 @@ struct SettingsView: View {
     @State private var modelRemovalErrorMessage: String?
     @State private var isActionButtonOnboardingPresented = false
 
+    #if DEBUG
+    @AppStorage(CaptureStartupTimingExperiment.preferenceKey) private var captureStartupDelay = false
+    #endif
+
     var body: some View {
         NavigationStack {
             settingsContent
@@ -139,6 +143,19 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     settingsHeader
+                    #if DEBUG
+                    if CaptureStartupTimingExperiment.isAvailable {
+                        MuesliSurface {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Toggle("Delay Action Button startup by 250 ms", isOn: $captureStartupDelay)
+                                Text("Developer comparison: off starts immediately. Applies to the first new recorder attempt only; retries and persistent-mic reuse are unchanged.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(MuesliTheme.spacing16)
+                        }
+                    }
+                    #endif
 
                     if #available(iOS 18.0, *), ActionButtonHardware.isSupported {
                         MuesliSurface {

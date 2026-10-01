@@ -153,8 +153,11 @@ The existing capture path tags startup logs with a task-local capture request ID
 
 For the recurring background CoreAudio failure, compare Action Button → foreground Quick Note → Action Button on Pico. Correlate configure/activate/input-route events, recorder preparation/start markers, intent capture entry/exit, scene/interruptions, and deactivation callers. A successful simulator test does not validate background recording authorization. This instrumentation does not claim to fix the OS failure or introduce a fallback flow.
 
-### Development timing comparison
+### Startup recovery cleanup
 
-MuesliDev Settings exposes “Delay Action Button startup by 250 ms” (default off). This is DEBUG-only and restricted to the dev bundle. On the first fresh streaming recorder attempt for Action Button dictation, both modes use the same session activation and recorder setup; delayed mode awaits250ms after activation. The shared existing engine preparation/start implementation follows. The wait revalidates request ownership and task cancellation. Existing retry delays and all later attempts remain unchanged. Foreground Quick Note, meetings, and persistent-mic segment reuse do not use the switch.
+The temporary development delay and fault-injection controls have been removed.
+Startup uses the normal recorder path; saved experimental preferences are no longer read.
 
-For an exploratory paired comparison, turn keyboard mic off, select a mode, leave the app, disconnect the cable and let Pico stay locked/idle for a comparable period (e.g.10minutes), then invoke Action Button without opening Muesli. Record whether it failed or started, including whether text was delivered. Repeat alternating modes across several idle periods; immediate repeated presses are warm-start observations, not independent idle trials. Pull logs before the bounded buffer rolls over. Compare recording.timingExperiment delay_ms and recording.engineAttempt with recorder_start_failed, recording.inputReady, and recording.started. Count first-attempt failures separately from recovered retries. A difference supports further timing investigation, not proof of a permanent fix or a measured250ms hardware readiness interval.
+Failed recorder startup discards only that attempt's audio files. The session
+checkpoint manifest must survive retries so Stop can finalize the successful
+attempt. Full recording cancellation still removes the checkpoint directory.

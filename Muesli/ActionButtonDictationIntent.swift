@@ -236,7 +236,7 @@ enum AudioEngineStartupRecovery {
 
     static func run(
         validate: () throws -> Void,
-        start: () async throws -> Void,
+        start: () throws -> Void,
         hasReceivedAudio: () -> Bool,
         cleanup: () -> Void,
         wait: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
@@ -246,7 +246,7 @@ enum AudioEngineStartupRecovery {
             try Task.checkCancellation()
             try validate()
             do {
-                try await start()
+                try start()
                 return
             } catch {
                 let retry = attempt < 3 && !hasReceivedAudio() && isRetryable(error)
@@ -259,26 +259,3 @@ enum AudioEngineStartupRecovery {
         }
     }
 }
-
-#if DEBUG
-/// Diagnostic-only pause; never changes ownership or adds a recording state.
-@MainActor
-enum CaptureStartupTimingExperiment {
-    static let preferenceKey = "muesli.dev.captureStartupDelay"
-    static var isAvailable: Bool { Bundle.main.bundleIdentifier == "com.phequals7.muesli.ios.dev" }
-
-    static func waitAfterActivation(
-        milliseconds: Int,
-        validate: () throws -> Void,
-        wait: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
-    ) async throws {
-        try Task.checkCancellation()
-        try validate()
-        if milliseconds > 0 {
-            try await wait(.milliseconds(milliseconds))
-        }
-        try Task.checkCancellation()
-        try validate()
-    }
-}
-#endif

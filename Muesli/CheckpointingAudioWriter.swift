@@ -130,9 +130,18 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
         }
     }
 
+    /// Startup attempts do not own the session manifest or checkpoint directory.
+    func discardFailedStart() {
+        discardAudio(removingCheckpointDirectory: false)
+    }
+
     func cancel() {
-        // Cancellation owns the entire per-recording checkpoint directory. Callers
-        // should not need a second cleanup pass to remove already-rotated chunks.
+        discardAudio(removingCheckpointDirectory: true)
+    }
+
+    private func discardAudio(removingCheckpointDirectory: Bool) {
+        // Full cancellation removes rotated chunks too. A failed startup removes
+        // only its audio files, preserving the coordinator-owned session manifest.
         let urls = queue.sync { () -> [URL] in
             state.isClosed = true
             state.checkpointFile = nil
@@ -142,7 +151,7 @@ final class CheckpointingAudioWriter: @unchecked Sendable {
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
         }
-        if FileManager.default.fileExists(atPath: checkpointDirectory.path) {
+        if removingCheckpointDirectory && FileManager.default.fileExists(atPath: checkpointDirectory.path) {
             try? FileManager.default.removeItem(at: checkpointDirectory)
         }
     }

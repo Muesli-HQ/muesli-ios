@@ -135,35 +135,6 @@ final class ActionButtonDictationTests: XCTestCase {
         XCTAssertFalse(recorder.isPlaybackEnabled)
     }
 
-    #if DEBUG
-    func testTimingExperimentImmediateStartDoesNotWait() async throws {
-        try await CaptureStartupTimingExperiment.waitAfterActivation(milliseconds: 0, validate: {}) { _ in
-            XCTFail("Immediate baseline must not pause")
-        }
-    }
-
-    func testTimingExperimentRevalidatesOwnershipAfterPause() async {
-        var ownsRequest = true
-        do {
-            try await CaptureStartupTimingExperiment.waitAfterActivation(milliseconds: 250, validate: {
-                guard ownsRequest else { throw CancellationError() }
-            }) { delay in
-                XCTAssertEqual(delay, .milliseconds(250))
-                ownsRequest = false
-            }
-            XCTFail("Must not start a cancelled or replaced request")
-        } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
-    }
-
-    func testTimingExperimentPropagatesCancelledWait() async {
-        do {
-            try await CaptureStartupTimingExperiment.waitAfterActivation(milliseconds: 250, validate: {}) { _ in
-                throw CancellationError()
-            }
-            XCTFail("Must not continue after cancellation")
-        } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
-    }
-    #endif
 
     func testStartProducesNoShortcutOutputItem() {
         XCTAssertNil(ActionButtonShortcutOutput.intentResult(nil).value)

@@ -22,6 +22,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
 
     private struct FileState {
         var latestPowerDB: Float = -160
+        var hasReceivedAudio = false
     }
 
     private let engine = AVAudioEngine()
@@ -47,6 +48,10 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
 
         _ = try AudioInputRouteManager.configureForRecording(stage: routeStage)
 
+        try startConfigured(routeStage: routeStage, retainedAudioURL: retainedAudioURL, chunksDirectory: chunksDirectory)
+    }
+
+    private func startConfigured(routeStage: String, retainedAudioURL: URL?, chunksDirectory: URL) throws {
         var startupStep = "format"
         do {
             guard let targetFormat = AVAudioFormat(
@@ -86,8 +91,11 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
             }
             tapInstalled = true
             startupStep = "audio engine"
+            KeyboardDiagnosticsLog.record("recorder.prepareRequested")
             try prepareInputOnlyEngine()
+            KeyboardDiagnosticsLog.record("recorder.prepareCompleted")
             try engine.start()
+            KeyboardDiagnosticsLog.record("recorder.engineStarted")
             isRunning = true
         } catch {
             // Preserve the OS error before cleanup changes the audio session.
@@ -99,7 +107,10 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
                 "domain": nsError.domain,
                 "code": String(nsError.code),
                 "sample_rate": String(engine.inputNode.outputFormat(forBus: 0).sampleRate),
-                "channels": String(engine.inputNode.outputFormat(forBus: 0).channelCount)
+                "channels": String(engine.inputNode.outputFormat(forBus: 0).channelCount),
+                "input_available": String(AVAudioSession.sharedInstance().isInputAvailable),
+                "other_audio": String(AVAudioSession.sharedInstance().isOtherAudioPlaying),
+                "input_ports": AVAudioSession.sharedInstance().currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
             ])
             cleanupAfterFailedStart()
             if error is AudioRecorder.RecordingError {
@@ -121,6 +132,12 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         guard unit.isInputEnabled && !unit.isOutputEnabled else {
             throw AudioRecorder.RecordingError.startFailed(stage: "microphone-only configuration")
         }
+    }
+
+    var hasReceivedAudio: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return state.hasReceivedAudio
     }
 
     var isPlaybackEnabled: Bool { engine.inputNode.auAudioUnit.isOutputEnabled }
@@ -169,7 +186,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         lock.unlock()
         let result = writer?.finish()
 
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
 
         return StopResult(
             finalChunk: result?.finalCheckpoint,
@@ -192,7 +209,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         state = FileState()
         lock.unlock()
         writer?.cancel()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
     }
 
     func currentPower() -> Float {
@@ -244,6 +261,7 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         lock.lock()
         audioWriter?.append(monoBuffer)
         state.latestPowerDB = powerDB
+        state.hasReceivedAudio = true
         lock.unlock()
 
         if let audioBuffer = Self.copyBuffer(monoBuffer) {
@@ -284,11 +302,11 @@ final class StreamingMeetingRecorder: @unchecked Sendable {
         lock.lock()
         let writer = audioWriter
         audioWriter = nil
-        state = FileState()
+        state = FileState(hasReceivedAudio: state.hasReceivedAudio)
         lock.unlock()
-        writer?.cancel()
+        writer?.discardFailedStart()
         isRunning = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioInputRouteManager.deactivate()
     }
 
 }

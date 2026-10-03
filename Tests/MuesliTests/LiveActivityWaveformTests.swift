@@ -2,6 +2,31 @@ import XCTest
 @testable import Muesli
 
 final class LiveActivityWaveformTests: XCTestCase {
+    func testKeyboardMicActivityDecodesOlderStateAndCarriesMeterSamples() throws {
+        let json = #"{"isRecording":true,"isReady":true}"#
+        var state = try JSONDecoder().decode(KeyboardMicActivityAttributes.ContentState.self, from: Data(json.utf8))
+        XCTAssertNil(state.waveform)
+        XCTAssertFalse(state.showsCompletion())
+        state.waveform = [0, 0.2, 0.5, 1, 0.3]
+        let restored = try JSONDecoder().decode(KeyboardMicActivityAttributes.ContentState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(restored, state)
+        XCTAssertEqual(restored.title, "Listening")
+    }
+
+    func testCompletionExpiresAndNeverAppearsForStandbyOrNewRecording() {
+        let now = Date(timeIntervalSinceReferenceDate: 100)
+        var state = KeyboardMicActivityAttributes.ContentState(isRecording: false, isReady: true)
+        XCTAssertFalse(state.showsCompletion(at: now))
+        state.completionExpiresAt = now.addingTimeInterval(5)
+        XCTAssertTrue(state.showsCompletion(at: now.addingTimeInterval(4.9)))
+        XCTAssertFalse(state.showsCompletion(at: now.addingTimeInterval(5)))
+        state.isRecording = true
+        XCTAssertFalse(state.showsCompletion(at: now))
+        state.isRecording = false
+        state.isReady = false
+        XCTAssertFalse(state.showsCompletion(at: now))
+    }
+
     func testMetersAreCoalescedAndReturnToQuietWithoutEndlessSilenceUpdates() {
         var sampler = MuesliLiveActivityWaveformSampler()
         var updates: [(Double, [Double])] = []

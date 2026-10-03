@@ -26,7 +26,6 @@ struct DictationView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @AppStorage(MuesliPreferences.recordingMicrophonePreferenceKey) private var microphonePreference = RecordingMicrophonePreference.automatic.rawValue
-    @AppStorage(MuesliPreferences.keyboardSessionModeKey) private var keyboardSessionMode = false
     @AppStorage(MuesliPreferences.actionButtonOnboardingCompletedKey) private var actionButtonSetupCompleted = false
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
@@ -97,10 +96,6 @@ struct DictationView: View {
             .onChange(of: microphonePreference) { _, _ in
                 guard isActive else { return }
                 coordinator.refreshAudioInputRoute()
-            }
-            .onChange(of: keyboardSessionMode) { _, enabled in
-                guard isActive else { return }
-                coordinator.setKeyboardSessionModeEnabled(enabled)
             }
             .navigationDestination(for: UUID.self) { resultID in
                 if let result = coordinator.voiceNoteHistoryPresentation.history.first(
@@ -224,45 +219,36 @@ struct DictationView: View {
         )
     }
 
+    private var keyboardMicBinding: Binding<Bool> {
+        Binding(
+            get: { coordinator.isKeyboardMicOn || coordinator.keyboardSessionStatusText == "Starting" },
+            set: { enabled in
+                if enabled {
+                    coordinator.setKeyboardSessionModeEnabled(true)
+                } else {
+                    Task { await coordinator.turnOffKeyboardMic() }
+                }
+            }
+        )
+    }
+
     private var keyboardSessionHomeControl: some View {
         MuesliSurface(
             cornerRadius: MuesliTheme.cornerMedium,
-            tint: keyboardSessionMode ? MuesliTheme.success : MuesliTheme.accent,
+            tint: coordinator.isKeyboardMicOn ? MuesliTheme.success : MuesliTheme.accent,
             isInteractive: true
         ) {
-            HStack(spacing: MuesliTheme.spacing8) {
-                ZStack {
-                    Circle()
-                        .fill(keyboardSessionMode ? MuesliTheme.success.opacity(0.16) : MuesliTheme.accentSubtle)
-                    Image(systemName: keyboardSessionMode ? "mic.circle.fill" : "mic.circle")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(keyboardSessionMode ? MuesliTheme.success : MuesliTheme.accent)
-                }
-                .frame(width: 32, height: 32)
-                .accessibilityHidden(true)
-
-                Text("Persistent mic for improved experience")
+            Toggle(isOn: keyboardMicBinding) {
+                Label("Keyboard mic", systemImage: "mic.fill")
                     .font(MuesliTheme.callout())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                    .lineLimit(1)
-                    .allowsTightening(true)
-                    .minimumScaleFactor(0.82)
-
-                Spacer(minLength: MuesliTheme.spacing8)
-
-                Toggle("Persistent mic for improved experience", isOn: $keyboardSessionMode)
-                    .labelsHidden()
-                    .tint(MuesliTheme.success)
-                    .frame(minWidth: 52, minHeight: 44)
             }
+            .tint(MuesliTheme.success)
+            .frame(minHeight: 44)
             .padding(.horizontal, MuesliTheme.spacing12)
             .padding(.vertical, MuesliTheme.spacing4)
-            .contentShape(Rectangle())
+            .accessibilityHint("Turn on to keep the mic ready. Turn off to end the current mic session.")
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Persistent mic for improved experience")
-        .accessibilityValue(keyboardSessionMode ? "On" : "Off")
-        .accessibilityHint("Keeps a Muesli microphone session ready for keyboard dictation.")
     }
 
     private func totalDictationWords(in history: [DictationResult]) -> Int {

@@ -68,7 +68,9 @@ final class MuesliSmokeUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-island-waveform", "--muesli-ui-testing-island-copy"]
         app.launch()
-        XCTAssertTrue(app.staticTexts["islandPreview.ready"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["islandPreview.ready"].waitForExistence(timeout: 15),
+                      app.staticTexts["islandPreview.failure"].exists
+                        ? app.staticTexts["islandPreview.failure"].label : "Island preview did not become ready")
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         try await Task.sleep(for: .seconds(6))

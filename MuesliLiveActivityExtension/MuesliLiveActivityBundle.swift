@@ -5,5 +5,6 @@ import WidgetKit
 struct MuesliLiveActivityBundle: WidgetBundle {
     var body: some Widget {
         MuesliRecordingLiveActivity()
+        KeyboardMicLiveActivity()
     }
 }

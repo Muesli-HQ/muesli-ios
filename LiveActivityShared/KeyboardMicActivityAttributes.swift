@@ -1,0 +1,20 @@
+import ActivityKit
+import Foundation
+
+/// A microphone session outlives individual recordings and has no history row.
+struct KeyboardMicActivityAttributes: ActivityAttributes {
+    struct ContentState: Codable, Hashable {
+        var isRecording: Bool
+        var isReady: Bool
+        var waveform: [Double]? = nil
+        var completionExpiresAt: Date? = nil
+
+        func showsCompletion(at date: Date = .now) -> Bool {
+            !isRecording && isReady && completionExpiresAt.map { date < $0 } == true
+        }
+
+        var title: String { isRecording ? "Listening" : (isReady ? "Mic ready" : "Mic paused") }
+    }
+
+    let sessionID: String
+}

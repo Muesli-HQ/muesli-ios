@@ -48,12 +48,30 @@ struct AudioInputRouteSnapshot: Equatable {
 }
 
 enum AudioInputRouteManager {
+    /// Record every app-owned deactivation, including cleanup outside startup's task.
+    static func deactivate(caller: String = #function, file: String = #fileID) {
+        KeyboardDiagnosticsLog.record("audioSession.deactivateRequested", ["caller": caller, "file": file])
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            KeyboardDiagnosticsLog.record("audioSession.deactivated", ["caller": caller, "file": file])
+        } catch {
+            let error = error as NSError
+            KeyboardDiagnosticsLog.record("audioSession.deactivationFailed", [
+                "caller": caller, "file": file, "domain": error.domain, "code": String(error.code)
+            ])
+        }
+    }
+
     static func configureForRecording(
         stage: String,
         preference: RecordingMicrophonePreference = MuesliPreferences.recordingMicrophonePreference
     ) throws -> AudioInputRouteSnapshot {
         let session = AVAudioSession.sharedInstance()
         let activationStartedAt = Date()
+        KeyboardDiagnosticsLog.record("audioSession.configureRequested", [
+            "stage": stage, "category_before": session.category.rawValue,
+            "mode_before": session.mode.rawValue, "options_before": String(session.categoryOptions.rawValue)
+        ])
         var step = "category"
         do {
             try session.setCategory(
@@ -62,6 +80,7 @@ enum AudioInputRouteManager {
                 options: recordingCategoryOptions
             )
             step = "activation"
+            KeyboardDiagnosticsLog.record("audioSession.activateRequested", ["stage": stage])
             try session.setActive(true)
         } catch {
             recordActivationFailure(error, stage: stage, step: step, attempt: 1, session: session)
@@ -71,7 +90,7 @@ enum AudioInputRouteManager {
                 throw AudioRecorder.RecordingError.audioSessionFailed(stage: stage, underlying: error)
             }
             do {
-                try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                deactivate()
                 step = "category"
                 try session.setCategory(
                     .playAndRecord,
@@ -103,6 +122,11 @@ enum AudioInputRouteManager {
             #endif
         }
 
+        KeyboardDiagnosticsLog.record("audioSession.inputConfigured", [
+            "stage": stage, "preference": preference.rawValue,
+            "input_ports": session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ","),
+            "output_ports": session.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        ])
         let snapshot = currentSnapshot(preference: preference)
         #if DEBUG
         print("Muesli audio route configured [\(stage)]: preference=\(preference.rawValue)")

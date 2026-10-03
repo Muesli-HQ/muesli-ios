@@ -149,6 +149,42 @@ final class VoiceNoteCheckpointStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: continuousURL.path))
     }
 
+    func testFailedStartupPreservesManifestAndRetryCanFinalizeAudio() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try await fixture.checkpoints.manifest(sessionID: fixture.sessionID)
+        let continuousURL = fixture.root.appendingPathComponent("continuous.wav")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+            channels: 1, interleaved: false))
+
+        // Multiple failed attempts must preserve the same session metadata.
+        for _ in 0..<2 {
+            let failed = try Muesli.CheckpointingAudioWriter(
+                continuousAudioURL: continuousURL,
+                checkpointDirectory: fixture.directory, format: format)
+            failed.discardFailedStart()
+            let preserved = try await fixture.checkpoints.manifest(sessionID: fixture.sessionID)
+            XCTAssertEqual(preserved, original)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: continuousURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(
+                atPath: fixture.directory.appendingPathComponent("chunk-0000.wav").path))
+        }
+
+        let retry = try Muesli.CheckpointingAudioWriter(
+            continuousAudioURL: continuousURL,
+            checkpointDirectory: fixture.directory, format: format)
+        retry.append(try makeBuffer(format: format, frameCount: 1_600))
+        let result = retry.finish()
+        XCTAssertNil(result.failure)
+        let chunk = try XCTUnwrap(result.finalCheckpoint)
+        let finalized = try await fixture.checkpoints.finalize(
+            sessionID: fixture.sessionID, finalCheckpoint: chunk)
+        XCTAssertNotNil(finalized.finalizedAt)
+        XCTAssertEqual(finalized.entries.count, 1)
+        XCTAssertEqual(try AVAudioFile(forReading: continuousURL).length, 1_600)
+    }
+
     private func makeFixture() async throws -> (
         root: URL,
         directory: URL,

@@ -248,7 +248,7 @@ private struct KeyboardHandoffOverlay: View {
                     )
                     .frame(width: 220, height: 56)
 
-                    Text(coordinator.isRecording ? "Listening" : "Transcribing")
+                    Text(coordinator.isRecording ? "Listening" : coordinator.keyboardSessionStatusText)
                         .font(MuesliTheme.title2())
                         .foregroundStyle(MuesliTheme.textPrimary)
 
@@ -263,7 +263,7 @@ private struct KeyboardHandoffOverlay: View {
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .multilineTextAlignment(.center)
 
-                    Text("Keep Muesli recording in the background, then tap Stop on the Muesli keyboard. The transcript will insert into the focused text box.")
+                    Text("Swipe right across the bottom edge to return to your app. Tap Stop on the keyboard to finish dictating. To switch the microphone off, press and hold the Dynamic Island, then tap Turn mic off.")
                         .font(MuesliTheme.body())
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .multilineTextAlignment(.center)
@@ -272,7 +272,13 @@ private struct KeyboardHandoffOverlay: View {
 
                 Spacer()
 
-                Label("Use the app switcher or swipe gesture to return", systemImage: "arrow.left.arrow.right")
+                if coordinator.isKeyboardMicOn {
+                    Button("Turn mic off", systemImage: "mic.slash.fill") {
+                        Task { await coordinator.turnOffKeyboardMic() }
+                    }
+                    .frame(minHeight: 44)
+                }
+                Label("Swipe right across the bottom edge", systemImage: "arrow.left.arrow.right")
                     .font(MuesliTheme.headline())
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .frame(maxWidth: .infinity)

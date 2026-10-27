@@ -54,6 +54,32 @@ final class AudioImportTests: XCTestCase {
         XCTAssertNotEqual(source, output)
     }
 
+    func testVoicemailRateWAVAndCompressedM4AConvert() async throws {
+        let root = try temporaryDirectory()
+        for (name, rate, codec) in [("voicemail.wav", 8_000.0, kAudioFormatLinearPCM),
+                                    ("voicemail.m4a", 16_000.0, kAudioFormatMPEG4AAC)] {
+            let source = root.appendingPathComponent(name)
+            try writeVoicemailFixture(to: source, rate: rate, codec: codec)
+            let (wav, duration) = try await AudioFileImporter.convert(sourceURL: source)
+            defer { try? FileManager.default.removeItem(at: wav) }
+            XCTAssertEqual(duration, 1, accuracy: 0.15)
+            let file = try AVAudioFile(forReading: wav)
+            XCTAssertEqual(file.fileFormat.sampleRate, 16_000)
+            XCTAssertEqual(file.fileFormat.channelCount, 1)
+        }
+    }
+
+    private func writeVoicemailFixture(to url: URL, rate: Double, codec: AudioFormatID) throws {
+        let settings: [String: Any] = [AVFormatIDKey: codec, AVSampleRateKey: rate, AVNumberOfChannelsKey: 1]
+        let writer = try AVAudioFile(forWriting: url, settings: settings)
+        let buffer = AVAudioPCMBuffer(pcmFormat: writer.processingFormat, frameCapacity: AVAudioFrameCount(rate))!
+        buffer.frameLength = buffer.frameCapacity
+        for frame in 0..<Int(buffer.frameLength) {
+            buffer.floatChannelData![0][frame] = Float(sin(Double(frame) * 2 * .pi * 440 / rate)) * 0.1
+        }
+        try writer.write(from: buffer)
+    }
+
     func testInvalidAudioFailsWithoutTouchingSource() async throws {
         let source = try temporaryDirectory().appendingPathComponent("invalid.mp3")
         try Data("not audio".utf8).write(to: source)

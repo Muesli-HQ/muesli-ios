@@ -29,15 +29,25 @@ enum AudioImportInbox {
         guard extensions.contains(source.pathExtension.lowercased()) else { throw ImportError.unsupportedFormat }
         let access = source.startAccessingSecurityScopedResource()
         defer { if access { source.stopAccessingSecurityScopedResource() } }
-        let values = try source.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-        guard values.isRegularFile == true, (values.fileSize ?? 0) > 0 else { throw ImportError.emptyFile }
         let root = try root ?? directory()
         let item = Item(id: UUID(), title: title ?? source.deletingPathExtension().lastPathComponent,
                         fileName: "audio.\(source.pathExtension.lowercased())")
         let stage = root.appendingPathComponent(".\(item.id.uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stage) }
-        try FileManager.default.copyItem(at: source, to: stage.appendingPathComponent(item.fileName))
+        // File providers may need to download/materialize the selected file first.
+        // Coordinate the read instead of copying an uncoordinated provider URL.
+        var coordinationError: NSError?
+        var copyError: Error?
+        NSFileCoordinator().coordinate(readingItemAt: source, options: [], error: &coordinationError) { readable in
+            do {
+                let values = try readable.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard values.isRegularFile == true, (values.fileSize ?? 0) > 0 else { throw ImportError.emptyFile }
+                try FileManager.default.copyItem(at: readable, to: stage.appendingPathComponent(item.fileName))
+            } catch { copyError = error }
+        }
+        if let coordinationError { throw coordinationError }
+        if let copyError { throw copyError }
         try JSONEncoder().encode(item).write(to: stage.appendingPathComponent("item.json"), options: .atomic)
         try FileManager.default.moveItem(at: stage, to: root.appendingPathComponent(item.id.uuidString))
         return item

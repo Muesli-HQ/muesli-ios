@@ -92,7 +92,7 @@ struct MeetingsView: View {
                 allowedContentTypes: [.audio, .mpeg4Movie]) { result in
                 switch result {
                 case .success(let url): coordinator.receiveAudioFile(url)
-                case .failure(let error): coordinator.audioImportError = error.localizedDescription
+                case .failure(let error): coordinator.reportAudioImportError(error, stage: "Choose file")
                 }
             }
             .background(MuesliTheme.backgroundBase)

@@ -6446,15 +6446,35 @@ final class DictationCoordinator {
     var audioImportNavigationID: UUID?
     var pendingAudioImports: [AudioImportInbox.Item] = []
     var audioImportError: String?
+    var audioImportErrorDetails: String?
     var isImportingAudio = false
     private var receivingAudioCount = 0
     var isReceivingAudio: Bool { receivingAudioCount > 0 }
     var canImportAudio: Bool { !isImportingAudio && isTranscriptionModelReady && canSelectTranscriptionModelsFromKeyboard }
     private var audioImportTask: Task<Void, Never>?
 
+    func reportAudioImportError(_ error: Error, stage: String) {
+        let nsError = error as NSError
+        guard !(nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError) else { return }
+        if let described = error as? LocalizedError, let description = described.errorDescription {
+            audioImportError = description
+        } else if stage == "Decode audio" {
+            audioImportError = "This audio could not be decoded. Try exporting it as M4A or WAV."
+        } else if stage == "Choose file" || stage == "Copy from Files" {
+            audioImportError = "Couldn’t read this file from Files. Download it to On My iPhone, then try again."
+        } else {
+            audioImportError = "Couldn’t finish importing the audio. Your source file is unchanged."
+        }
+        var details = "\(stage): \(nsError.domain) (\(nsError.code))"
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            details += " · \(underlying.domain) (\(underlying.code))"
+        }
+        audioImportErrorDetails = details
+    }
+
     func refreshAudioImports() {
         do { pendingAudioImports = try AudioImportInbox.items() }
-        catch { audioImportError = error.localizedDescription }
+        catch { reportAudioImportError(error, stage: "Read saved imports") }
     }
 
     func receiveAudioFile(_ url: URL) {
@@ -6470,13 +6490,13 @@ final class DictationCoordinator {
                     try AudioImportInbox.enqueue(url)
                 }.value
                 refreshAudioImports()
-            } catch { audioImportError = error.localizedDescription }
+            } catch { reportAudioImportError(error, stage: "Copy from Files") }
         }
     }
 
     func dismissAudioImport(_ item: AudioImportInbox.Item) {
         do { try AudioImportInbox.remove(item); refreshAudioImports() }
-        catch { audioImportError = error.localizedDescription }
+        catch { reportAudioImportError(error, stage: "Remove import") }
     }
 
     func cancelAudioImport() { audioImportTask?.cancel() }
@@ -6487,6 +6507,7 @@ final class DictationCoordinator {
         audioImportError = nil
         audioImportTask = Task {
             defer { isImportingAudio = false; audioImportTask = nil }
+            var stage = "Read saved import"
             do {
                 // A published session is authoritative if the app stopped before inbox cleanup.
                 if let existing = try store.activeRecordingSession(id: item.id) {
@@ -6497,9 +6518,11 @@ final class DictationCoordinator {
                     return
                 }
                 let source = try AudioImportInbox.audioURL(item)
+                stage = "Decode audio"
                 let (wav, duration) = try await AudioFileImporter.convert(sourceURL: source)
                 defer { try? FileManager.default.removeItem(at: wav) }
                 try Task.checkCancellation()
+                stage = "Save imported audio"
                 let destination = try store.newAudioFileURL(sessionID: item.id)
                 // A previous interrupted import can leave audio without a published session.
                 if FileManager.default.fileExists(atPath: destination.path) {
@@ -6522,7 +6545,7 @@ final class DictationCoordinator {
                 audioImportNavigationID = session.id
             } catch is CancellationError {
                 // Keep the inbox copy so the user can retry without finding the original again.
-            } catch { audioImportError = error.localizedDescription }
+            } catch { reportAudioImportError(error, stage: stage) }
         }
     }
 

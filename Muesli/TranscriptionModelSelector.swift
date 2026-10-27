@@ -4,6 +4,7 @@ struct TranscriptionModelSelector: View {
     @Binding var selection: LocalTranscriptionModel
     var downloadedModels: Set<LocalTranscriptionModel>
     var showsHeader = true
+    var compact = false
     var preparation: ModelPreparationState? = nil
     var onSelect: ((LocalTranscriptionModel) -> Void)? = nil
 
@@ -65,17 +66,17 @@ struct TranscriptionModelSelector: View {
                         }
 
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text(preparation?.isReady == true && downloadedModels.contains(selection) ? "Active model" : "Selected model")
+                        if !compact { Text(preparation?.isReady == true && downloadedModels.contains(selection) ? "Active model" : "Selected model")
                             .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .foregroundStyle(MuesliTheme.textSecondary) }
                         Text(selection.displayName)
                             .font(.system(.subheadline, design: .rounded, weight: .semibold))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.82)
-                        Text(selection == .appleSpeech ? (preparation?.isReady == true ? "Ready on this iPhone" : "Language setup managed by iOS") : catalogState(for: selection).statusLabel)
+                        if !compact { Text(selection == .appleSpeech ? (preparation?.isReady == true ? "Ready on this iPhone" : "Language setup managed by iOS") : catalogState(for: selection).statusLabel)
                             .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(catalogState(for: selection).tint)
+                            .foregroundStyle(catalogState(for: selection).tint) }
                     }
 
                     Spacer(minLength: MuesliTheme.spacing8)
@@ -96,10 +97,9 @@ struct TranscriptionModelSelector: View {
             }
             .menuOrder(.fixed)
 
-            SelectedTranscriptionModelDetails(
-                model: selection,
-                state: catalogState(for: selection)
-            )
+            if !compact {
+                SelectedTranscriptionModelDetails(model: selection, state: catalogState(for: selection))
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Transcription model")

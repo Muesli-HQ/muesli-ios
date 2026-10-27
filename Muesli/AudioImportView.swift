@@ -3,14 +3,15 @@ import UniformTypeIdentifiers
 
 struct AudioImportView: View {
     @Bindable var coordinator: DictationCoordinator
+    @State private var showsPicker = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Text("Imported audio is saved in Meetings. Audio stays on this iPhone; transcripts follow your sync settings.")
+                    Text("Save to Meetings").font(.subheadline).foregroundStyle(.secondary)
                     TranscriptionModelSelector(selection: $coordinator.selectedTranscriptionModel,
-                        downloadedModels: coordinator.downloadedTranscriptionModels,
+                        downloadedModels: coordinator.downloadedTranscriptionModels, showsHeader: false, compact: true,
                         preparation: coordinator.modelPreparation, onSelect: coordinator.selectTranscriptionModel)
                         .disabled(coordinator.isImportingAudio || coordinator.isRecording || coordinator.isMeetingTranscribing || coordinator.hasMeetingRecordingInProgress)
                     ModelReadinessView(state: coordinator.modelPreparation, modelName: coordinator.selectedTranscriptionModel.shortName, retry: coordinator.prepareModel)
@@ -28,7 +29,24 @@ struct AudioImportView: View {
                     ProgressView("Importing audio…")
                     Button("Cancel Import", role: .cancel) { coordinator.cancelAudioImport() }
                 }
-                if let error = coordinator.audioImportError { Text(error).foregroundStyle(.red) }
+                if let error = coordinator.audioImportError {
+                    Section {
+                        Text(error).foregroundStyle(.red)
+                        if let details = coordinator.audioImportErrorDetails {
+                            DisclosureGroup("Error Details") { Text(details).font(.caption).textSelection(.enabled) }
+                        }
+                        Button("Choose Another File") { showsPicker = true }
+                    }
+                }
+                if coordinator.pendingAudioImports.isEmpty && coordinator.audioImportError == nil {
+                    Text("No audio waiting to import.").foregroundStyle(.secondary)
+                }
+            }
+            .fileImporter(isPresented: $showsPicker, allowedContentTypes: [.audio, .mpeg4Movie]) { result in
+                switch result {
+                case .success(let url): coordinator.audioImportError = nil; coordinator.receiveAudioFile(url)
+                case .failure(let error): coordinator.reportAudioImportError(error, stage: "Choose file")
+                }
             }
             .interactiveDismissDisabled(coordinator.isImportingAudio)
             .navigationTitle("Import Audio")

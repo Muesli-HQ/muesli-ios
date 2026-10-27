@@ -94,10 +94,12 @@ struct MeetingsView: View {
                 Text("Muesli will sync meeting transcripts, notes, and summaries with your Mac through your private iCloud account. Audio stays local.")
             }
             .onAppear {
+                coordinator.ensureModelReadyForRecording()
                 refreshVisibleStateIfNeeded()
             }
             .onChange(of: isActive) { _, active in
                 guard active else { return }
+                coordinator.ensureModelReadyForRecording()
                 refreshVisibleStateIfNeeded()
             }
             .navigationDestination(for: UUID.self) { sessionID in
@@ -113,6 +115,9 @@ struct MeetingsView: View {
                         liveState: coordinator.voiceNoteLiveState,
                         statusText: coordinator.activeMeetingSessionID == session.id ? coordinator.effectiveMeetingStatusText : session.phase.title,
                         actionStatusText: coordinator.clipboardStatusText,
+                        modelPreparation: coordinator.modelPreparation,
+                        modelName: coordinator.selectedTranscriptionModel.shortName,
+                        onPrepareModel: coordinator.prepareModel,
                         onTranscribe: { coordinator.transcribeSession(session) },
                         onStopRecording: { coordinator.stopCurrentMeetingRecording() },
                         onDiscardRecording: {
@@ -237,6 +242,9 @@ struct MeetingsView: View {
                         .disabled(coordinator.isMeetingTranscribing)
 
                     meetingTemplatePicker
+                    ModelReadinessView(state: coordinator.modelPreparation,
+                                       modelName: coordinator.selectedTranscriptionModel.shortName,
+                                       retry: coordinator.prepareModel)
 
                     Button {
                         if let sessionID = coordinator.startMeetingRecording(title: meetingTitle) {
@@ -535,7 +543,7 @@ struct MeetingsView: View {
     }
 
     private var isPrimaryMeetingActionDisabled: Bool {
-        coordinator.isMeetingTranscribing
+        coordinator.isMeetingTranscribing || !coordinator.isTranscriptionModelReady
     }
 
     private func openMeeting(_ sessionID: UUID) {
@@ -935,6 +943,9 @@ private struct MeetingSessionDetailView: View {
     let liveState: VoiceNoteLiveState
     let statusText: String
     let actionStatusText: String?
+    let modelPreparation: ModelPreparationState
+    let modelName: String
+    let onPrepareModel: () -> Void
     let onTranscribe: () -> Void
     let onStopRecording: () -> Void
     let onDiscardRecording: () -> Void
@@ -1390,6 +1401,7 @@ private struct MeetingSessionDetailView: View {
         if canStopRecording || isProcessingCurrentMeeting {
             EmptyView()
         } else if session.phase == .transcriptionQueued {
+            ModelReadinessView(state: modelPreparation, modelName: modelName, retry: onPrepareModel)
             Button(action: onTranscribe) {
                 Label("Transcribe Meeting", systemImage: "waveform.badge.magnifyingglass")
                     .font(MuesliTheme.headline())
@@ -1401,6 +1413,7 @@ private struct MeetingSessionDetailView: View {
                     .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
+            .disabled(!modelPreparation.isReady)
         } else {
             transcriptActionsSection
         }

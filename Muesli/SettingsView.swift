@@ -346,13 +346,14 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     SettingsRow(
                         icon: "checkmark.seal",
-                        title: "Active Model",
+                        title: coordinator.modelPreparation.isReady ? "Active Model" : "Selected Model",
                         value: coordinator.selectedTranscriptionModel.shortName,
                         valueColor: MuesliTheme.textSecondary
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     TranscriptionModelSelector(
                         selection: $coordinator.selectedTranscriptionModel,
+                        downloadedModels: coordinator.downloadedTranscriptionModels,
                         preparation: coordinator.modelPreparation,
                         onSelect: coordinator.selectTranscriptionModel
                     )
@@ -366,8 +367,6 @@ struct SettingsView: View {
                     )
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsRow(icon: "textformat", title: "Language", value: coordinator.selectedTranscriptionModel.capabilityLabel)
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsRow(icon: "iphone", title: "Execution", value: "On device")
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                         Text(coordinator.modelPreparation.status)
@@ -387,7 +386,7 @@ struct SettingsView: View {
                         Button {
                             coordinator.prepareModel()
                         } label: {
-                            Label("Retry Download", systemImage: "arrow.clockwise")
+                            Label("Retry Setup", systemImage: "arrow.clockwise")
                                 .font(MuesliTheme.headline())
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 48)
@@ -455,20 +454,16 @@ struct SettingsView: View {
 
     private func downloadedModelRow(_ model: LocalTranscriptionModel) -> some View {
         HStack(spacing: MuesliTheme.spacing12) {
-            Image(systemName: model.family == .whisper ? "waveform" : "waveform.path.ecg")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(MuesliTheme.accent)
-                .frame(width: 34, height: 34)
-                .background(MuesliTheme.accentSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            TranscriptionModelLogo(model: model)
 
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                 HStack(spacing: MuesliTheme.spacing4) {
                     Text(model.displayName)
-                        .font(MuesliTheme.headline())
+                        .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                        .minimumScaleFactor(0.85)
                         .foregroundStyle(MuesliTheme.textPrimary)
                         .lineLimit(1)
-                    if model == coordinator.selectedTranscriptionModel {
+                    if model == coordinator.selectedTranscriptionModel && coordinator.modelPreparation.isReady {
                         Text("Active")
                             .font(MuesliTheme.captionMedium())
                             .foregroundStyle(MuesliTheme.accent)
@@ -514,8 +509,7 @@ struct SettingsView: View {
 
     private var downloadedTranscriptionModels: [LocalTranscriptionModel] {
         LocalTranscriptionModel.allCases.filter { model in
-            model.isDownloaded
-                || (model == coordinator.selectedTranscriptionModel && coordinator.modelPreparation.isReady)
+            coordinator.downloadedTranscriptionModels.contains(model)
         }
     }
 
@@ -714,6 +708,7 @@ struct SettingsView: View {
 
     private func refreshVisibleSettingsIfNeeded() {
         guard isActive else { return }
+        coordinator.refreshDownloadedModels()
         refreshKeyboardStatus()
         refreshSummarySettings()
         refreshAppleSyncSettings()

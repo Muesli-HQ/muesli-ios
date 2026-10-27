@@ -6,6 +6,15 @@ actor MuesliLiveActivityController {
     private var stoppedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
     private var endedSessionIDs = BoundedRecentSessionIDs(capacity: 256)
 
+    /// App Intents needs the ActivityKit identifier, not our recording UUID.
+    func activeIdentifier(for sessionID: UUID) -> String? {
+        guard let activity,
+              activity.attributes.sessionID == sessionID.uuidString,
+              activity.activityState == .active || activity.activityState == .stale
+        else { return nil }
+        return activity.id
+    }
+
     @discardableResult
     func start(session: RecordingSession, requestID: UUID?, phase: String, detail: String) async -> Bool {
         guard !endedSessionIDs.contains(session.id) else {

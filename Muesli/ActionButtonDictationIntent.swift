@@ -14,7 +14,12 @@ struct ToggleMuesliDictationIntent: AudioRecordingIntent, LiveActivityIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         let capture = try await performActionButtonCapture(.dictation)
-        guard case .stopped(let sessionID) = capture else { return ActionButtonShortcutOutput.intentResult(nil) }
+        if case .started(_, let activityID) = capture {
+            return ActionButtonShortcutOutput.intentResult(nil, activityIdentifier: activityID)
+        }
+        guard case .stopped(let sessionID) = capture else {
+            throw ActionButtonCaptureError.unavailable("The recording did not start.")
+        }
         let store = SharedStore()
         let text = try await ActionButtonShortcutOutput.waitForTranscript {
             guard let session = try store.recordingSession(id: sessionID) else {
@@ -72,8 +77,12 @@ struct ToggleMuesliMeetingIntent: AudioRecordingIntent, LiveActivityIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        _ = try await performActionButtonCapture(.meeting)
-        return .result()
+        let capture = try await performActionButtonCapture(.meeting)
+        var result: IntentResultContainer<Never, Never, Never, Never> = .result()
+        if case .started(_, let activityID) = capture {
+            result.activityIdentifier = activityID
+        }
+        return result
     }
 }
 
@@ -85,7 +94,7 @@ private func performActionButtonCapture(_ mode: ActionButtonCaptureMode) async t
         let result = await ActionButtonCaptureDispatcher.toggle(mode)
         let store = SetupVerificationStore()
         switch result {
-        case .started(let sessionID):
+        case .started(let sessionID, _):
             store.recordActionButtonEvent(.started, mode: mode, sessionID: sessionID)
         case .stopped(let sessionID):
             store.recordActionButtonEvent(.stopped, mode: mode, sessionID: sessionID)
@@ -126,7 +135,7 @@ enum ActionButtonCaptureError: LocalizedError {
 }
 
 enum ActionButtonDictationResult: Sendable, Equatable {
-    case started(sessionID: UUID)
+    case started(sessionID: UUID, activityID: String)
     case stopped(sessionID: UUID)
     case busy(String)
     case failed(String)
@@ -162,9 +171,14 @@ struct ActionButtonTestOutput: Equatable {
 enum ActionButtonShortcutOutput {
     // An empty String is still an output item in Shortcuts. Starting capture must
     // return no item, so "has any value" skips clipboard and confirmation actions.
-    static func intentResult(_ text: String?) -> IntentResultContainer<String, Never, Never, Never> {
+    static func intentResult(_ text: String?, activityIdentifier: String? = nil) -> IntentResultContainer<String, Never, Never, Never> {
         var result: IntentResultContainer<String, Never, Never, Never> = .result(value: "")
         result.value = text.flatMap(ActionButtonClipboardConfirmation.nonemptyTranscript)
+        // iOS validates the recording's Live Activity when perform() returns.
+        // Creating an activity alone does not associate it with this result.
+        if #available(iOS 17.2, *) {
+            result.activityIdentifier = activityIdentifier
+        }
         return result
     }
 

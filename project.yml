@@ -32,7 +32,7 @@ settings:
 packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio.git
-    exactVersion: "0.14.5"
+    exactVersion: "0.17.3"
   TelemetryDeck:
     url: https://github.com/TelemetryDeck/SwiftSDK
     from: "2.12.0"
@@ -191,6 +191,30 @@ targets:
       - target: Muesli
       - sdk: libsqlite3.tbd
 
+  MuesliDevTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/MuesliTests/ModelDownloadManifestTests.swift
+      - path: Tests/MuesliTests/ModelSetupFailureTests.swift
+      - path: Tests/MuesliTests/ActionButtonDictationTests.swift
+      - path: Tests/MuesliTests/SettingsModelCatalogTests.swift
+      - path: Tests/MuesliTests/VoiceNoteTranscriptionStopTests.swift
+      - path: Shared
+      - path: MuesliKeyboard
+        excludes:
+          - "KeyboardViewController.swift"
+          - "Info.plist"
+          - "PrivacyInfo.xcprivacy"
+          - "MuesliKeyboard.entitlements"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.dev.tests
+        GENERATE_INFOPLIST_FILE: true
+    dependencies:
+      - target: MuesliDev
+      - sdk: libsqlite3.tbd
+
   MuesliUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -232,6 +256,10 @@ schemes:
         MuesliDevLiveActivityExtension: all
     run:
       config: MuesliDev
+    test:
+      config: MuesliDev
+      targets:
+        - MuesliDevTests
 
   MuesliKeyboard:
     build:

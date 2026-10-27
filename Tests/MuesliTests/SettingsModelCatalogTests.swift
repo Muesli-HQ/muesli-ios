@@ -1,7 +1,107 @@
 import XCTest
+#if canImport(MuesliDev)
+@testable import MuesliDev
+private typealias CatalogTestStore = MuesliDev.SharedStore
+#else
 @testable import Muesli
+private typealias CatalogTestStore = Muesli.SharedStore
+#endif
 
 final class SettingsModelCatalogTests: XCTestCase {
+    @MainActor
+    func testInventoryRefreshRemovesDeletedModelsAndClearsStaleReadyState() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = DictationCoordinator(store: CatalogTestStore(containerURL: directory.appendingPathComponent("store")))
+        let selected = coordinator.selectedTranscriptionModel
+        let other = try XCTUnwrap(LocalTranscriptionModel.allCases.first { $0 != selected })
+        for model in [selected, other] {
+            try Data("downloaded".utf8).write(to: directory.appendingPathComponent(model.rawValue))
+        }
+        let exists: (LocalTranscriptionModel) -> Bool = {
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent($0.rawValue).path)
+        }
+        coordinator.refreshDownloadedModels(isDownloaded: exists)
+        coordinator.modelPreparation = .init(phase: .ready, status: "Ready")
+        XCTAssertEqual(coordinator.downloadedTranscriptionModels, Set([selected, other]))
+
+        try FileManager.default.removeItem(at: directory.appendingPathComponent(other.rawValue))
+        coordinator.refreshDownloadedModels(isDownloaded: exists)
+        XCTAssertEqual(coordinator.downloadedTranscriptionModels, [selected])
+        XCTAssertTrue(coordinator.modelPreparation.isReady)
+
+        try FileManager.default.removeItem(at: directory.appendingPathComponent(selected.rawValue))
+        coordinator.refreshDownloadedModels(isDownloaded: exists)
+        XCTAssertTrue(coordinator.downloadedTranscriptionModels.isEmpty)
+        XCTAssertEqual(coordinator.modelPreparation.phase, .idle)
+        XCTAssertEqual(coordinator.selectedTranscriptionModel, selected)
+    }
+
+    func testMissingFilesOverrideCachedReadyStateInSelector() {
+        let ready = ModelPreparationState(phase: .ready, status: "Ready")
+        XCTAssertEqual(ModelCatalogState.resolve(isDownloaded: false, preparation: ready), .needsDownload)
+        XCTAssertEqual(ModelCatalogState.resolve(isDownloaded: false, preparation: ready).icon, "arrow.down.circle")
+        XCTAssertEqual(ModelCatalogState.resolve(isDownloaded: true, preparation: nil).icon, "checkmark.circle.fill")
+    }
+
+    @MainActor
+    func testPreparationCannotRestartWhileModelRemovalIsInProgress() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = DictationCoordinator(store: CatalogTestStore(containerURL: directory))
+        coordinator.isRemovingTranscriptionModel = true
+        coordinator.modelPreparation = .init(status: "Removing")
+        coordinator.prepareModel()
+        XCTAssertEqual(coordinator.modelPreparation.phase, .idle)
+        XCTAssertEqual(coordinator.modelPreparation.status, "Removing")
+    }
+
+    @MainActor
+    func testRecordingAndRetryRequirePreparedRuntimeNotJustDownloadedFiles() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = DictationCoordinator(store: CatalogTestStore(containerURL: directory))
+        coordinator.refreshDownloadedModels(isDownloaded: { _ in true })
+        for phase in [ModelPreparationPhase.idle, .downloading, .preparing, .failed] {
+            coordinator.modelPreparation = .init(phase: phase, status: "Not ready")
+            XCTAssertFalse(coordinator.isTranscriptionModelReady)
+            XCTAssertFalse(coordinator.canRetrySavedVoiceNote)
+            XCTAssertFalse(coordinator.canStartNotepadBurst(sessionID: UUID()))
+            XCTAssertNil(coordinator.startMeetingRecording())
+            XCTAssertFalse(coordinator.isRecording)
+            XCTAssertNil(coordinator.activeMeetingSessionID)
+        }
+        coordinator.modelPreparation = .init(phase: .ready, status: "Ready")
+        XCTAssertTrue(coordinator.isTranscriptionModelReady)
+        XCTAssertTrue(coordinator.canRetrySavedVoiceNote)
+        coordinator.isRemovingTranscriptionModel = true
+        XCTAssertFalse(coordinator.isTranscriptionModelReady)
+    }
+
+    @MainActor
+    func testOpeningRecordingSurfacePreservesPreparationAndFailureState() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = DictationCoordinator(store: CatalogTestStore(containerURL: directory))
+        for phase in [ModelPreparationPhase.downloading, .preparing, .ready, .failed] {
+            let state = ModelPreparationState(phase: phase, progress: 0.4, status: "Current stage", detail: "Details")
+            coordinator.modelPreparation = state
+            coordinator.ensureModelReadyForRecording()
+            XCTAssertEqual(coordinator.modelPreparation, state)
+        }
+    }
+
+    @MainActor
+    func testOnboardingCannotRecordWhileModelLoads() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = DictationCoordinator(store: CatalogTestStore(containerURL: directory))
+        coordinator.modelPreparation = .init(phase: .preparing, status: "Loading")
+        coordinator.startOnboardingTestDictation()
+        XCTAssertFalse(coordinator.isOnboardingTestRecording)
+    }
+
     func testSettingsSectionsFollowCoreWorkflowPriority() {
         XCTAssertEqual(
             SettingsSection.allCases.map(\.title),
@@ -236,11 +336,6 @@ final class SettingsModelCatalogTests: XCTestCase {
     func testStaleAttemptCannotMatchNewPlanForSameModel() throws {
         let staleAttemptID = UUID()
         let currentAttemptID = UUID()
-        let currentAttempt = ModelDownloadAttempt(
-            modelRawValue: LocalTranscriptionModel.parakeetV3.rawValue,
-            id: currentAttemptID
-        )
-        let plan = DownloadPlan(attempt: currentAttempt, totalBytes: 42, pendingCount: 1)
         let staleFile = ModelDownloadFile(
             remotePath: "Encoder.mlmodelc/model.mil",
             localPath: "Encoder.mlmodelc/model.mil",
@@ -258,23 +353,14 @@ final class SettingsModelCatalogTests: XCTestCase {
             attemptID: currentAttemptID
         )
 
-        XCTAssertFalse(plan.matches(staleFile))
-        XCTAssertFalse(currentAttempt.matches(staleFile))
-        XCTAssertTrue(plan.matches(currentFile))
-        XCTAssertTrue(currentAttempt.matches(currentFile))
+        var plan = ModelDownloadTransaction(id: currentAttemptID, modelRawValue: LocalTranscriptionModel.parakeetV3.rawValue,
+            manifest: .init(source: .mirror, version: "v1", files: [currentFile]))
+        XCTAssertFalse(plan.accepts(staleFile))
+        XCTAssertTrue(plan.accepts(currentFile))
+        plan.phase = .failed
+        XCTAssertFalse(plan.accepts(currentFile), "Failure must reject late success callbacks")
+        plan.phase = .needsFallback
+        XCTAssertFalse(plan.accepts(currentFile), "Fallback must reject the old source's callbacks")
     }
 
-    func testRestoredAttemptCannotCompleteAfterAnyFileFails() {
-        let attempt = ModelDownloadAttempt(
-            modelRawValue: LocalTranscriptionModel.parakeetV3.rawValue,
-            id: UUID()
-        )
-        var outcomes = ModelDownloadAttemptOutcomeTracker()
-
-        outcomes.recordCompletion(attempt)
-        XCTAssertTrue(outcomes.recordFailure(attempt))
-        outcomes.recordCompletion(attempt)
-
-        XCTAssertTrue(outcomes.drainCompletedAttempts().isEmpty)
-    }
 }

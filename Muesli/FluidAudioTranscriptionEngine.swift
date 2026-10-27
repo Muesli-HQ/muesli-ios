@@ -18,6 +18,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         MuesliPreferences.transcriptionModel.engineIdentifier
     }
 
+    private var unifiedManager: UnifiedAsrManager?
+    private var isLoadingUnified = false
+    private var modelGeneration = UUID()
     private var manager: AsrManager?
     private var streamingManager: StreamingEouAsrManager?
     private var whisperRuntime: WhisperKitTranscriptionRuntime?
@@ -32,6 +35,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         guard selectedModel != model else { return }
         let runtimeToUnload = whisperRuntime
         selectedModel = model
+        modelGeneration = UUID()
+        unifiedManager = nil
+        isLoadingUnified = false
         manager = nil
         streamingManager = nil
         whisperRuntime = nil
@@ -44,6 +50,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
 
     func isLoaded(for model: LocalTranscriptionModel) -> Bool {
         guard selectedModel == model else { return false }
+        if model == .parakeetUnified { return unifiedManager != nil }
         if model.family == .whisper {
             return loadedWhisperModel == model && whisperRuntime != nil
         }
@@ -58,6 +65,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         if let whisperRuntime {
             await whisperRuntime.unload()
         }
+        modelGeneration = UUID()
+        unifiedManager = nil
+        isLoadingUnified = false
         manager = nil
         streamingManager = nil
         whisperRuntime = nil
@@ -68,7 +78,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
     }
 
     func prepare(progress: (@Sendable (Double, String?) -> Void)? = nil) async throws {
-        if selectedModel.family == .whisper {
+        if selectedModel == .parakeetUnified {
+            _ = try await loadedUnifiedManager(progress: progress)
+        } else if selectedModel.family == .whisper {
             _ = try await loadedWhisperRuntime(progress: progress)
         } else if selectedModel.supportsRealtimeStreaming {
             _ = try await loadedStreamingManager(progress: progress)
@@ -89,6 +101,25 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         audioURL: URL,
         progress: (@Sendable (TranscriptionProgressUpdate) -> Void)? = nil
     ) async throws -> DetailedTranscriptionResult {
+        if selectedModel == .parakeetUnified {
+            let manager = try await loadedUnifiedManager { fraction, message in
+                progress?(.init(fractionCompleted: fraction, message: message))
+            }
+            try Task.checkCancellation()
+            let samples = try AudioConverter().resampleAudioFile(audioURL)
+            progress?(.init(fractionCompleted: 0, message: "Transcribing"))
+            let result = try await manager.transcribeWithTimings(samples)
+            try Task.checkCancellation()
+            progress?(.init(fractionCompleted: 1, message: "Transcription complete"))
+            return DetailedTranscriptionResult(
+                text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                duration: Double(samples.count) / 16_000,
+                tokens: result.tokenTimings.map {
+                    TimedTranscriptToken(token: $0.token, startTime: $0.startTime,
+                                         endTime: $0.endTime, confidence: $0.confidence)
+                }
+            )
+        }
         if selectedModel.family == .whisper {
             return try await transcribeWithWhisperKit(audioURL: audioURL, progress: progress)
         }
@@ -176,6 +207,30 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
                 qualityScore: $0.qualityScore
             )
         }
+    }
+
+    private func loadedUnifiedManager(progress: (@Sendable (Double, String?) -> Void)?) async throws -> UnifiedAsrManager {
+        let generation = modelGeneration
+        while isLoadingUnified {
+            try await Task.sleep(for: .milliseconds(150))
+            guard generation == modelGeneration else { throw CancellationError() }
+        }
+        try Task.checkCancellation()
+        guard selectedModel == .parakeetUnified, generation == modelGeneration else { throw CancellationError() }
+        if let unifiedManager { return unifiedManager }
+        isLoadingUnified = true
+        defer { if generation == modelGeneration { isLoadingUnified = false } }
+        let directory = try localModelDirectory(for: .parakeetUnified)
+        progress?(0.9, "Loading downloaded model...")
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuAndNeuralEngine
+        let manager = UnifiedAsrManager(configuration: configuration, encoderPrecision: .int8)
+        try await manager.loadModels(from: directory)
+        try Task.checkCancellation()
+        guard generation == modelGeneration else { throw CancellationError() }
+        unifiedManager = manager
+        progress?(1, "Parakeet Unified ready")
+        return manager
     }
 
     private func loadedManager(progress: (@Sendable (Double, String?) -> Void)?) async throws -> AsrManager {
@@ -448,24 +503,6 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         let runtime = FluidAudioDiarizationRuntime()
         diarizationRuntime = runtime
         return runtime
-    }
-
-    private nonisolated static func statusText(
-        for phase: DownloadUtils.DownloadPhase,
-        fraction: Double
-    ) -> String {
-        switch phase {
-        case .listing:
-            return "Checking model files..."
-        case .downloading(let completedFiles, let totalFiles):
-            let percent = Int((fraction * 100).rounded())
-            if totalFiles > 0 {
-                return "Downloading \(completedFiles) of \(totalFiles) files • \(percent)%"
-            }
-            return "Downloading model • \(percent)%"
-        case .compiling:
-            return "Compiling CoreML model..."
-        }
     }
 
     private nonisolated static func modelLoadHeartbeatTask(

@@ -1,10 +1,11 @@
 import FluidAudio
 import Foundation
 
-enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
+enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Sendable {
     case parakeetTdtCtc110m = "parakeet-tdt-ctc-110m"
     case parakeetRealtimeEou120m = "parakeet-realtime-eou-120m"
     case parakeetV3 = "parakeet-v3"
+    case parakeetUnified = "parakeet-unified"
     case whisperTinyEnglish = "whisper-tiny-en"
     case whisperSmallEnglish = "whisper-small-en"
     case whisperMediumEnglish = "whisper-medium-en"
@@ -14,12 +15,14 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var displayName: String {
         switch self {
+        case .parakeetUnified:
+            "Parakeet Unified"
         case .parakeetTdtCtc110m:
-            "Parakeet 110M"
+            "Parakeet Compact"
         case .parakeetRealtimeEou120m:
-            "Parakeet Realtime EOU 120M"
+            "Parakeet Realtime"
         case .parakeetV3:
-            "Parakeet v3 600M"
+            "Parakeet v3"
         case .whisperTinyEnglish:
             "Whisper Tiny English"
         case .whisperSmallEnglish:
@@ -33,8 +36,10 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var shortName: String {
         switch self {
+        case .parakeetUnified:
+            "Parakeet Unified"
         case .parakeetTdtCtc110m:
-            "Parakeet 110M"
+            "Parakeet Compact"
         case .parakeetRealtimeEou120m:
             "Parakeet Realtime"
         case .parakeetV3:
@@ -62,12 +67,14 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var detail: String {
         switch self {
+        case .parakeetUnified:
+            "English transcription with punctuation and capitalization. Results appear after recording."
         case .parakeetTdtCtc110m:
-            "English-only CoreML model. Faster first setup and lighter on storage."
+            "English transcription with faster setup and a smaller download."
         case .parakeetRealtimeEou120m:
-            "English-only CoreML streaming model with end-of-utterance detection for low-latency voice notes and meeting chunks."
+            "Live English transcription for voice notes and meetings."
         case .parakeetV3:
-            "Larger multilingual CoreML model. Better coverage, slower first setup."
+            "Multilingual transcription with broad language coverage."
         case .whisperTinyEnglish:
             "Smallest English WhisperKit model. Fastest download and lightest storage footprint."
         case .whisperSmallEnglish:
@@ -75,12 +82,14 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
         case .whisperMediumEnglish:
             "Higher-accuracy English Whisper model for longer recordings, with a larger download."
         case .whisperLargeTurbo:
-            "Highest-accuracy multilingual Whisper option, quantized for faster CoreML inference."
+            "Our most accurate multilingual Whisper option."
         }
     }
 
     var capabilityLabel: String {
         switch self {
+        case .parakeetUnified:
+            "English only"
         case .parakeetTdtCtc110m:
             "English only"
         case .parakeetRealtimeEou120m:
@@ -96,12 +105,14 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var estimatedSizeLabel: String {
         switch self {
+        case .parakeetUnified:
+            "~614 MB"
         case .parakeetTdtCtc110m:
-            "Smaller 110M model"
+            "Compact download"
         case .parakeetRealtimeEou120m:
-            "120M streaming model"
+            "Streaming model"
         case .parakeetV3:
-            "~450 MB 600M model"
+            "~450 MB"
         case .whisperTinyEnglish:
             "~153 MB"
         case .whisperSmallEnglish:
@@ -115,6 +126,8 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var engineIdentifier: String {
         switch self {
+        case .parakeetUnified:
+            "parakeet-unified"
         case .parakeetTdtCtc110m:
             "parakeet-tdt-ctc-110m"
         case .parakeetRealtimeEou120m:
@@ -134,6 +147,8 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var asrVersion: AsrModelVersion? {
         switch self {
+        case .parakeetUnified:
+            nil
         case .parakeetTdtCtc110m:
             .tdtCtc110m
         case .parakeetRealtimeEou120m:
@@ -149,7 +164,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .parakeetRealtimeEou120m:
             .parakeetEou320ms
-        case .parakeetTdtCtc110m, .parakeetV3,
+        case .parakeetUnified, .parakeetTdtCtc110m, .parakeetV3,
              .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo:
             nil
         }
@@ -161,7 +176,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var family: LocalTranscriptionModelFamily {
         switch self {
-        case .parakeetTdtCtc110m, .parakeetRealtimeEou120m, .parakeetV3:
+        case .parakeetUnified, .parakeetTdtCtc110m, .parakeetRealtimeEou120m, .parakeetV3:
             .parakeet
         case .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo:
             .whisper
@@ -178,7 +193,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
             "medium.en"
         case .whisperLargeTurbo:
             "large-v3-v20240930_626MB"
-        case .parakeetTdtCtc110m, .parakeetRealtimeEou120m, .parakeetV3:
+        case .parakeetUnified, .parakeetTdtCtc110m, .parakeetRealtimeEou120m, .parakeetV3:
             nil
         }
     }

@@ -21,6 +21,17 @@ struct ModelPreparationState: Equatable {
     var isReady: Bool {
         phase == .ready
     }
+
+    static func failed(_ error: Error) -> Self {
+        let failure = ModelSetupFailure.describe(error)
+        return .init(phase: .failed, status: failure.status, detail: failure.detail)
+    }
+
+    static func progressPhase(status: String) -> ModelPreparationPhase {
+        ["compil", "prepar", "optimiz", "loading downloaded", "model ready"].contains {
+            status.localizedCaseInsensitiveContains($0)
+        } ? .preparing : .downloading
+    }
 }
 
 enum ModelPreparationAction: Equatable {

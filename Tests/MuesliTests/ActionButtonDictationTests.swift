@@ -1,7 +1,15 @@
 import XCTest
 import AppIntents
 import AVFoundation
+#if canImport(MuesliDev)
+@testable import MuesliDev
+private typealias AppSharedStore = MuesliDev.SharedStore
+private typealias AppActionButtonCaptureMode = MuesliDev.ActionButtonCaptureMode
+#else
 @testable import Muesli
+private typealias AppSharedStore = Muesli.SharedStore
+private typealias AppActionButtonCaptureMode = Muesli.ActionButtonCaptureMode
+#endif
 
 @MainActor
 final class ActionButtonDictationTests: XCTestCase {
@@ -26,7 +34,7 @@ final class ActionButtonDictationTests: XCTestCase {
             try store.saveResult(.init(requestID: request.id, sessionID: session.id, text: "Both destinations",
                                        engineIdentifier: "test", source: session.source))
             if let status { try store.saveKeyboardExtensionStatus(status) }
-            let coordinator = DictationCoordinator(store: Muesli.SharedStore(containerURL: directory))
+            let coordinator = DictationCoordinator(store: AppSharedStore(containerURL: directory))
             coordinator.deliverKeyboardTranscript("Both destinations", requestID: request.id)
             XCTAssertEqual(try store.pendingKeyboardDeliveries().count, index == 0 ? 1 : 0)
             // Reopening after clipboard-only completion must not retroactively insert.
@@ -140,6 +148,39 @@ final class ActionButtonDictationTests: XCTestCase {
         XCTAssertNil(ActionButtonShortcutOutput.intentResult(nil).value)
         XCTAssertNil(ActionButtonShortcutOutput.intentResult("").value)
         XCTAssertNil(ActionButtonShortcutOutput.intentResult(" \n ").value)
+    }
+
+    func testDictationIntentAssociatesRecordingWithItsLiveActivity() async throws {
+        guard #available(iOS 18.0, *) else { return }
+        let sessionID = UUID()
+        ActionButtonCaptureDispatcher.register { _ in
+            .started(sessionID: sessionID, activityID: "activitykit-dictation-id")
+        }
+        defer { ActionButtonCaptureDispatcher.register(toggleHandler: nil) }
+        let output = try await ToggleMuesliDictationIntent().perform()
+        let result = try XCTUnwrap(output as? IntentResultContainer<String, Never, Never, Never>)
+        XCTAssertEqual(result.activityIdentifier, "activitykit-dictation-id")
+        XCTAssertNil(result.value, "Starting must still skip the clipboard shortcut actions.")
+    }
+
+    func testMeetingIntentAssociatesRecordingWithItsLiveActivity() async throws {
+        guard #available(iOS 18.0, *) else { return }
+        ActionButtonCaptureDispatcher.register { _ in
+            .started(sessionID: UUID(), activityID: "activitykit-meeting-id")
+        }
+        defer { ActionButtonCaptureDispatcher.register(toggleHandler: nil) }
+        let output = try await ToggleMuesliMeetingIntent().perform()
+        let result = try XCTUnwrap(output as? IntentResultContainer<Never, Never, Never, Never>)
+        XCTAssertEqual(result.activityIdentifier, "activitykit-meeting-id")
+    }
+
+    func testStoppedMeetingDoesNotReturnAnEndedActivity() async throws {
+        guard #available(iOS 18.0, *) else { return }
+        ActionButtonCaptureDispatcher.register { _ in .stopped(sessionID: UUID()) }
+        defer { ActionButtonCaptureDispatcher.register(toggleHandler: nil) }
+        let output = try await ToggleMuesliMeetingIntent().perform()
+        let result = try XCTUnwrap(output as? IntentResultContainer<Never, Never, Never, Never>)
+        XCTAssertNil(result.activityIdentifier)
     }
 
     func testCompletedTranscriptRemainsShortcutOutput() {
@@ -307,7 +348,7 @@ final class ActionButtonDictationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = Muesli.SharedStore(containerURL: directory)
+        let store = AppSharedStore(containerURL: directory)
         let coordinator = DictationCoordinator(store: store)
         guard case .failed = await coordinator.toggleActionButtonDictation() else {
             return XCTFail("Missing model must reject capture")
@@ -381,16 +422,16 @@ final class ActionButtonDictationTests: XCTestCase {
     func testDispatcherForwardsToggleResult() async {
         defer { ActionButtonCaptureDispatcher.register(toggleHandler: nil) }
         var callCount = 0
-        var receivedMode: Muesli.ActionButtonCaptureMode?
+        var receivedMode: AppActionButtonCaptureMode?
         let sessionID = UUID()
         ActionButtonCaptureDispatcher.register { mode in
             receivedMode = mode
             callCount += 1
-            return .started(sessionID: sessionID)
+            return .started(sessionID: sessionID, activityID: "test-live-activity")
         }
 
         let result = await ActionButtonCaptureDispatcher.toggle(.meeting)
-        XCTAssertEqual(result, .started(sessionID: sessionID))
+        XCTAssertEqual(result, .started(sessionID: sessionID, activityID: "test-live-activity"))
         XCTAssertEqual(receivedMode, .meeting)
         XCTAssertEqual(callCount, 1)
     }

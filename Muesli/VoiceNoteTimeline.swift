@@ -82,7 +82,7 @@ enum VoiceNoteTimelineBuilder {
         let recoverable = input.sessions.compactMap { session -> VoiceNoteTimelineItem? in
             guard input.sourceFilter.includes(session.syncOrigin),
                   session.kind != .meeting,
-                  session.isLongForm,
+                  (session.isLongForm || session.protectedAudioUntilTranscriptCompletes),
                   [.recording, .transcriptionQueued, .transcribing, .failed].contains(session.phase)
             else { return nil }
             return .recoverable(session)

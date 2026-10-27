@@ -191,8 +191,26 @@ final class DictationCoordinator {
     var modelPreparation = ModelPreparationState()
     private(set) var downloadedTranscriptionModels = Set(LocalTranscriptionModel.allCases.filter { $0.isDownloaded })
 
-    func refreshDownloadedModels(isDownloaded: (LocalTranscriptionModel) -> Bool = { $0.isDownloaded }) {
-        downloadedTranscriptionModels = Set(LocalTranscriptionModel.allCases.filter(isDownloaded))
+    #if DEBUG
+    private var uiTestDownloadedModels: Set<LocalTranscriptionModel>?
+    #endif
+
+    func refreshDownloadedModels(isDownloaded: ((LocalTranscriptionModel) -> Bool)? = nil) {
+        let exists: (LocalTranscriptionModel) -> Bool
+        if let isDownloaded {
+            exists = isDownloaded
+        } else {
+            #if DEBUG
+            if let fixture = uiTestDownloadedModels {
+                exists = { fixture.contains($0) }
+            } else {
+                exists = { $0.isDownloaded }
+            }
+            #else
+            exists = { $0.isDownloaded }
+            #endif
+        }
+        downloadedTranscriptionModels = Set(LocalTranscriptionModel.allCases.filter(exists))
         if modelPreparation.isReady, !downloadedTranscriptionModels.contains(selectedTranscriptionModel) {
             modelPreparation = ModelPreparationState(
                 status: "\(selectedTranscriptionModel.shortName) is not downloaded",
@@ -1735,6 +1753,10 @@ final class DictationCoordinator {
         UserDefaults.standard.set(AppSection.defaultPinnedStorage, forKey: MuesliPreferences.pinnedSectionsKey)
         UserDefaults.standard.set(true, forKey: MuesliPreferences.longVoiceNoteModeEnabledKey)
         UserDefaults.standard.set(60, forKey: MuesliPreferences.longVoiceNoteThresholdSecondsKey)
+        // UI tests use a ready engine fixture, not multi-hundred-MB model files.
+        // Keep its inventory consistent across Settings and foreground refreshes.
+        uiTestDownloadedModels = [selectedTranscriptionModel]
+        refreshDownloadedModels()
         modelPreparation = ModelPreparationState(
             phase: .ready,
             progress: 1,

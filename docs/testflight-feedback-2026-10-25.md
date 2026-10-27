@@ -78,3 +78,9 @@ The `MuesliDev` scheme has a device test target for integrity and recovery. The 
 - Show readiness in Notepad, start preparation on entry, and disable its microphone until ready. Keep recovery-row deletion independent of disabled retry controls.
 - All 16 download/setup tests passed on picophone (`/private/tmp/muesli-pr44-download-fixes.xcresult`). Final UI changes compiled and all 24 readiness/cancellation tests passed (`/private/tmp/muesli-pr44-ui-fixes.xcresult`).
 - Initial GitHub simulator build passed; unit/UI tests remain in progress. Claude review failed after one turn with `is_error:true` and no diagnostic explaining its underlying cause. Devin reports a skipped full review because its trial expired and no credits remain.
+
+## CI UI-fixture correction
+
+The hosted simulator build and 401 unit tests passed (two skipped), but two UI tests failed: model Settings readiness and direct-start Notepad. The UI fixture declared its runtime ready without supplying a downloaded inventory, so foreground/Settings disk refresh cleared readiness. Added a debug-only fixture inventory used only by the explicit UI-test launch path; production still uses filesystem checks, and injected unit-test inventory checks retain precedence.
+
+Both previously failing UI tests passed locally on the dedicated iOS 26.5 simulator with their assertions unchanged. Evidence: `/private/tmp/muesli-pr44-ci-ui-repro.xcresult`. The separate Claude reviewer failure remains unresolved; its logs contain only an immediate generic execution error.

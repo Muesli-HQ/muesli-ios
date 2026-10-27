@@ -201,10 +201,12 @@ struct SettingsView: View {
                 Text(section.title)
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text(section.detail)
-                    .font(MuesliTheme.callout())
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if section != .models {
+                    Text(section.detail)
+                        .font(MuesliTheme.callout())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -344,64 +346,26 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
             MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                    SettingsRow(
-                        icon: "checkmark.seal",
-                        title: coordinator.modelPreparation.isReady ? "Active Model" : "Selected Model",
-                        value: coordinator.selectedTranscriptionModel.shortName,
-                        valueColor: MuesliTheme.textSecondary
-                    )
-                    Divider().overlay(MuesliTheme.surfaceBorder)
                     TranscriptionModelSelector(
                         selection: $coordinator.selectedTranscriptionModel,
                         downloadedModels: coordinator.downloadedTranscriptionModels,
+                        showsHeader: false,
+                        compact: true,
                         preparation: coordinator.modelPreparation,
                         onSelect: coordinator.selectTranscriptionModel
                     )
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsRow(
-                        icon: "cpu",
-                        title: "Runtime",
-                        value: coordinator.selectedTranscriptionModel == .appleSpeech ? "Apple Speech" : coordinator.selectedTranscriptionModel.family == .whisper
-                            ? "WhisperKit / CoreML"
-                            : "FluidAudio / CoreML"
+                    ModelReadinessView(
+                        state: coordinator.modelPreparation,
+                        modelName: coordinator.selectedTranscriptionModel.shortName,
+                        retry: coordinator.prepareModel
                     )
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsRow(icon: "textformat", title: "Language", value: coordinator.selectedTranscriptionModel.capabilityLabel)
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                        Text(coordinator.modelPreparation.status)
-                            .font(MuesliTheme.headline())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                        Text(coordinator.modelPreparation.detail)
-                            .font(MuesliTheme.body())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let progress = coordinator.modelPreparation.progress,
-                       coordinator.modelPreparation.isPreparing {
-                        ProgressView(value: progress)
-                            .tint(MuesliTheme.accent)
-                    }
-                    if coordinator.modelPreparation.phase == .failed {
-                        Button {
-                            coordinator.prepareModel()
-                        } label: {
-                            Label("Retry Setup", systemImage: "arrow.clockwise")
-                                .font(MuesliTheme.headline())
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 48)
-                                .foregroundStyle(.white)
-                                .background(MuesliTheme.accent)
-                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                                .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
                 .padding(MuesliTheme.spacing16)
             }
 
-            downloadedModelsSettings
+            if !downloadedTranscriptionModels.isEmpty || modelRemovalErrorMessage != nil {
+                downloadedModelsSettings
+            }
         }
     }
 
@@ -412,10 +376,6 @@ struct SettingsView: View {
                     Label("Downloaded Models", systemImage: "internaldrive")
                         .font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("Remove models you no longer use to reclaim local storage.")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if let modelRemovalErrorMessage {
@@ -838,7 +798,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .dictionary:
             "Filler word removal, custom phrases, names, and acronyms."
         case .models:
-            "Choose and automatically download local Parakeet or Whisper models."
+            "Choose your transcription model."
         case .aiSummaries:
             "Meeting summary providers, auth, and model selection."
         case .syncPrivacy:

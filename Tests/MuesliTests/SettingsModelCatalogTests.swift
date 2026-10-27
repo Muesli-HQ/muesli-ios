@@ -67,6 +67,7 @@ final class SettingsModelCatalogTests: XCTestCase {
             coordinator.modelPreparation = .init(phase: phase, status: "Not ready")
             XCTAssertFalse(coordinator.isTranscriptionModelReady)
             XCTAssertFalse(coordinator.canRetrySavedVoiceNote)
+            XCTAssertFalse(coordinator.canStartNotepadBurst(sessionID: UUID()))
             XCTAssertNil(coordinator.startMeetingRecording())
             XCTAssertFalse(coordinator.isRecording)
             XCTAssertNil(coordinator.activeMeetingSessionID)

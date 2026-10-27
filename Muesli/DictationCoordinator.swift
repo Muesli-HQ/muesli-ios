@@ -2089,7 +2089,7 @@ final class DictationCoordinator {
             && !isRecording
             && !hasMeetingRecordingInProgress
             && !isRemovingTranscriptionModel
-            && selectedTranscriptionModel.isDownloaded
+            && isTranscriptionModelReady
             && (presentedLongVoiceNoteSessionID == sessionID || pipelinedNotepadSessionIDs.contains(sessionID))
     }
 
@@ -2143,7 +2143,10 @@ final class DictationCoordinator {
     }
 
     private func startPipelinedNotepadRecording(seedText: String, sessionID: UUID?) {
-        guard isTranscriptionModelReady else { return }
+        guard isTranscriptionModelReady else {
+            ensureModelReadyForRecording()
+            return
+        }
         guard selectedTranscriptionModel.isDownloaded else {
             statusText = "\(selectedTranscriptionModel.shortName) is still downloading"
             if !isSelectedModelDownloadSuppressed {

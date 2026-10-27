@@ -106,6 +106,24 @@ enum ModelDownloadValidationError: Error, LocalizedError {
 }
 
 /// Persisted before tasks resume. Each source owns a separate staging directory.
+struct ModelDownloadStorageBudget {
+    let totalBytes: Int64
+    let missingBytes: Int64
+
+    init(manifest: ModelDownloadManifest, verifiedFiles: Set<String> = []) throws {
+        var total: Int64 = 0
+        var missing: Int64 = 0
+        for file in manifest.files {
+            let (next, overflow) = total.addingReportingOverflow(file.size)
+            guard file.size >= 0, !overflow else { throw ModelDownloadValidationError.invalidManifest }
+            total = next
+            if !verifiedFiles.contains(file.localPath) { missing += file.size }
+        }
+        totalBytes = total
+        missingBytes = missing
+    }
+}
+
 struct ModelDownloadTransaction: Codable, Sendable {
     enum Phase: String, Codable { case downloading, needsFallback, installing, failed }
     var id: UUID
@@ -132,6 +150,26 @@ struct ModelDownloadTransaction: Codable, Sendable {
     static func backupDirectory(for destination: URL) -> URL {
         destination.deletingLastPathComponent().appendingPathComponent(".\(destination.lastPathComponent).previous-model")
     }
+    /// Revalidate disk contents, including files moved before a journal write.
+    func verifiedCompletedFiles(at destination: URL) -> Set<String> {
+        let stage = stagingDirectory(for: destination)
+        return Set(manifest.files.compactMap { file in
+            (try? ModelDownloadManifest.validate(file, at: stage.appendingPathComponent(file.localPath))) != nil
+                ? file.localPath : nil
+        })
+    }
+
+    /// Only this transaction's staging directories are disposable. Installed
+    /// models and installation backups must survive switching selections.
+    func removeStagingDirectories(at destination: URL) throws {
+        for stageID in Set(retiredStages + [id]) {
+            let directory = Self.stagingDirectory(id: stageID, destination: destination)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+        }
+    }
+
     mutating func useFallback(_ fallback: ModelDownloadManifest) {
         retiredStages.append(id)
         id = UUID()

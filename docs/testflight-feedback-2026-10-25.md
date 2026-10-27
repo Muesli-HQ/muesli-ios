@@ -70,3 +70,11 @@ The `MuesliDev` scheme has a device test target for integrity and recovery. The 
 - Quick Notes offer Stop Transcription without quitting. Cancellation preserves recoverable audio, releases the UI promptly, and ignores stale results. Short-note retries run directly from the dashboard; long recordings retain their existing editor flow.
 - WhisperKit runtime event text is no longer shown during Quick Note transcription. Removed the redundant on-device execution row.
 - Whisper uses the same scalable OpenAI mark as the macOS app, rendered with the current theme foreground. Final development build passed and was installed and launched on picophone.
+
+## PR #44 review follow-up
+
+- Discard superseded transactions' current and retired staging directories before clearing their journal. Installed models, rollback backups, and unrelated stages remain untouched. Cleanup runs after cancellation under the state queue; a cleanup error keeps the old journal available for retry.
+- On retry, revalidate staged files before the storage check. Count only missing bytes for transfer while preserving the full model-preparation allowance. Stale journal entries and corrupt files cannot reduce the estimate.
+- Show readiness in Notepad, start preparation on entry, and disable its microphone until ready. Keep recovery-row deletion independent of disabled retry controls.
+- All 16 download/setup tests passed on picophone (`/private/tmp/muesli-pr44-download-fixes.xcresult`). Final UI changes compiled; readiness/cancellation rerun is pending device unlock.
+- Initial GitHub simulator build passed; unit/UI tests remain in progress. Claude review failed after one turn with `is_error:true` and no diagnostic explaining its underlying cause. Devin reports a skipped full review because its trial expired and no credits remain.

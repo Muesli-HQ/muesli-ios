@@ -1089,6 +1089,7 @@ private struct RecoverableVoiceNoteRow: View {
     }
 
     var body: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
         Button(action: action) {
             HStack(spacing: MuesliTheme.spacing12) {
                 Image(systemName: session.audioFileName == nil ? "waveform.slash" : "waveform.badge.exclamationmark")
@@ -1135,6 +1136,18 @@ private struct RecoverableVoiceNoteRow: View {
         .disabled(!session.isLongForm && !canRetry)
         .accessibilityHint(session.isLongForm ? "Opens retry actions" : "Retries transcription here on the dashboard")
         .accessibilityIdentifier("dictation.recover.\(session.id.uuidString)")
+        if canDelete {
+            Button(role: .destructive) { isConfirmingDelete = true } label: {
+                Image(systemName: "trash")
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(MuesliTheme.destructive)
+            .accessibilityLabel("Delete Voice Note")
+            .accessibilityIdentifier("dictation.recover.delete.\(session.id.uuidString)")
+        }
+        }
+        .accessibilityElement(children: .contain)
         .contextMenu {
             if canDelete {
                 Button("Delete Voice Note", systemImage: "trash", role: .destructive) {

@@ -24,6 +24,49 @@ final class ModelDownloadManifestTests: XCTestCase {
             spec: XCTUnwrap(ModelDownloadSpec(model: .whisperTinyEnglish)))
     }
 
+    func testSwitchingModelsRemovesCurrentAndRetiredStagesOnly() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root.appendingPathComponent("installed")
+        var tx = ModelDownloadTransaction(id: UUID(), modelRawValue: "whisper-tiny-en", manifest: try decode(payload()))
+        tx.retiredStages = [UUID()]
+        let unrelated = ModelDownloadTransaction.stagingDirectory(id: UUID(), destination: destination)
+        let backup = ModelDownloadTransaction.backupDirectory(for: destination)
+        let current = tx.stagingDirectory(for: destination)
+        let retired = ModelDownloadTransaction.stagingDirectory(id: tx.retiredStages[0], destination: destination)
+        for directory in [destination, backup, unrelated, current, retired] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data("keep".utf8).write(to: directory.appendingPathComponent("file"))
+        }
+        try tx.removeStagingDirectories(at: destination)
+        try tx.removeStagingDirectories(at: destination) // Interrupted cleanup can safely retry.
+        for directory in [current, retired] { XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path)) }
+        for directory in [destination, backup, unrelated] {
+            XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("file")), Data("keep".utf8))
+        }
+    }
+
+    func testRetryBudgetsOnlyVerifiedFilesAndKeepsFullPreparationAllowance() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var tx = ModelDownloadTransaction(id: UUID(), modelRawValue: "whisper-tiny-en", manifest: try decode(payload()))
+        let stage = tx.stagingDirectory(for: root.appendingPathComponent("model"))
+        for (index, file) in tx.manifest.files.enumerated() {
+            let target = stage.appendingPathComponent(file.localPath)
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if index < 2 { try Data((index == 0 ? "abc" : "bad").utf8).write(to: target) }
+        }
+        tx.completed = Set(tx.manifest.files.map(\.localPath)) // Stale journal must not count corrupt/missing bytes.
+        let verified = tx.verifiedCompletedFiles(at: root.appendingPathComponent("model"))
+        XCTAssertEqual(verified, [tx.manifest.files[0].localPath])
+        let budget = try ModelDownloadStorageBudget(manifest: tx.manifest, verifiedFiles: verified)
+        XCTAssertEqual(budget.totalBytes, 15)
+        XCTAssertEqual(budget.missingBytes, 12)
+        let required = ModelSetupStorage.requiredBytes(downloadBytes: 126_000_000, modelBytes: 626_000_000)
+        XCTAssertEqual(required, 1_378_000_000)
+        XCTAssertNoThrow(try ModelSetupStorage.check(availableBytes: 1_600_000_000, requiredBytes: required))
+    }
+
     func testMirrorCoverageMatchesPublishedModels() {
         for model in LocalTranscriptionModel.whisperModels + [.parakeetV3, .parakeetUnified] {
             XCTAssertNotNil(ModelDownloadManifest.mirrorURL(for: model))

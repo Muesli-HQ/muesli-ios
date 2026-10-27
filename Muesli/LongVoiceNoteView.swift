@@ -83,7 +83,10 @@ struct NotepadView: View {
             .toolbar(.hidden, for: .navigationBar)
         }
         .interactiveDismissDisabled(isActivelyRecording || isTranscribing)
-        .onAppear(perform: configureInitialDocument)
+        .onAppear {
+            coordinator.ensureModelReadyForRecording()
+            configureInitialDocument()
+        }
         .onChange(of: documentText) { _, text in
             scheduleDocumentSave(text)
         }
@@ -291,7 +294,12 @@ struct NotepadView: View {
     }
 
     private var voiceControl: some View {
-        Group {
+        VStack(spacing: MuesliTheme.spacing12) {
+            if !isActivelyRecording {
+                ModelReadinessView(state: coordinator.modelPreparation,
+                                   modelName: coordinator.selectedTranscriptionModel.shortName,
+                                   retry: coordinator.prepareModel)
+            }
             if isActivelyRecording {
                 HStack {
                     Spacer()
@@ -334,6 +342,7 @@ struct NotepadView: View {
         .accessibilityLabel("Start dictation")
         .accessibilityHint("Adds the next spoken passage to this Notepad")
         .accessibilityIdentifier("notepad.microphoneButton")
+        .disabled(!coordinator.isTranscriptionModelReady)
     }
 
     private var activeVoicePill: some View {

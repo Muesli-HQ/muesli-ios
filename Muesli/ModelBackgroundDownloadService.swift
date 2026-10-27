@@ -136,16 +136,14 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
                     // callbacks from the old attempt cannot cancel the retry.
                     let freshID = UUID()
                     if let spec = ModelDownloadSpec(model: model) {
-                        try checkStorage(tx.manifest, spec: spec)
+                        let verified = tx.verifiedCompletedFiles(at: spec.repoRoot)
+                        try checkStorage(tx.manifest, spec: spec, verifiedFiles: verified)
                         let oldStage = tx.stagingDirectory(for: spec.repoRoot)
                         let newStage = ModelDownloadTransaction.stagingDirectory(id: freshID, destination: spec.repoRoot)
                         if FileManager.default.fileExists(atPath: oldStage.path) {
                             try FileManager.default.moveItem(at: oldStage, to: newStage)
                         }
-                        transaction?.completed = Set(tx.completed.filter { path in
-                            guard let file = tx.manifest.files.first(where: { $0.localPath == path }) else { return false }
-                            return (try? ModelDownloadManifest.validate(file, at: newStage.appendingPathComponent(path))) != nil
-                        })
+                        transaction?.completed = verified
                     }
                     transaction?.id = freshID
                     transaction?.phase = .downloading
@@ -170,6 +168,17 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
             try stateQueue.sync {
                 guard discoveryID == token else { throw CancellationError() }
                 tasks.forEach { $0.cancel() }
+                // Callbacks cannot accept the failed old generation. Delete its
+                // staged files before forgetting the journal, even when the new
+                // selection is already installed or discovery later fails.
+                if let old = transaction, let oldModel = old.model,
+                   let oldSpec = ModelDownloadSpec(model: oldModel) {
+                    try old.removeStagingDirectories(at: oldSpec.repoRoot)
+                }
+                transaction = nil
+                running = [:]
+                taskBytes = [:]
+                try persist()
             }
             guard let spec = ModelDownloadSpec(model: model) else {
                 stateQueue.sync { discoveryID = nil }
@@ -211,15 +220,12 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
         }
     }
 
-    private func checkStorage(_ manifest: ModelDownloadManifest, spec: ModelDownloadSpec) throws {
-        let total = try manifest.files.reduce(Int64(0)) { sum, file in
-            let (next, overflow) = sum.addingReportingOverflow(file.size)
-            guard !overflow else { throw ModelDownloadValidationError.invalidManifest }
-            return next
-        }
+    private func checkStorage(_ manifest: ModelDownloadManifest, spec: ModelDownloadSpec,
+                              verifiedFiles: Set<String> = []) throws {
+        let budget = try ModelDownloadStorageBudget(manifest: manifest, verifiedFiles: verifiedFiles)
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        try ModelSetupStorage.check(at: root, downloadBytes: total,
-            modelBytes: spec.model.whisperVariant == nil ? 0 : total)
+        try ModelSetupStorage.check(at: root, downloadBytes: budget.missingBytes,
+            modelBytes: spec.model.whisperVariant == nil ? 0 : budget.totalBytes)
     }
 
     /// Queue the complete manifest before suspension. Feeding a background

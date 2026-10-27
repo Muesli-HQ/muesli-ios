@@ -1,7 +1,9 @@
 import FluidAudio
 import Foundation
+import Speech
 
 enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Sendable {
+    case appleSpeech = "apple-speech"
     case parakeetTdtCtc110m = "parakeet-tdt-ctc-110m"
     case parakeetRealtimeEou120m = "parakeet-realtime-eou-120m"
     case parakeetV3 = "parakeet-v3"
@@ -15,6 +17,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var displayName: String {
         switch self {
+        case .appleSpeech: "Apple Speech"
         case .parakeetUnified:
             "Parakeet Unified"
         case .parakeetTdtCtc110m:
@@ -36,6 +39,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var shortName: String {
         switch self {
+        case .appleSpeech: "Apple Speech"
         case .parakeetUnified:
             "Parakeet Unified"
         case .parakeetTdtCtc110m:
@@ -67,6 +71,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var detail: String {
         switch self {
+        case .appleSpeech: "Private, on-device transcription in your iPhone’s language. Language assets are managed by iOS."
         case .parakeetUnified:
             "English transcription with punctuation and capitalization. Results appear after recording."
         case .parakeetTdtCtc110m:
@@ -88,6 +93,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var capabilityLabel: String {
         switch self {
+        case .appleSpeech: Locale.current.localizedString(forIdentifier: Locale.current.identifier) ?? Locale.current.identifier
         case .parakeetUnified:
             "English only"
         case .parakeetTdtCtc110m:
@@ -105,6 +111,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var estimatedSizeLabel: String {
         switch self {
+        case .appleSpeech: "Managed by iOS"
         case .parakeetUnified:
             "~614 MB"
         case .parakeetTdtCtc110m:
@@ -126,6 +133,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var engineIdentifier: String {
         switch self {
+        case .appleSpeech: "apple-speech"
         case .parakeetUnified:
             "parakeet-unified"
         case .parakeetTdtCtc110m:
@@ -147,6 +155,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var asrVersion: AsrModelVersion? {
         switch self {
+        case .appleSpeech: nil
         case .parakeetUnified:
             nil
         case .parakeetTdtCtc110m:
@@ -162,6 +171,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var streamingVariant: StreamingModelVariant? {
         switch self {
+        case .appleSpeech: nil
         case .parakeetRealtimeEou120m:
             .parakeetEou320ms
         case .parakeetUnified, .parakeetTdtCtc110m, .parakeetV3,
@@ -176,6 +186,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var family: LocalTranscriptionModelFamily {
         switch self {
+        case .appleSpeech: .apple
         case .parakeetUnified, .parakeetTdtCtc110m, .parakeetRealtimeEou120m, .parakeetV3:
             .parakeet
         case .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo:
@@ -185,6 +196,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var whisperVariant: String? {
         switch self {
+        case .appleSpeech: nil
         case .whisperTinyEnglish:
             "tiny.en"
         case .whisperSmallEnglish:
@@ -199,8 +211,16 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
     }
 
     var isDownloaded: Bool {
-        ModelBackgroundDownloadService.isModelDownloaded(self)
+        if self == .appleSpeech { return AppleSpeechAssetState.shared.isPrepared }
+        return ModelBackgroundDownloadService.isModelDownloaded(self)
     }
+
+    var isAvailable: Bool {
+        if self != .appleSpeech { return true }
+        if #available(iOS 26, *) { return SpeechTranscriber.isAvailable }
+        return false
+    }
+    static var availableModels: [Self] { allCases.filter(\.isAvailable) }
 
     static let parakeetModels = allCases.filter { $0.family == .parakeet }
     static let whisperModels = allCases.filter { $0.family == .whisper }
@@ -211,6 +231,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 enum LocalTranscriptionModelFamily: String, CaseIterable, Identifiable {
     case parakeet
     case whisper
+    case apple
 
     var id: String { rawValue }
 
@@ -218,6 +239,7 @@ enum LocalTranscriptionModelFamily: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet:
             "Parakeet"
+        case .apple: "Apple"
         case .whisper:
             "WhisperKit"
         }
@@ -227,8 +249,24 @@ enum LocalTranscriptionModelFamily: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet:
             LocalTranscriptionModel.parakeetModels
+        case .apple: LocalTranscriptionModel.availableModels.filter { $0.family == .apple }
         case .whisper:
             LocalTranscriptionModel.whisperModels
         }
+    }
+}
+
+/// iOS owns these assets. Never persist a filesystem-style "downloaded" flag across launches.
+final class AppleSpeechAssetState: @unchecked Sendable {
+    static let shared = AppleSpeechAssetState()
+    private let lock = NSLock()
+    private var localeIdentifier: String?
+    var isPrepared: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return localeIdentifier == Locale.current.identifier
+    }
+    func markPrepared() {
+        lock.lock(); defer { lock.unlock() }
+        localeIdentifier = Locale.current.identifier
     }
 }

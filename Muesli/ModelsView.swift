@@ -41,7 +41,7 @@ struct ModelsView: View {
                         Text(coordinator.selectedTranscriptionModel.shortName)
                             .font(.system(.subheadline, design: .rounded, weight: .semibold))
                             .foregroundStyle(MuesliTheme.textPrimary)
-                        Text("CoreML / ANE")
+                        Text(coordinator.selectedTranscriptionModel == .appleSpeech ? "Managed by iOS" : "CoreML / ANE")
                             .font(MuesliTheme.captionMedium())
                             .foregroundStyle(MuesliTheme.textSecondary)
                     }
@@ -107,7 +107,7 @@ struct ModelsView: View {
                 ModelInfoRow(
                     icon: "cpu",
                     title: "Runtime",
-                    value: coordinator.selectedTranscriptionModel.family == .whisper
+                    value: coordinator.selectedTranscriptionModel == .appleSpeech ? "Apple Speech" : coordinator.selectedTranscriptionModel.family == .whisper
                         ? "WhisperKit / CoreML"
                         : "FluidAudio / CoreML"
                 )

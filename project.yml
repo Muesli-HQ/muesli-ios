@@ -41,6 +41,40 @@ packages:
     revision: 80d96762fa727f816ffceab76a6529cd12c2726f
 
 targets:
+  MuesliDevShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: MuesliShare/ShareViewController.swift
+      - path: Shared/AudioImportInbox.swift
+      - path: Shared/AppConstants.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.dev.share
+        INFOPLIST_FILE: MuesliShare/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MuesliShare/ShareDev.entitlements
+        MUESLI_APP_GROUP_IDENTIFIER: group.com.phequals7.muesli.dev
+        MUESLI_DISPLAY_NAME: MuesliDev
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+
+  MuesliShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: MuesliShare/ShareViewController.swift
+      - path: Shared/AudioImportInbox.swift
+      - path: Shared/AppConstants.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.share
+        INFOPLIST_FILE: MuesliShare/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MuesliShare/Share.entitlements
+        MUESLI_APP_GROUP_IDENTIFIER: group.com.phequals7.muesli
+        MUESLI_DISPLAY_NAME: Muesli
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+
   Muesli:
     type: application
     platform: iOS
@@ -57,6 +91,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MUESLI_TELEMETRYDECK_APP_ID: A851C6BD-4F55-41ED-A6BC-DA43C850B069
     dependencies:
+      - target: MuesliShare
       - target: MuesliKeyboard
       - target: MuesliLiveActivityExtension
       - package: FluidAudio
@@ -92,6 +127,7 @@ targets:
         MUESLI_URL_SCHEME: mueslidev
         PROVISIONING_PROFILE_SPECIFIER: muesli-ios-mueslidev-cloudkit-push
     dependencies:
+      - target: MuesliDevShare
       - target: MuesliDevKeyboard
       - target: MuesliDevLiveActivityExtension
       - package: FluidAudio

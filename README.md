@@ -41,6 +41,8 @@ This repository is suitable for source review, local development, CI, and TestFl
 - **Keyboard Session Mode** - Keep the containing app ready for lower-friction keyboard dictation while the extension remains the text input surface.
 - **Dictation history** - Saved local dictations can be copied, reused, and deleted from the main app.
 - **Meeting recorder** - Record in-person conversations, save sessions, transcribe locally, browse transcript history, and retain meeting audio only when enabled.
+- **Audio import** - Import WAV, MP3, M4A, MP4 audio, AIFF, or CAF from Files, or share one file to Muesli from another app. Open Muesli to review shared audio, select a ready model, and transcribe it into Meetings. Imports retain an owned local audio copy for retry; only text follows iCloud sync settings.
+- **Apple Speech** - On supported iOS 26+ devices, select Apple Speech for on-device transcription in the iPhone’s current language. iOS downloads and manages its language assets; preparation completes before recording is enabled. Unsupported devices continue to use Parakeet or Whisper.
 - **Meeting templates** - Choose note formats for general meetings and structured follow-up workflows.
 - **Optional meeting summaries** - Generate structured notes with ChatGPT sign-in or OpenRouter BYOK after local transcription.
 - **Live Activities** - Track active meeting recording state from iOS surfaces when enabled.
@@ -61,7 +63,7 @@ Muesli for iOS is currently distributed to testers through TestFlight. Public Gi
 
 **Requirements**
 
-- macOS with Xcode 16+
+- macOS with Xcode 26+
 - iOS 17+ simulator or device
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 - Apple Developer account for device builds, keyboard extension signing, App Groups, and TestFlight uploads
@@ -238,3 +240,7 @@ xcodebuild test -project MuesliiOS.xcodeproj -scheme Muesli -destination 'platfo
 ## License
 
 Muesli for iOS is released under the [MIT License](LICENSE).
+
+### Share extension signing
+
+The app embeds a separate audio share extension. Provision `com.phequals7.muesli.ios.share` with `group.com.phequals7.muesli`, and the development extension `com.phequals7.muesli.ios.dev.share` with `group.com.phequals7.muesli.dev`. Automatic signing requires the development-team account in Xcode Settings → Accounts. Simulator builds can use `CODE_SIGNING_ALLOWED=NO`; physical-device and archive builds require these App Group profiles.

@@ -124,6 +124,7 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     }
 
     func startDownload(for model: LocalTranscriptionModel, forceRefresh: Bool = false) async throws -> Bool {
+        if model == .appleSpeech { return false }
         await recoveryTask?.value
         let token = UUID()
         let needsDiscovery: Bool = try stateQueue.sync {
@@ -630,6 +631,7 @@ struct ModelDownloadSpec: Sendable {
             .appendingPathComponent("Models", isDirectory: true)
 
         switch model {
+        case .appleSpeech: return nil
         case .parakeetUnified:
             remotePath = "FluidInference/parakeet-unified-en-0.6b-coreml"
             subPath = nil

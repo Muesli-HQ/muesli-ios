@@ -32,7 +32,7 @@ struct TranscriptionModelSelector: View {
             }
 
             Menu {
-                ForEach(LocalTranscriptionModelFamily.allCases) { family in
+                ForEach(LocalTranscriptionModelFamily.allCases.filter { !$0.models.isEmpty }) { family in
                     Section(family.title) {
                         ForEach(family.models) { model in
                             Button {
@@ -73,7 +73,7 @@ struct TranscriptionModelSelector: View {
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.82)
-                        Text(catalogState(for: selection).statusLabel)
+                        Text(selection == .appleSpeech ? (preparation?.isReady == true ? "Ready on this iPhone" : "Language setup managed by iOS") : catalogState(for: selection).statusLabel)
                             .font(MuesliTheme.captionMedium())
                             .foregroundStyle(catalogState(for: selection).tint)
                     }
@@ -137,7 +137,7 @@ private struct SelectedTranscriptionModelDetails: View {
                 }
             }
 
-            Label(state.detailLabel, systemImage: state.icon)
+            Label(model == .appleSpeech ? "Language assets managed by iOS" : state.detailLabel, systemImage: state.icon)
                 .font(MuesliTheme.captionMedium())
                 .foregroundStyle(state.tint)
         }
@@ -276,7 +276,9 @@ struct TranscriptionModelLogo: View {
 
     var body: some View {
         Group {
-            if model.family == .parakeet {
+            if model.family == .apple {
+                Image(systemName: "apple.logo").font(.title2)
+            } else if model.family == .parakeet {
                 Image("NvidiaLogo")
                     .resizable()
                     .scaledToFit()

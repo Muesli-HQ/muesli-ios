@@ -1336,6 +1336,7 @@ final class DictationCoordinator {
     }
 
     func handleOpenURL(_ url: URL) {
+        if url.isFileURL { receiveAudioFile(url); return }
         if url.scheme == MuesliAppConstants.urlScheme, url.host == "copy-dictation",
            let requestID = UUID(uuidString: url.lastPathComponent) {
             pendingDictationCopyRequestID = requestID
@@ -4165,7 +4166,7 @@ final class DictationCoordinator {
     private func publishKeyboardModelCatalog() {
         let catalog = KeyboardTranscriptionModelCatalog(
             selectedRawValue: selectedTranscriptionModel.rawValue,
-            models: LocalTranscriptionModel.allCases.map(\.keyboardCatalogOption),
+            models: LocalTranscriptionModel.availableModels.map(\.keyboardCatalogOption),
             canSelectModels: canSelectTranscriptionModelsFromKeyboard
         )
         try? store.saveKeyboardModelCatalog(catalog)
@@ -6441,12 +6442,97 @@ final class DictationCoordinator {
         setMeetingFinalizationTask(task, sessionID: initialSession.id)
     }
 
+    var isAudioImportPresented = false
+    var audioImportNavigationID: UUID?
+    var pendingAudioImports: [AudioImportInbox.Item] = []
+    var audioImportError: String?
+    var isImportingAudio = false
+    private var receivingAudioCount = 0
+    var isReceivingAudio: Bool { receivingAudioCount > 0 }
+    var canImportAudio: Bool { !isImportingAudio && isTranscriptionModelReady && canSelectTranscriptionModelsFromKeyboard }
+    private var audioImportTask: Task<Void, Never>?
+
+    func refreshAudioImports() {
+        do { pendingAudioImports = try AudioImportInbox.items() }
+        catch { audioImportError = error.localizedDescription }
+    }
+
+    func receiveAudioFile(_ url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
+        receivingAudioCount += 1
+        Task {
+            defer {
+                receivingAudioCount -= 1
+                if access { url.stopAccessingSecurityScopedResource() }
+            }
+            do {
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try AudioImportInbox.enqueue(url)
+                }.value
+                refreshAudioImports()
+            } catch { audioImportError = error.localizedDescription }
+        }
+    }
+
+    func dismissAudioImport(_ item: AudioImportInbox.Item) {
+        do { try AudioImportInbox.remove(item); refreshAudioImports() }
+        catch { audioImportError = error.localizedDescription }
+    }
+
+    func cancelAudioImport() { audioImportTask?.cancel() }
+
+    func importAudio(_ item: AudioImportInbox.Item) {
+        guard canImportAudio else { return }
+        isImportingAudio = true
+        audioImportError = nil
+        audioImportTask = Task {
+            defer { isImportingAudio = false; audioImportTask = nil }
+            do {
+                // A published session is authoritative if the app stopped before inbox cleanup.
+                if let existing = try store.activeRecordingSession(id: item.id) {
+                    try AudioImportInbox.remove(item)
+                    refreshAudioImports()
+                    transcribeSession(existing)
+                    audioImportNavigationID = existing.id
+                    return
+                }
+                let source = try AudioImportInbox.audioURL(item)
+                let (wav, duration) = try await AudioFileImporter.convert(sourceURL: source)
+                defer { try? FileManager.default.removeItem(at: wav) }
+                try Task.checkCancellation()
+                let destination = try store.newAudioFileURL(sessionID: item.id)
+                // A previous interrupted import can leave audio without a published session.
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.copyItem(at: wav, to: destination)
+                var saved = false
+                defer { if !saved { try? FileManager.default.removeItem(at: destination) } }
+                let session = RecordingSession(id: item.id, kind: .meeting, title: item.title,
+                    startedAt: .now.addingTimeInterval(-duration), endedAt: .now,
+                    phase: .transcriptionQueued, audioFileName: destination.lastPathComponent,
+                    keepsAudioRecording: true, source: "app",
+                    hasDurableAudioCheckpoint: true, protectedAudioUntilTranscriptCompletes: true)
+                try store.saveSession(session)
+                saved = true
+                try AudioImportInbox.remove(item)
+                refreshAudioImports()
+                refreshHistory()
+                transcribeSession(session)
+                audioImportNavigationID = session.id
+            } catch is CancellationError {
+                // Keep the inbox copy so the user can retry without finding the original again.
+            } catch { audioImportError = error.localizedDescription }
+        }
+    }
+
     func transcribeSession(_ session: RecordingSession) {
         startMeetingTranscription(session, useStreamingChunks: false)
     }
 
     private func startMeetingTranscription(_ queuedSession: RecordingSession, useStreamingChunks: Bool) {
-        guard isTranscriptionModelReady else { return }
+        guard isTranscriptionModelReady, !voiceNoteLifecycleState.isWorkActive,
+              activeRequest == nil, statusText != "Transcribing", !recordingStartupInProgress else { return }
         guard !isRecording,
               !hasMeetingRecordingInProgress,
               !isMeetingTranscribing,

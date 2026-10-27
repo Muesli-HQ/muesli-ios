@@ -21,6 +21,22 @@ struct RootView: View {
                 KeyboardHandoffOverlay(coordinator: coordinator)
             }
         }
+        .sheet(isPresented: $coordinator.isAudioImportPresented) { AudioImportView(coordinator: coordinator) }
+        .onChange(of: coordinator.pendingAudioImports.map(\.id)) { _, ids in
+            if !ids.isEmpty && coordinator.hasCompletedOnboarding { coordinator.isAudioImportPresented = true }
+            else if !coordinator.isImportingAudio { coordinator.isAudioImportPresented = false; selectedSection = .meetings }
+        }
+        .onChange(of: coordinator.hasCompletedOnboarding) { _, complete in
+            if complete && !coordinator.pendingAudioImports.isEmpty { coordinator.isAudioImportPresented = true }
+        }
+        .onChange(of: coordinator.audioImportNavigationID) { _, id in
+            if id != nil { coordinator.isAudioImportPresented = false; selectedSection = .meetings }
+        }
+        .alert("Audio Import", isPresented: Binding(get: { coordinator.audioImportError != nil && !coordinator.isAudioImportPresented },
+            set: { if !$0 { coordinator.audioImportError = nil } })) {
+            Button("OK") { coordinator.audioImportError = nil }
+        } message: { Text(coordinator.audioImportError ?? "") }
+        .onAppear { coordinator.refreshAudioImports() }
         .background(MuesliTheme.backgroundBase)
         .tint(currentAccent)
         .environment(\.muesliAccent, currentAccent)

@@ -1,0 +1,64 @@
+import Foundation
+
+/// A durable handoff: publish the directory only after both audio and metadata exist.
+enum AudioImportInbox {
+    enum ImportError: LocalizedError {
+        case unsupportedFormat, emptyFile
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedFormat: "Choose a WAV, MP3, M4A, MP4, AIFF, or CAF audio file."
+            case .emptyFile: "This file is empty or is not a regular audio file."
+            }
+        }
+    }
+    static let extensions: Set<String> = ["wav", "mp3", "m4a", "mp4", "aiff", "aif", "caf"]
+    struct Item: Codable, Identifiable, Sendable {
+        let id: UUID
+        let title: String
+        let fileName: String
+    }
+    static func directory() throws -> URL {
+        guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: MuesliAppConstants.appGroupIdentifier) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let url = root.appendingPathComponent("AudioImports", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    static func enqueue(_ source: URL, title: String? = nil, root: URL? = nil) throws -> Item {
+        guard extensions.contains(source.pathExtension.lowercased()) else { throw ImportError.unsupportedFormat }
+        let access = source.startAccessingSecurityScopedResource()
+        defer { if access { source.stopAccessingSecurityScopedResource() } }
+        let values = try source.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values.isRegularFile == true, (values.fileSize ?? 0) > 0 else { throw ImportError.emptyFile }
+        let root = try root ?? directory()
+        let item = Item(id: UUID(), title: title ?? source.deletingPathExtension().lastPathComponent,
+                        fileName: "audio.\(source.pathExtension.lowercased())")
+        let stage = root.appendingPathComponent(".\(item.id.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stage) }
+        try FileManager.default.copyItem(at: source, to: stage.appendingPathComponent(item.fileName))
+        try JSONEncoder().encode(item).write(to: stage.appendingPathComponent("item.json"), options: .atomic)
+        try FileManager.default.moveItem(at: stage, to: root.appendingPathComponent(item.id.uuidString))
+        return item
+    }
+    static func items(root: URL? = nil) throws -> [Item] {
+        let root = try root ?? directory()
+        return try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .compactMap { url in
+                guard let data = try? Data(contentsOf: url.appendingPathComponent("item.json")),
+                      let item = try? JSONDecoder().decode(Item.self, from: data),
+                      item.id.uuidString == url.lastPathComponent,
+                      item.fileName == "audio.\(URL(fileURLWithPath: item.fileName).pathExtension)",
+                      extensions.contains(URL(fileURLWithPath: item.fileName).pathExtension) else { return nil }
+                return item
+            }
+    }
+    static func audioURL(_ item: Item) throws -> URL {
+        try directory().appendingPathComponent(item.id.uuidString).appendingPathComponent(item.fileName)
+    }
+    static func remove(_ item: Item) throws {
+        try FileManager.default.removeItem(at: directory().appendingPathComponent(item.id.uuidString))
+    }
+}

@@ -361,7 +361,7 @@ struct SettingsView: View {
                     SettingsRow(
                         icon: "cpu",
                         title: "Runtime",
-                        value: coordinator.selectedTranscriptionModel.family == .whisper
+                        value: coordinator.selectedTranscriptionModel == .appleSpeech ? "Apple Speech" : coordinator.selectedTranscriptionModel.family == .whisper
                             ? "WhisperKit / CoreML"
                             : "FluidAudio / CoreML"
                     )
@@ -509,7 +509,8 @@ struct SettingsView: View {
 
     private var downloadedTranscriptionModels: [LocalTranscriptionModel] {
         LocalTranscriptionModel.allCases.filter { model in
-            coordinator.downloadedTranscriptionModels.contains(model)
+            if model == .appleSpeech { return false }
+            return coordinator.downloadedTranscriptionModels.contains(model)
         }
     }
 

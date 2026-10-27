@@ -14,6 +14,21 @@ final class MuesliSmokeUITests: XCTestCase {
         return app
     }
 
+    func testAudioImportOpensFilesPicker() {
+        let app = launchApp()
+        app.buttons["tab.meetings"].tap()
+        let importButton = app.buttons["meetings.importAudio"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+        importButton.tap()
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 8))
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Audio import Files picker"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+    }
+
     func testMainShellShowsVoiceNotesSmokeState() {
         let app = launchApp()
 

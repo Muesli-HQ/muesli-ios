@@ -35,16 +35,11 @@ struct ModelsView: View {
         MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                 HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
-                    Image(systemName: modelIcon)
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(modelTint)
-                        .frame(width: 42, height: 42)
-                        .background(modelTint.opacity(0.14))
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    TranscriptionModelLogo(model: coordinator.selectedTranscriptionModel)
 
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                         Text(coordinator.selectedTranscriptionModel.shortName)
-                            .font(MuesliTheme.title3())
+                            .font(.system(.subheadline, design: .rounded, weight: .semibold))
                             .foregroundStyle(MuesliTheme.textPrimary)
                         Text("CoreML / ANE")
                             .font(MuesliTheme.captionMedium())
@@ -64,6 +59,7 @@ struct ModelsView: View {
 
                 TranscriptionModelSelector(
                     selection: $coordinator.selectedTranscriptionModel,
+                    downloadedModels: coordinator.downloadedTranscriptionModels,
                     showsHeader: false,
                     preparation: coordinator.modelPreparation,
                     onSelect: coordinator.selectTranscriptionModel
@@ -89,7 +85,7 @@ struct ModelsView: View {
                     Button {
                         coordinator.prepareModel()
                     } label: {
-                        Label("Retry Download", systemImage: "arrow.clockwise")
+                        Label("Retry Setup", systemImage: "arrow.clockwise")
                             .font(MuesliTheme.headline())
                             .frame(maxWidth: .infinity)
                             .frame(height: 48)
@@ -119,8 +115,6 @@ struct ModelsView: View {
                 ModelInfoRow(icon: "waveform", title: "Engine", value: coordinator.selectedTranscriptionModel.shortName)
                 Divider().overlay(MuesliTheme.surfaceBorder)
                 ModelInfoRow(icon: "textformat", title: "Language", value: coordinator.selectedTranscriptionModel.capabilityLabel)
-                Divider().overlay(MuesliTheme.surfaceBorder)
-                ModelInfoRow(icon: "iphone", title: "Execution", value: "On device")
             }
             .padding(MuesliTheme.spacing16)
         }

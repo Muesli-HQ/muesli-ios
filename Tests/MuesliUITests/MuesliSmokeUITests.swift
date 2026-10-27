@@ -117,6 +117,20 @@ final class MuesliSmokeUITests: XCTestCase {
         captureActionButton(app, name: "Action Button opened from Settings")
     }
 
+    func testCompletedActionButtonSetupDoesNotOccupyDashboard() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "-muesli.actionButton.onboarding.completed", "YES"]
+        app.launch()
+        XCTAssertTrue(app.buttons["tab.settings"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["dictation.actionButtonInvitation"].exists)
+        captureActionButton(app, name: "Dashboard after Action Button setup")
+        app.buttons["tab.settings"].tap()
+        let entry = app.staticTexts["Action Button"].firstMatch
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
+        XCTAssertTrue(app.buttons["Close setup"].waitForExistence(timeout: 5))
+    }
+
     func testActionButtonAddStepExplainsImportBeforeAssignment() {
         let app = actionButtonApp(["--muesli-ui-testing-action-button-add"])
         let add = app.buttons["actionButton.primaryAction"]

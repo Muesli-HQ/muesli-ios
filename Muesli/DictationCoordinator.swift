@@ -189,6 +189,19 @@ final class DictationCoordinator {
         }
     }
     var modelPreparation = ModelPreparationState()
+    private(set) var downloadedTranscriptionModels = Set(LocalTranscriptionModel.allCases.filter { $0.isDownloaded })
+
+    func refreshDownloadedModels(isDownloaded: (LocalTranscriptionModel) -> Bool = { $0.isDownloaded }) {
+        downloadedTranscriptionModels = Set(LocalTranscriptionModel.allCases.filter(isDownloaded))
+        if modelPreparation.isReady, !downloadedTranscriptionModels.contains(selectedTranscriptionModel) {
+            modelPreparation = ModelPreparationState(
+                status: "\(selectedTranscriptionModel.shortName) is not downloaded",
+                detail: "Select this model again when you want to download it."
+            )
+        }
+    }
+    var isTranscriptionModelReady: Bool { modelPreparation.isReady && !isRemovingTranscriptionModel }
+
     var isRemovingTranscriptionModel = false
     var canRemoveDownloadedModels: Bool {
         !isRemovingTranscriptionModel
@@ -729,7 +742,7 @@ final class DictationCoordinator {
         message: String,
         unavailableAudioMessage: String? = nil
     ) async -> RecordingSession {
-        let audioIsRecoverable = session.isLongForm
+        let audioIsRecoverable = (session.isLongForm || session.protectedAudioUntilTranscriptCompletes)
             ? await hasRecoverableAudio(for: session)
             : false
         let resolvedMessage = session.isLongForm && !audioIsRecoverable
@@ -1441,8 +1454,12 @@ final class DictationCoordinator {
         switch outcome {
         case .started:
             guard let sessionID = activeSession?.id else { return .failed("The recording did not start.") }
+            guard let activityID = await liveActivityController.activeIdentifier(for: sessionID) else {
+                stopRecording(requestID: request.id)
+                return .failed(ActionButtonCaptureFailure.liveActivityUnavailable.localizedDescription)
+            }
             AppTelemetry.signal("action_button_dictation_started")
-            return .started(sessionID: sessionID)
+            return .started(sessionID: sessionID, activityID: activityID)
         case .failed(let message):
             return .failed(message)
         }
@@ -1482,7 +1499,13 @@ final class DictationCoordinator {
         guard isMeetingRecording, activeSession?.id == sessionID else {
             return .failed(meetingStatusText)
         }
-        return .started(sessionID: sessionID)
+        guard let activityID = await liveActivityController.activeIdentifier(for: sessionID) else {
+            if activeSession?.id == sessionID {
+                _ = stopCurrentMeetingRecording()
+            }
+            return .failed(ActionButtonCaptureFailure.liveActivityUnavailable.localizedDescription)
+        }
+        return .started(sessionID: sessionID, activityID: activityID)
     }
 
     func actionButtonTestOutput(sessionID: UUID, mode: ActionButtonCaptureMode) -> ActionButtonTestOutput {
@@ -1694,6 +1717,8 @@ final class DictationCoordinator {
 
     private static func shouldSkipModelPrewarmForTesting() -> Bool {
         shouldConfigureForUITestingFromLaunchArguments()
+            || (Bundle.main.bundleIdentifier == "com.phequals7.muesli.ios.dev"
+                && ProcessInfo.processInfo.arguments.contains("--muesli-validate-models"))
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 
@@ -2118,6 +2143,7 @@ final class DictationCoordinator {
     }
 
     private func startPipelinedNotepadRecording(seedText: String, sessionID: UUID?) {
+        guard isTranscriptionModelReady else { return }
         guard selectedTranscriptionModel.isDownloaded else {
             statusText = "\(selectedTranscriptionModel.shortName) is still downloading"
             if !isSelectedModelDownloadSuppressed {
@@ -2319,8 +2345,8 @@ final class DictationCoordinator {
 
     private func transcribePipelinedNotepadBurst(_ job: PendingNotepadTranscription) async {
         guard !cancelledNotepadTranscriptionSessionIDs.contains(job.sessionID) else { return }
-        beginTranscriptionBackgroundTask()
-        defer { endTranscriptionBackgroundTask() }
+        let backgroundTaskID = beginTranscriptionBackgroundTask()
+        defer { endTranscriptionBackgroundTask(matching: backgroundTaskID) }
         updatePipelinedNotepadPhase(sessionID: job.sessionID, phase: .transcribing)
 
         do {
@@ -2480,6 +2506,66 @@ final class DictationCoordinator {
         }
         notepadBurstCompletions.removeAll { $0.sessionID == sessionID }
         pipelinedNotepadSessionIDs.remove(sessionID)
+    }
+
+    var canStopVoiceNoteTranscription: Bool {
+        guard !isRecording, let runner = voiceNoteLifecycleRunner else { return false }
+        switch voiceNoteLifecycleState.phase {
+        case .transcribing(let id), .transcriptionQueued(let id):
+            return runner.sessionID == id
+        default:
+            return false
+        }
+    }
+
+    func stopVoiceNoteTranscription() {
+        guard canStopVoiceNoteTranscription,
+              let runner = voiceNoteLifecycleRunner,
+              var session = activeSession ?? (try? store.activeRecordingSession(id: runner.sessionID)),
+              session.id == runner.sessionID
+        else { return }
+
+        let hasAudio = session.audioFileName.flatMap { try? store.audioFileURL(fileName: $0) }
+            .map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let message = hasAudio
+            ? "Transcription stopped. Your recording is saved; retry it from Recent Voice Notes."
+            : "Transcription stopped. No saved audio is available."
+        session.phase = .failed
+        session.errorMessage = message
+        session.lastTranscriptionFailureReason = .interrupted
+        session.protectedAudioUntilTranscriptCompletes = hasAudio
+        do {
+            try store.saveSession(session)
+        } catch {
+            statusText = "Could not save the recording: \(error.localizedDescription)"
+            return
+        }
+
+        // Invalidate ownership before cancelling. Late progress/results must not
+        // overwrite this saved note or a new recording, even if Core ML takes
+        // time to return from an in-flight operation.
+        finishVoiceNoteLifecycle(sessionID: session.id)
+        endTranscriptionBackgroundTask()
+        activeSession = nil
+        activeRequest = nil
+        try? store.clearPendingRequest(matching: runner.requestID)
+        try? store.clearPendingCommand(matching: runner.requestID)
+        try? store.saveStatus(.init(requestID: runner.requestID, phase: .failed, message: message))
+        saveKeyboardHandoff(requestID: runner.requestID, phase: .failed, message: message)
+        transitionKeyboardSession(.requestFinished)
+        clearPersistentKeyboardSessionRoute(for: runner.requestID)
+        saveKeyboardRuntimeStatus(isActive: false, activeRequestID: nil, phase: .failed, message: message)
+        liveDictationTranscript = ""
+        realtimeDictationCommittedText = ""
+        clearKeyboardLiveTranscript()
+        statusText = message
+        refreshHistory()
+        Task { [liveActivityController] in
+            await liveActivityController.end(
+                phase: "Stopped", detail: "Transcription stopped",
+                session: session, dismissal: .immediate
+            )
+        }
     }
 
     func cancelActiveRecording() {
@@ -3265,12 +3351,22 @@ final class DictationCoordinator {
         }
     }
 
+    var canRetrySavedVoiceNote: Bool {
+        isTranscriptionModelReady && !isRecording && !hasMeetingRecordingInProgress
+            && !voiceNoteLifecycleState.isWorkActive
+            && statusText != "Transcribing" && !isRemovingTranscriptionModel
+    }
+
+    func recoverVoiceNoteFromDashboard(_ session: RecordingSession) {
+        if session.isLongForm {
+            openLongVoiceNote(session)
+        } else {
+            retryVoiceNoteTranscription(sessionID: session.id)
+        }
+    }
+
     func retryVoiceNoteTranscription(sessionID: UUID) {
-        guard !isRecording,
-              !hasMeetingRecordingInProgress,
-              !voiceNoteLifecycleState.isWorkActive,
-              statusText != "Transcribing",
-              !isRemovingTranscriptionModel,
+        guard canRetrySavedVoiceNote,
               var session = try? store.activeRecordingSession(id: sessionID),
               session.canRetryVoiceNoteTranscription,
               let requestID = session.requestID,
@@ -3295,16 +3391,17 @@ final class DictationCoordinator {
         session.errorMessage = nil
         try? store.saveSession(session)
         activeSession = session
-        statusText = "Preparing audio"
+        statusText = "Transcribing"
+        refreshHistory()
         AppTelemetry.contextualSignal(
             "long_voice_note_transcription_retried",
             parameters: voiceNoteTelemetryParameters(session: session)
         )
 
         let task = Task { @MainActor [weak self] in
-            guard let self else { return }
-            beginTranscriptionBackgroundTask()
-            defer { endTranscriptionBackgroundTask() }
+            guard let self, !Task.isCancelled else { return }
+            let backgroundTaskID = beginTranscriptionBackgroundTask()
+            defer { endTranscriptionBackgroundTask(matching: backgroundTaskID) }
             var session = session
             do {
                 var usableURL = audioURL
@@ -3333,7 +3430,7 @@ final class DictationCoordinator {
                 let transcriptionURL = usableURL
                 let outcome = try await runOfflineTranscriptionJob(
                     audioURL: transcriptionURL,
-                    onProgress: { [weak self] update in
+                    onProgress: { [weak self] _ in
                         guard let self,
                               self.isCurrentVoiceNoteLifecycle(
                                   sessionID: sessionID,
@@ -3341,7 +3438,7 @@ final class DictationCoordinator {
                                   runnerID: runnerID
                               )
                         else { return }
-                        self.statusText = self.transcriptionStatusMessage(for: update)
+                        self.statusText = "Transcribing"
                     },
                     onTimeout: {}
                 ) { [engine] progress in
@@ -4018,7 +4115,7 @@ final class DictationCoordinator {
             forKey: MuesliPreferences.manuallyRemovedTranscriptionModelKey
         )
         if selectedTranscriptionModel == model {
-            guard !model.isDownloaded else { return }
+            guard !modelPreparation.isReady, !modelPreparation.isPreparing else { return }
             modelPreparation = ModelPreparationState(
                 status: "\(model.shortName) is not downloaded",
                 detail: model.detail
@@ -4079,7 +4176,11 @@ final class DictationCoordinator {
         }
 
         isRemovingTranscriptionModel = true
-        defer { isRemovingTranscriptionModel = false }
+        defer {
+            refreshDownloadedModels()
+            isRemovingTranscriptionModel = false
+            publishKeyboardModelCatalog()
+        }
 
         if selectedTranscriptionModel == model {
             modelPreparationTask?.cancel()
@@ -4124,14 +4225,15 @@ final class DictationCoordinator {
     }
 
     private func prepareSelectedModel(reason: String) {
+        guard !isRemovingTranscriptionModel else { return }
         guard !modelPreparation.isPreparing, !modelPreparation.isReady else { return }
 
         let model = selectedTranscriptionModel
         modelPreparationTask?.cancel()
         modelPreparation = ModelPreparationState(
-            phase: .downloading,
-            progress: 0,
-            status: "Checking model files...",
+            phase: model.isDownloaded ? .preparing : .downloading,
+            progress: nil,
+            status: model.isDownloaded ? "Loading model into memory..." : "Checking model files...",
             detail: model.shortName
         )
         AppTelemetry.signal(
@@ -4183,12 +4285,7 @@ final class DictationCoordinator {
                 await MainActor.run {
                     guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPreparationTask = nil
-                    coordinator.modelPreparation = ModelPreparationState(
-                        phase: .failed,
-                        progress: nil,
-                        status: "Model setup paused",
-                        detail: "Check your connection and try again"
-                    )
+                    coordinator.modelPreparation = ModelPreparationState.failed(error)
                     AppTelemetry.failure(
                         "model_prepare_failed",
                         domain: .model,
@@ -4201,7 +4298,15 @@ final class DictationCoordinator {
         }
     }
 
+    /// Called before presenting a recording surface. Failed setup waits for an
+    /// explicit retry; deleting a model must never silently download it again.
+    func ensureModelReadyForRecording() {
+        guard modelPreparation.phase == .idle else { return }
+        prewarmModelIfNeeded(reason: "recording_surface")
+    }
+
     func prewarmModelIfNeeded(reason: String) {
+        guard !isRemovingTranscriptionModel else { return }
         #if DEBUG
         guard !Self.shouldSkipModelPrewarmForTesting() else { return }
         #endif
@@ -4274,12 +4379,7 @@ final class DictationCoordinator {
                 await MainActor.run {
                     guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPrewarmTask = nil
-                    coordinator.modelPreparation = ModelPreparationState(
-                        phase: .failed,
-                        progress: nil,
-                        status: "Warmup paused",
-                        detail: "Muesli will try again when you record"
-                    )
+                    coordinator.modelPreparation = ModelPreparationState.failed(error)
                     AppTelemetry.failure(
                         "model_prewarm_failed",
                         domain: .model,
@@ -4294,7 +4394,7 @@ final class DictationCoordinator {
     }
 
     func startOnboardingTestDictation() {
-        guard !isOnboardingTestRecording else { return }
+        guard !isOnboardingTestRecording, isTranscriptionModelReady else { return }
         MuesliHaptics.dictationStart()
         onboardingTestTranscript = ""
         onboardingTestError = nil
@@ -4414,13 +4514,11 @@ final class DictationCoordinator {
         status: String?,
         model: LocalTranscriptionModel
     ) {
-        guard selectedTranscriptionModel == model else { return }
+        guard selectedTranscriptionModel == model, modelPreparation.isPreparing else { return }
         let normalizedProgress = min(max(progress, 0), 1)
         let detail = status ?? "\(Int((normalizedProgress * 100).rounded()))% complete"
-        let phase: ModelPreparationPhase = detail.localizedCaseInsensitiveContains("compil")
-            || detail.localizedCaseInsensitiveContains("prepar")
-            ? .preparing
-            : .downloading
+        let phase: ModelPreparationPhase = model.isDownloaded
+            ? .preparing : ModelPreparationState.progressPhase(status: detail)
 
         modelPreparation = ModelPreparationState(
             phase: phase,
@@ -4475,12 +4573,7 @@ final class DictationCoordinator {
                 await MainActor.run {
                     guard coordinator.selectedTranscriptionModel == model else { return }
                     coordinator.modelPreparationTask = nil
-                    coordinator.modelPreparation = ModelPreparationState(
-                        phase: .failed,
-                        progress: nil,
-                        status: "Model setup paused",
-                        detail: "Download finished, but optimization failed"
-                    )
+                    coordinator.modelPreparation = ModelPreparationState.failed(error)
                     AppTelemetry.failure(
                         "model_prepare_failed",
                         domain: .model,
@@ -4645,8 +4738,8 @@ final class DictationCoordinator {
             }
             transitionKeyboardSession(.handoffStarted(request.id))
         }
-        guard selectedTranscriptionModel.isDownloaded else {
-            let message = "\(selectedTranscriptionModel.shortName) is still downloading"
+        guard isTranscriptionModelReady else {
+            let message = "\(selectedTranscriptionModel.shortName) is not ready. Open Muesli to finish model setup."
             statusText = message
             if !isSelectedModelDownloadSuppressed {
                 prepareSelectedModel(reason: "\(source)_recording")
@@ -4972,9 +5065,9 @@ final class DictationCoordinator {
         audioURL: URL,
         lifecycleRunnerID: UUID
     ) {
-        beginTranscriptionBackgroundTask()
+        let backgroundTaskID = beginTranscriptionBackgroundTask()
         let task = Task {
-            defer { endTranscriptionBackgroundTask() }
+            defer { endTranscriptionBackgroundTask(matching: backgroundTaskID) }
 
             do {
                 await engine.selectModel(selectedTranscriptionModel)
@@ -4999,7 +5092,7 @@ final class DictationCoordinator {
                               )
                         else { return }
                         let message = self.transcriptionStatusMessage(for: update)
-                        self.statusText = message
+                        self.statusText = "Transcribing"
                         try? self.store.saveStatus(.init(requestID: request.id, phase: .transcribing, message: message))
                         self.saveKeyboardHandoff(requestID: request.id, phase: .transcribingStarted, message: message)
                         self.saveKeyboardRuntimeStatus(
@@ -5244,10 +5337,10 @@ final class DictationCoordinator {
         let startedFromKeyboard = isKeyboardHandoffActive
         let finishedKeyboardSegment: Result<KeyboardSessionKeeper.SegmentResult, Error>? = usesPersistentKeyboardSession
             ? Result { try keyboardSessionKeeper.finishSegment() } : nil
-        beginTranscriptionBackgroundTask()
+        let backgroundTaskID = beginTranscriptionBackgroundTask()
         let transcriptionTask = Task {
             defer {
-                endTranscriptionBackgroundTask()
+                endTranscriptionBackgroundTask(matching: backgroundTaskID)
             }
 
             do {
@@ -5605,6 +5698,7 @@ final class DictationCoordinator {
 
     @discardableResult
     func startMeetingRecording(title: String = "Untitled Meeting", requiresLiveActivity: Bool = false) -> UUID? {
+        guard isTranscriptionModelReady else { return nil }
         guard !recordingStartupInProgress, !isRecording,
               !hasMeetingRecordingInProgress,
               !isMeetingTranscribing,
@@ -6197,11 +6291,11 @@ final class DictationCoordinator {
     }
 
     private func finalizeStreamingMeeting(_ initialSession: RecordingSession, operationID: UUID) {
-        beginTranscriptionBackgroundTask()
+        let backgroundTaskID = beginTranscriptionBackgroundTask()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
-                endTranscriptionBackgroundTask()
+                endTranscriptionBackgroundTask(matching: backgroundTaskID)
             }
 
             var session = initialSession
@@ -6327,6 +6421,7 @@ final class DictationCoordinator {
     }
 
     private func startMeetingTranscription(_ queuedSession: RecordingSession, useStreamingChunks: Bool) {
+        guard isTranscriptionModelReady else { return }
         guard !isRecording,
               !hasMeetingRecordingInProgress,
               !isMeetingTranscribing,
@@ -6374,11 +6469,11 @@ final class DictationCoordinator {
             return
         }
 
-        beginTranscriptionBackgroundTask()
+        let backgroundTaskID = beginTranscriptionBackgroundTask()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
-                endTranscriptionBackgroundTask()
+                endTranscriptionBackgroundTask(matching: backgroundTaskID)
             }
 
             do {
@@ -6815,8 +6910,9 @@ final class DictationCoordinator {
         startedFromKeyboard: Bool,
         update: TranscriptionProgressUpdate
     ) {
+        // Keep backend progress out of the quick-note UI and preserve its busy state.
         let message = transcriptionStatusMessage(for: update)
-        statusText = message
+        statusText = "Transcribing"
         try? store.saveStatus(.init(requestID: requestID, phase: .transcribing, message: message))
         if startedFromKeyboard {
             saveKeyboardHandoff(requestID: requestID, phase: .transcribingStarted, message: message)
@@ -7439,13 +7535,14 @@ final class DictationCoordinator {
         }
     }
 
-    private func beginTranscriptionBackgroundTask() {
+    private func beginTranscriptionBackgroundTask() -> UIBackgroundTaskIdentifier {
         endTranscriptionBackgroundTask()
         transcriptionBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "MuesliTranscription") { [weak self] in
             Task { @MainActor in
                 self?.handleTranscriptionBackgroundTaskExpiration()
             }
         }
+        return transcriptionBackgroundTask
     }
 
     private func handleTranscriptionBackgroundTaskExpiration() {
@@ -7479,8 +7576,9 @@ final class DictationCoordinator {
         ])
     }
 
-    private func endTranscriptionBackgroundTask() {
-        guard transcriptionBackgroundTask != .invalid else { return }
+    private func endTranscriptionBackgroundTask(matching taskID: UIBackgroundTaskIdentifier? = nil) {
+        guard taskID == nil || taskID == transcriptionBackgroundTask,
+              transcriptionBackgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(transcriptionBackgroundTask)
         transcriptionBackgroundTask = .invalid
     }
@@ -7620,7 +7718,7 @@ private actor OfflineTranscriptionProgressTracker {
     }
 }
 
-private enum OfflineTranscriptionJobOutcome<Output: Sendable>: Sendable {
+enum OfflineTranscriptionJobOutcome<Output: Sendable>: Sendable {
     case completed(Output)
     case timedOut
 }
@@ -7662,7 +7760,7 @@ private enum VoiceNoteCaptureFailure: LocalizedError {
     }
 }
 
-private final class OfflineTranscriptionJobControl<Output: Sendable>: @unchecked Sendable {
+final class OfflineTranscriptionJobControl<Output: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<OfflineTranscriptionJobOutcome<Output>, Error>?
     private var pendingCompletion: Result<OfflineTranscriptionJobOutcome<Output>, Error>?
@@ -7798,6 +7896,7 @@ extension DictationCoordinator: ModelBackgroundDownloadServiceDelegate {
     }
 
     func modelBackgroundDownloadDidFinish(model: LocalTranscriptionModel) {
+        refreshDownloadedModels()
         publishKeyboardModelCatalog()
         guard selectedTranscriptionModel == model else { return }
         modelPreparation = ModelPreparationState(
@@ -7810,6 +7909,7 @@ extension DictationCoordinator: ModelBackgroundDownloadServiceDelegate {
     }
 
     func modelBackgroundDownloadDidFail(model: LocalTranscriptionModel, message: String) {
+        refreshDownloadedModels()
         publishKeyboardModelCatalog()
         guard selectedTranscriptionModel == model else { return }
         modelPreparationTask = nil

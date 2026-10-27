@@ -310,7 +310,7 @@ enum VoiceNoteFailureSessionPolicy {
         failedSession.phase = .failed
         failedSession.errorMessage = message
         failedSession.lastTranscriptionFailureReason = reason
-        failedSession.protectedAudioUntilTranscriptCompletes = session.isLongForm
+        failedSession.protectedAudioUntilTranscriptCompletes = (session.isLongForm || session.protectedAudioUntilTranscriptCompletes)
             && hasRecoverableAudio
         return failedSession
     }

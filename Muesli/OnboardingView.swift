@@ -520,10 +520,10 @@ struct OnboardingView: View {
     private var modelStep: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                Text("Prepare Model")
+                Text("Setting Up Your Model")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("\(coordinator.selectedTranscriptionModel.shortName) runs on CoreML / ANE. First setup downloads and compiles the model for this iPhone.")
+                Text("\(coordinator.selectedTranscriptionModel.shortName) will download and get ready automatically for this iPhone.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                 Text("You can continue setup while this runs in the background. Muesli will keep preparing the model as long as the app stays open.")
@@ -540,7 +540,12 @@ struct OnboardingView: View {
         MuesliSurface(cornerRadius: MuesliTheme.cornerLarge) {
             TranscriptionModelSelector(
                 selection: $coordinator.selectedTranscriptionModel,
-                preparation: coordinator.modelPreparation
+                downloadedModels: coordinator.downloadedTranscriptionModels,
+                preparation: coordinator.modelPreparation,
+                onSelect: { model in
+                    coordinator.selectTranscriptionModel(model)
+                    coordinator.prepareModelForOnboarding()
+                }
             )
             .padding(MuesliTheme.spacing16)
         }
@@ -569,7 +574,7 @@ struct OnboardingView: View {
 
                 modelBackgroundHint
 
-                if coordinator.modelPreparation.phase == .failed || coordinator.modelPreparation.phase == .idle {
+                if coordinator.modelPreparation.phase == .failed {
                     Button {
                         coordinator.prepareModelForOnboarding()
                     } label: {
@@ -757,7 +762,7 @@ struct OnboardingView: View {
                                 .buttonStyle(.plain)
                             }
                         }
-                    } else if coordinator.modelPreparation.phase == .failed || coordinator.modelPreparation.phase == .idle {
+                    } else if coordinator.modelPreparation.phase == .failed {
                         Button {
                             coordinator.prepareModelForOnboarding()
                         } label: {

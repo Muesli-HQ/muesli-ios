@@ -556,9 +556,8 @@ struct RecordingSession: Codable, Sendable, Equatable, Identifiable {
 
     var canRetryVoiceNoteTranscription: Bool {
         kind != .meeting
-            && isLongForm
             && phase == .failed
-            && voiceNoteDurabilityEvidence == .durableCheckpoint
+            && (protectedAudioUntilTranscriptCompletes || (isLongForm && voiceNoteDurabilityEvidence == .durableCheckpoint))
             && audioFileName != nil
     }
 

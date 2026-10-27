@@ -26,30 +26,44 @@ actor WhisperKitTranscriptionRuntime {
         progress?(0.92, "Loading downloaded Whisper model...")
         let modelFolder = Self.modelDirectory(for: variant)
 
+        try ModelSetupStorage.check(at: modelFolder, downloadBytes: 0,
+                                    modelBytes: Self.estimatedDownloadBytes(for: variant))
+
         progress?(0.94, "Optimizing WhisperKit for this iPhone...")
+        #if DEBUG
+        let validationLogging = Bundle.main.bundleIdentifier == "com.phequals7.muesli.ios.dev"
+            && ProcessInfo.processInfo.arguments.contains("--muesli-validate-models")
+        if validationLogging {
+            Logging.shared.loggingCallback = { print("MUESLI_WHISPER \($0)") }
+        }
+        #else
+        let validationLogging = false
+        #endif
         let configuration = WhisperKitConfig(
             model: nil,
             modelFolder: modelFolder.path,
             computeOptions: ModelComputeOptions(
                 audioEncoderCompute: .cpuAndNeuralEngine,
                 textDecoderCompute: .cpuAndNeuralEngine
-            )
+            ),
+            logLevel: validationLogging ? .debug : .info
         )
-        do {
-            whisperKit = try await WhisperKit(configuration)
-            loadedVariant = variant
-            progress?(1, "Whisper model ready")
-        } catch {
-            Self.invalidateCompletionMarker(at: modelFolder)
-            throw error
-        }
+        // This marker certifies downloaded files, not device optimization.
+        // Keep completed assets on failure so retrying does not redownload them.
+        let prepared = try await WhisperKit(configuration)
+        try Task.checkCancellation()
+        whisperKit = prepared
+        loadedVariant = variant
+        progress?(1, "Whisper model ready")
     }
 
     func transcribe(audioURL: URL) async throws -> String {
         guard let whisperKit else {
             throw WhisperKitRuntimeError.notLoaded
         }
+        try Task.checkCancellation()
         let results = try await whisperKit.transcribe(audioPath: audioURL.path)
+        try Task.checkCancellation()
         return results
             .map(\.text)
             .joined(separator: " ")
@@ -114,10 +128,14 @@ actor WhisperKitTranscriptionRuntime {
         try directory.setResourceValues(values)
     }
 
-    private static func invalidateCompletionMarker(at directory: URL) {
-        try? FileManager.default.removeItem(
-            at: directory.appendingPathComponent(completionMarkerName)
-        )
+    static func estimatedDownloadBytes(for variant: String) -> Int64 {
+        switch variant {
+        case "tiny.en": 153_000_000
+        case "small.en": 500_000_000
+        case "medium.en": 1_550_000_000
+        case "large-v3-v20240930_626MB": 626_000_000
+        default: 250_000_000
+        }
     }
 
     private static func modelComponentExists(named name: String, in directory: URL) -> Bool {

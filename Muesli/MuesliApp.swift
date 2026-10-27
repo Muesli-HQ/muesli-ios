@@ -9,6 +9,8 @@ struct MuesliApp: App {
     private var isUITesting: Bool {
         #if DEBUG
         ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.uiTestingLaunchArgument)
+            || (Bundle.main.bundleIdentifier == "com.phequals7.muesli.ios.dev"
+                && ProcessInfo.processInfo.arguments.contains("--muesli-validate-models"))
         #else
         false
         #endif
@@ -33,6 +35,9 @@ struct MuesliApp: App {
                 #endif
             }
                 .task {
+                    #if DEBUG
+                    await ModelDownloadDeviceValidation.runIfRequested()
+                    #endif
                     #if DEBUG && targetEnvironment(simulator)
                     coordinator.startLiveActivityWaveformPreviewIfRequested()
                     #endif
@@ -57,6 +62,7 @@ struct MuesliApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     coordinator.recordCaptureLifecycle("scene.\(phase)")
                     if phase == .active {
+                        coordinator.refreshDownloadedModels()
                         coordinator.copyPendingDictationIfActive()
                         #if DEBUG && targetEnvironment(simulator)
                         coordinator.startLiveActivityWaveformPreviewIfRequested()

@@ -72,6 +72,7 @@ struct DictationView: View {
                 Text("Muesli will sync voice note text, meeting transcripts, notes, and summaries with your Mac through your private iCloud account. Audio stays local.")
             }
             .onAppear {
+                coordinator.ensureModelReadyForRecording()
                 refreshVisibleStateIfNeeded()
                 if Self.hasDebugSimulatorLaunchArgument("--muesli-ui-testing-action-button-onboarding") {
                     isActionButtonOnboardingPresented = true
@@ -79,6 +80,7 @@ struct DictationView: View {
             }
             .onChange(of: isActive) { _, active in
                 guard active else { return }
+                coordinator.ensureModelReadyForRecording()
                 refreshVisibleStateIfNeeded()
             }
             .onChange(of: coordinator.voiceNoteHistoryPresentation.revision) { _, _ in
@@ -91,6 +93,7 @@ struct DictationView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active, isActive else { return }
+                coordinator.ensureModelReadyForRecording()
                 refreshVisibleStateIfNeeded()
             }
             .onChange(of: microphonePreference) { _, _ in
@@ -120,7 +123,7 @@ struct DictationView: View {
 
     private var shouldShowActionButtonInvitation: Bool {
         guard #available(iOS 18.0, *) else { return false }
-        return ActionButtonHardware.isSupported
+        return ActionButtonHardware.isSupported && !actionButtonSetupCompleted
     }
 
     private var actionButtonInvitation: some View {
@@ -136,11 +139,11 @@ struct DictationView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Action Button").font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text(actionButtonSetupCompleted ? "Setup completed" : "Dictation or a meeting note")
+                    Text("Dictation or a meeting note")
                         .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
                 }
                 Spacer(minLength: 8)
-                Text(actionButtonSetupCompleted ? "Reconfigure" : "Set Up")
+                Text("Set Up")
                     .font(MuesliTheme.headline()).foregroundStyle(MuesliTheme.accent)
             }
             .padding(14)
@@ -339,6 +342,12 @@ struct DictationView: View {
                 .frame(maxWidth: 240)
                 .disabled(coordinator.isRecording || isTranscribing)
 
+                if !coordinator.isRecording && !isTranscribing {
+                    ModelReadinessView(state: coordinator.modelPreparation,
+                                       modelName: coordinator.selectedTranscriptionModel.shortName,
+                                       retry: coordinator.prepareModel)
+                }
+
                 Group {
                     if isWaveformActive {
                         VStack(spacing: MuesliTheme.spacing4) {
@@ -444,6 +453,20 @@ struct DictationView: View {
                             .accessibilityIdentifier("dictation.primaryButton")
                         }
                         .frame(maxWidth: .infinity)
+                    } else if coordinator.canStopVoiceNoteTranscription {
+                        Button {
+                            coordinator.stopVoiceNoteTranscription()
+                        } label: {
+                            VoiceNoteRecordingActionLabel(
+                                title: "Stop Transcription",
+                                systemImage: "stop.fill",
+                                color: MuesliTheme.accent
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop Transcription")
+                        .accessibilityHint("Keeps your recording so you can retry later")
+                        .accessibilityIdentifier("dictation.stopTranscriptionButton")
                     } else {
                         Button {
                             toggleCapture()
@@ -659,7 +682,8 @@ struct DictationView: View {
                                 // appears here; deleting it underneath the
                                 // recorder would fail the work in flight.
                                 canDelete: !coordinator.isCapturingVoiceNote(sessionID: session.id),
-                                action: { coordinator.openLongVoiceNote(session) },
+                                canRetry: coordinator.canRetrySavedVoiceNote && session.canRetryVoiceNoteTranscription,
+                                action: { coordinator.recoverVoiceNoteFromDashboard(session) },
                                 onDelete: { Task { await coordinator.deleteRecoverableVoiceNote(session) } }
                             )
                         case .completed(let result, let session):
@@ -847,7 +871,7 @@ struct DictationView: View {
     }
 
     private var isDictationButtonDisabled: Bool {
-        isTranscribing
+        isTranscribing || !coordinator.isTranscriptionModelReady
     }
 
     private var dictationButtonTitle: String {
@@ -1053,6 +1077,7 @@ private struct DictationHomeStatTile: View {
 private struct RecoverableVoiceNoteRow: View {
     let session: RecordingSession
     let canDelete: Bool
+    let canRetry: Bool
     let action: () -> Void
     let onDelete: () -> Void
     @State private var isConfirmingDelete = false
@@ -1074,7 +1099,10 @@ private struct RecoverableVoiceNoteRow: View {
                     .clipShape(Circle())
 
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                    Text(session.audioFileName == nil ? "Audio unavailable" : "Needs transcription")
+                    Text(session.audioFileName == nil ? "Audio unavailable"
+                         : (!session.isLongForm && [.transcriptionQueued, .transcribing].contains(session.phase))
+                            ? "Transcribing"
+                            : session.isLongForm ? "Needs transcription" : "Retry Transcription")
                         .font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text(session.createdAt.formatted(date: .abbreviated, time: .shortened))
@@ -1090,7 +1118,7 @@ private struct RecoverableVoiceNoteRow: View {
                 }
 
                 Spacer(minLength: MuesliTheme.spacing8)
-                Image(systemName: "chevron.right")
+                Image(systemName: session.isLongForm ? "chevron.right" : "arrow.clockwise")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
@@ -1104,7 +1132,9 @@ private struct RecoverableVoiceNoteRow: View {
             .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityHint(session.audioFileName == nil ? "Opens recovery details" : "Opens retry actions")
+        .disabled(!session.isLongForm && !canRetry)
+        .accessibilityHint(session.isLongForm ? "Opens retry actions" : "Retries transcription here on the dashboard")
+        .accessibilityIdentifier("dictation.recover.\(session.id.uuidString)")
         .contextMenu {
             if canDelete {
                 Button("Delete Voice Note", systemImage: "trash", role: .destructive) {

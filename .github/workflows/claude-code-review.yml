@@ -41,6 +41,10 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # The plugin invokes a Skill and review subagents, then reads PRs via gh.
+          # Keep permissions scoped to review operations; do not bypass permission checks.
+          claude_args: >-
+            --allowedTools "Skill(code-review:code-review),Agent,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),mcp__github_inline_comment__create_inline_comment"
           additional_permissions: |
             pull_requests: write
             issues: write
@@ -51,3 +55,33 @@ jobs:
           display_report: true
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
+
+      - name: Report review execution diagnostics
+        if: always() && steps.claude-review.outcome != 'skipped'
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          output = Path(os.environ["RUNNER_TEMP"]) / "claude-execution-output.json"
+          if not output.exists():
+              print("No Claude execution result; check action setup/authentication logs.")
+          else:
+              raw = output.read_text()
+              try:
+                  payload = json.loads(raw)
+                  messages = payload if isinstance(payload, list) else [payload]
+              except json.JSONDecodeError:
+                  messages = [json.loads(line) for line in raw.splitlines() if line.strip()]
+              for message in messages:
+                  if not isinstance(message, dict) or message.get("type") != "result":
+                      continue
+                  # Never print tool inputs, prompts, environment, or full transcripts.
+                  denied = [entry.get("tool_name", "unknown")
+                            for entry in message.get("permission_denials", [])]
+                  print(json.dumps({"subtype": message.get("subtype"),
+                                    "is_error": message.get("is_error"),
+                                    "denied_tools": denied}, indent=2))
+                  if denied:
+                      print("::warning::Claude had denied tool calls; confirm the requested review completed.")

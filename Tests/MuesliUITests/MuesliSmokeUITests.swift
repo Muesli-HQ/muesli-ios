@@ -20,13 +20,17 @@ final class MuesliSmokeUITests: XCTestCase {
         let importButton = app.buttons["meetings.importAudio"]
         XCTAssertTrue(importButton.waitForExistence(timeout: 5))
         importButton.tap()
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 8))
+        // The system document-picker service cold-starts on CI. Its remote
+        // accessibility tree can arrive well after the app finishes presenting.
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 60), "Files picker did not become available")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Audio import Files picker"
         attachment.lifetime = .keepAlways
         add(attachment)
-        app.buttons["Cancel"].tap()
-        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 10), "Files picker did not dismiss")
+        XCTAssertTrue(importButton.isHittable)
     }
 
     func testMainShellShowsVoiceNotesSmokeState() {

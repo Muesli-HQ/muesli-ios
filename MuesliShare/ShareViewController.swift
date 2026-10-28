@@ -7,7 +7,7 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        status.text = "Saving audio to Muesli…"
+        status.text = "Saving audio… Open Muesli to transcribe."
         status.numberOfLines = 0
         status.textAlignment = .center
         done.setTitle("Done", for: .normal)
@@ -33,16 +33,19 @@ final class ShareViewController: UIViewController {
         // The provider URL is valid only within this callback; copy before returning.
         let suggestedTitle = provider.suggestedName.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }
         provider.loadFileRepresentation(forTypeIdentifier: type) { [weak self] url, error in
-            let message: String
             do {
                 if let error { throw error }
                 guard let url else { throw CocoaError(.fileReadUnknown) }
                 _ = try AudioImportInbox.enqueue(url, title: suggestedTitle)
-                message = "Audio saved. Open Muesli to choose your model and transcribe it."
-            } catch { message = "Could not save audio. \(error.localizedDescription)" }
-            Task { @MainActor [weak self] in
-                self?.status.text = message
-                self?.done.isEnabled = true
+                // The inbox is durable now. Dismiss the extension without requiring
+                // another tap; the app presents the pending import on activation.
+                Task { @MainActor [weak self] in self?.finish() }
+            } catch {
+                let message = "Could not save audio. \(error.localizedDescription)"
+                Task { @MainActor [weak self] in
+                    self?.status.text = message
+                    self?.done.isEnabled = true
+                }
             }
         }
     }

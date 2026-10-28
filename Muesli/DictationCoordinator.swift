@@ -3392,9 +3392,15 @@ final class DictationCoordinator {
     }
 
     func retryVoiceNoteTranscription(sessionID: UUID) {
-        guard canRetrySavedVoiceNote,
+        transcribeSavedVoiceNote(sessionID: sessionID, isInitialImport: false)
+    }
+
+    private func transcribeSavedVoiceNote(sessionID: UUID, isInitialImport: Bool) {
+        guard canRetrySavedVoiceNote, !isMeetingTranscribing,
               var session = try? store.activeRecordingSession(id: sessionID),
-              session.canRetryVoiceNoteTranscription,
+              (isInitialImport
+                ? session.kind == .quickDictation && session.phase == .transcriptionQueued
+                : session.canRetryVoiceNoteTranscription),
               let requestID = session.requestID,
               let audioFileName = session.audioFileName,
               let audioURL = try? store.audioFileURL(fileName: audioFileName)
@@ -3412,7 +3418,7 @@ final class DictationCoordinator {
             return
         }
         session.phase = .transcriptionQueued
-        session.transcriptionRetryCount += 1
+        if !isInitialImport { session.transcriptionRetryCount += 1 }
         session.lastTranscriptionAttemptAt = .now
         session.errorMessage = nil
         try? store.saveSession(session)
@@ -4347,17 +4353,15 @@ final class DictationCoordinator {
             prepareSelectedModel(reason: "prewarm_\(reason)")
             return
         }
-        modelPreparation = ModelPreparationState(
-            phase: .preparing,
-            progress: nil,
-            status: "Warming up the transcription engine...",
-            detail: model.shortName
-        )
         let coordinator = self
         modelPrewarmTask = Task { [engine, model] in
             do {
+                try Task.checkCancellation()
                 await engine.selectModel(model)
-                guard await !engine.isLoaded(for: model) else {
+                let isLoaded = await engine.isLoaded(for: model)
+                try Task.checkCancellation()
+                guard coordinator.selectedTranscriptionModel == model else { return }
+                guard !isLoaded else {
                     await MainActor.run {
                         guard coordinator.selectedTranscriptionModel == model else { return }
                         coordinator.modelPrewarmTask = nil
@@ -4371,6 +4375,13 @@ final class DictationCoordinator {
                     return
                 }
 
+                // Foreground checks must not flash a loading state for a warm model.
+                coordinator.modelPreparation = ModelPreparationState(
+                    phase: .preparing,
+                    progress: nil,
+                    status: "Warming up the transcription engine...",
+                    detail: model.shortName
+                )
                 AppTelemetry.signal(
                     "model_prewarm_started",
                     parameters: ["engine": model.engineIdentifier, "reason": reason]
@@ -6444,6 +6455,7 @@ final class DictationCoordinator {
 
     var isAudioImportPresented = false
     var audioImportNavigationID: UUID?
+    var audioImportDestination: AudioImportDestination = .voiceNote
     var pendingAudioImports: [AudioImportInbox.Item] = []
     var audioImportError: String?
     var audioImportErrorDetails: String?
@@ -6501,7 +6513,7 @@ final class DictationCoordinator {
 
     func cancelAudioImport() { audioImportTask?.cancel() }
 
-    func importAudio(_ item: AudioImportInbox.Item) {
+    func importAudio(_ item: AudioImportInbox.Item, destination: AudioImportDestination = .voiceNote) {
         guard canImportAudio else { return }
         isImportingAudio = true
         audioImportError = nil
@@ -6513,7 +6525,7 @@ final class DictationCoordinator {
                 if let existing = try store.activeRecordingSession(id: item.id) {
                     try AudioImportInbox.remove(item)
                     refreshAudioImports()
-                    transcribeSession(existing)
+                    transcribeImportedSession(existing)
                     audioImportNavigationID = existing.id
                     return
                 }
@@ -6523,29 +6535,37 @@ final class DictationCoordinator {
                 defer { try? FileManager.default.removeItem(at: wav) }
                 try Task.checkCancellation()
                 stage = "Save imported audio"
-                let destination = try store.newAudioFileURL(sessionID: item.id)
+                let destinationURL = try store.newAudioFileURL(sessionID: item.id)
                 // A previous interrupted import can leave audio without a published session.
-                if FileManager.default.fileExists(atPath: destination.path) {
-                    try FileManager.default.removeItem(at: destination)
+                if FileManager.default.fileExists(atPath: destinationURL.path) {
+                    try FileManager.default.removeItem(at: destinationURL)
                 }
-                try FileManager.default.copyItem(at: wav, to: destination)
+                try FileManager.default.copyItem(at: wav, to: destinationURL)
                 var saved = false
-                defer { if !saved { try? FileManager.default.removeItem(at: destination) } }
-                let session = RecordingSession(id: item.id, kind: .meeting, title: item.title,
-                    startedAt: .now.addingTimeInterval(-duration), endedAt: .now,
-                    phase: .transcriptionQueued, audioFileName: destination.lastPathComponent,
-                    keepsAudioRecording: true, source: "app",
-                    hasDurableAudioCheckpoint: true, protectedAudioUntilTranscriptCompletes: true)
+                defer { if !saved { try? FileManager.default.removeItem(at: destinationURL) } }
+                let session = destination.session(id: item.id, title: item.title,
+                    duration: duration, audioFileName: destinationURL.lastPathComponent)
                 try store.saveSession(session)
                 saved = true
                 try AudioImportInbox.remove(item)
                 refreshAudioImports()
                 refreshHistory()
-                transcribeSession(session)
+                transcribeImportedSession(session)
                 audioImportNavigationID = session.id
             } catch is CancellationError {
                 // Keep the inbox copy so the user can retry without finding the original again.
             } catch { reportAudioImportError(error, stage: stage) }
+        }
+    }
+
+    private func transcribeImportedSession(_ session: RecordingSession) {
+        audioImportDestination = session.kind == .meeting ? .meeting : .voiceNote
+        if session.kind == .meeting {
+            transcribeSession(session)
+        } else if session.phase == .transcriptionQueued {
+            transcribeSavedVoiceNote(sessionID: session.id, isInitialImport: true)
+        } else if session.canRetryVoiceNoteTranscription {
+            retryVoiceNoteTranscription(sessionID: session.id)
         }
     }
 

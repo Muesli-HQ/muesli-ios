@@ -1,8 +1,34 @@
 import AVFoundation
 import XCTest
+#if canImport(MuesliDev)
+@testable import MuesliDev
+#else
 @testable import Muesli
+#endif
 
 final class AudioImportTests: XCTestCase {
+    func testImportDestinationPreservesIntentRegardlessOfDuration() throws {
+        let store = SharedStore(containerURL: try temporaryDirectory())
+        for duration in [6.0, 7_200.0] {
+            for destination in [AudioImportDestination.voiceNote, .meeting] {
+                let id = UUID()
+                let session = destination.session(id: id, title: "Imported audio",
+                    duration: duration, audioFileName: "audio.wav")
+                try store.saveSession(session)
+                let saved = try XCTUnwrap(store.activeRecordingSession(id: id))
+                XCTAssertEqual(saved.kind, destination == .voiceNote ? .quickDictation : .meeting)
+                XCTAssertEqual(saved.requestID, destination == .voiceNote ? id : nil)
+                XCTAssertEqual(saved.phase, .transcriptionQueued)
+                XCTAssertTrue(saved.keepsAudioRecording)
+                XCTAssertTrue(saved.protectedAudioUntilTranscriptCompletes)
+                XCTAssertFalse(saved.isLongForm)
+                var interrupted = saved
+                interrupted.phase = .failed
+                XCTAssertEqual(interrupted.canRetryVoiceNoteTranscription, destination == .voiceNote)
+            }
+        }
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

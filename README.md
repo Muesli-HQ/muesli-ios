@@ -41,7 +41,7 @@ This repository is suitable for source review, local development, CI, and TestFl
 - **Keyboard Session Mode** - Keep the containing app ready for lower-friction keyboard dictation while the extension remains the text input surface.
 - **Dictation history** - Saved local dictations can be copied, reused, and deleted from the main app.
 - **Meeting recorder** - Record in-person conversations, save sessions, transcribe locally, browse transcript history, and retain meeting audio only when enabled.
-- **Audio import** - Import WAV, MP3, M4A, MP4 audio, AIFF, or CAF from Files, or share one file to Muesli from another app. Open Muesli to review shared audio, select a ready model, and transcribe it into Meetings. Imports retain an owned local audio copy for retry; only text follows iCloud sync settings.
+- **Audio import** - Import WAV, MP3, M4A, MP4 audio, AIFF, or CAF from Files, or share one file to Muesli from another app. Review the audio in Muesli, choose Voice Note or Meeting, select a ready model, and transcribe. Voice Note is the default; the choice is independent of duration, so long monologues can stay in Voice Notes. Imports retain an owned local audio copy for retry; only text follows iCloud sync settings.
 - **Apple Speech** - On supported iOS 26+ devices, select Apple Speech for on-device transcription in the iPhone’s current language. iOS downloads and manages its language assets; preparation completes before recording is enabled. Unsupported devices continue to use Parakeet or Whisper.
 - **Meeting templates** - Choose note formats for general meetings and structured follow-up workflows.
 - **Optional meeting summaries** - Generate structured notes with ChatGPT sign-in or OpenRouter BYOK after local transcription.
@@ -241,6 +241,10 @@ xcodebuild test -project MuesliiOS.xcodeproj -scheme Muesli -destination 'platfo
 
 Muesli for iOS is released under the [MIT License](LICENSE).
 
-### Share extension signing
+### Audio document handoff
 
-The app embeds a separate audio share extension. Provision `com.phequals7.muesli.ios.share` with `group.com.phequals7.muesli`, and the development extension `com.phequals7.muesli.ios.dev.share` with `group.com.phequals7.muesli.dev`. Automatic signing requires the development-team account in Xcode Settings → Accounts. Simulator builds can use `CODE_SIGNING_ALLOWED=NO`; physical-device and archive builds require these App Group profiles.
+Audio documents are registered in `Muesli/Info.plist` and delivered to the host app through `onOpenURL`. The app copies the security-scoped file into its import inbox and presents Import Audio. Files → Open With → Muesli uses this route directly.
+
+The app targets deliberately do not embed the legacy share-extension targets: the extension's save-only destination competes with the host's document-opening destination in Files. Keep the existing App Group inbox so pending imports from older builds remain available. Sources that offer only extension payloads, rather than document URLs, may not offer Muesli; those files can be saved to Files and opened in Muesli.
+
+When changing embedded extensions, remove stale `.appex` products from an existing build directory or use a clean app build. Verify both Files → Open With and Files → Share on a device after installing an update.

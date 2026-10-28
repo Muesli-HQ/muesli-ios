@@ -90,8 +90,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Muesli/Muesli.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MUESLI_TELEMETRYDECK_APP_ID: A851C6BD-4F55-41ED-A6BC-DA43C850B069
+    # Files must use the host document handler; embedding MuesliShare makes
+    # its save-only extension take precedence over the direct app handoff.
     dependencies:
-      - target: MuesliShare
       - target: MuesliKeyboard
       - target: MuesliLiveActivityExtension
       - package: FluidAudio
@@ -126,8 +127,8 @@ targets:
         MUESLI_TELEMETRY_ENABLED: NO
         MUESLI_URL_SCHEME: mueslidev
         PROVISIONING_PROFILE_SPECIFIER: muesli-ios-mueslidev-cloudkit-push
+    # Match production: document sharing opens the host app directly.
     dependencies:
-      - target: MuesliDevShare
       - target: MuesliDevKeyboard
       - target: MuesliDevLiveActivityExtension
       - package: FluidAudio
@@ -231,6 +232,7 @@ targets:
     type: bundle.unit-test
     platform: iOS
     sources:
+      - path: Tests/MuesliTests/AudioImportTests.swift
       - path: Tests/MuesliTests/ModelDownloadManifestTests.swift
       - path: Tests/MuesliTests/ModelSetupFailureTests.swift
       - path: Tests/MuesliTests/ActionButtonDictationTests.swift

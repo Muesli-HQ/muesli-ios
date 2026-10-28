@@ -24,13 +24,13 @@ struct RootView: View {
         .sheet(isPresented: $coordinator.isAudioImportPresented) { AudioImportView(coordinator: coordinator) }
         .onChange(of: coordinator.pendingAudioImports.map(\.id)) { _, ids in
             if !ids.isEmpty && coordinator.hasCompletedOnboarding { coordinator.isAudioImportPresented = true }
-            else if !coordinator.isImportingAudio { coordinator.isAudioImportPresented = false; selectedSection = .meetings }
+            else if !coordinator.isImportingAudio { coordinator.isAudioImportPresented = false }
         }
         .onChange(of: coordinator.hasCompletedOnboarding) { _, complete in
             if complete && !coordinator.pendingAudioImports.isEmpty { coordinator.isAudioImportPresented = true }
         }
         .onChange(of: coordinator.audioImportNavigationID) { _, id in
-            if id != nil { coordinator.isAudioImportPresented = false; selectedSection = .meetings }
+            if id != nil { coordinator.isAudioImportPresented = false; selectedSection = coordinator.audioImportDestination == .meeting ? .meetings : .dictations }
         }
         .alert("Audio Import", isPresented: Binding(get: { coordinator.audioImportError != nil && !coordinator.isAudioImportPresented },
             set: { if !$0 { coordinator.audioImportError = nil } })) {

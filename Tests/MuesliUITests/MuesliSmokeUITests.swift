@@ -354,9 +354,9 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(models.exists)
         models.tap()
 
-        XCTAssertTrue(app.staticTexts["Choose model"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["Transcription model"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Prepare Model"].exists)
-        XCTAssertTrue(app.staticTexts["Downloaded and ready"].exists)
+        XCTAssertTrue(app.staticTexts["Downloaded Models"].exists)
 
         let removeModel = app.buttons["model.remove.parakeet-tdt-ctc-110m"]
         let tabBar = app.buttons["tab.settings"]

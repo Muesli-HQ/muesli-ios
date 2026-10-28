@@ -6687,11 +6687,13 @@ final class DictationCoordinator {
             try ensureMeetingLifecycleActive(sessionID: session.id, operationID: operationID)
             meetingStatusText = "Summarizing"
             let summarySource = speakerTranscript?.isEmpty == false ? speakerTranscript! : text
+            let summaryConfiguration = MeetingSummaryConfiguration.current()
             do {
                 let summary = try await MeetingSummaryClient.summarize(
                     transcript: summarySource,
                     meetingTitle: session.title ?? session.kind.title,
-                    manualNotesToRetain: session.manualNotes
+                    manualNotesToRetain: session.manualNotes,
+                    configuration: summaryConfiguration
                 )
                 try ensureMeetingLifecycleActive(sessionID: session.id, operationID: operationID)
                 summaryText = summary.notes
@@ -6711,11 +6713,9 @@ final class DictationCoordinator {
                     manualNotes: session.manualNotes
                 )
                 summaryState = .failed
-                let backend = MuesliPreferences.meetingSummaryBackend
+                let backend = summaryConfiguration.backend
                 summaryBackend = backend.rawValue
-                summaryModel = backend == .chatGPT
-                    ? MuesliPreferences.chatGPTModel
-                    : MuesliPreferences.openRouterModel
+                summaryModel = summaryConfiguration.model
                 summaryErrorMessage = error.localizedDescription
                 AppTelemetry.failure(
                     "meeting_summary_failed",

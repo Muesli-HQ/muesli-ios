@@ -18,13 +18,12 @@ struct SettingsView: View {
     @AppStorage(MuesliPreferences.keepMeetingAudioRecordingsKey) private var keepMeetingAudioRecordings = false
     @AppStorage(MuesliPreferences.meetingSummariesEnabledKey) private var meetingSummariesEnabled = false
     @AppStorage(MuesliPreferences.meetingSummaryBackendKey) private var meetingSummaryBackend = MeetingSummaryBackend.openRouter.rawValue
-    @AppStorage(MuesliPreferences.openRouterModelKey) private var openRouterModel = MeetingSummaryBackend.defaultOpenRouterModel
     @AppStorage(MuesliPreferences.chatGPTModelKey) private var chatGPTModel = MeetingSummaryBackend.defaultChatGPTModel
     @AppStorage(MuesliPreferences.meetingTemplateKey) private var meetingTemplate = MeetingTemplatePreset.general.rawValue
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var keyboardStatusText = "Unknown"
-    @State private var openRouterAPIKey = ""
     @State private var summaryStatusText: String?
+    @State private var isChatGPTSignInPresented = false
     @State private var chatGPTSignedIn = false
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
@@ -60,6 +59,12 @@ struct SettingsView: View {
                 .onChange(of: openInputRequest) { _, _ in
                     openRequestedInputSection()
                 }
+                .sheet(isPresented: $isChatGPTSignInPresented) {
+                    ChatGPTSignInView {
+                        chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+                        summaryStatusText = "Signed in to ChatGPT."
+                    }
+                }
                 .sheet(isPresented: $isSyncQRCodeScannerPresented) {
                     SyncQRCodeScannerView(
                         isSyncAlreadyEnabled: iCloudSyncEnabled,
@@ -81,9 +86,6 @@ struct SettingsView: View {
                     guard isActive else { return }
                     coordinator.refreshAudioInputRoute()
                     AppTelemetry.signal("recording_microphone_preference_changed", parameters: ["preference": newValue])
-                }
-                .onChange(of: openRouterAPIKey) { _, newValue in
-                    saveOpenRouterAPIKey(newValue)
                 }
                 .onChange(of: iCloudSyncEnabled) { _, enabled in
                     if enabled && isApplyingQRCodeSyncEnable {
@@ -613,26 +615,13 @@ struct SettingsView: View {
                         Text(backend.label).tag(backend.rawValue)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
                 .disabled(!meetingSummariesEnabled)
 
-                if selectedSummaryBackend == .openRouter {
-                    SettingsTextFieldRow(
-                        icon: "key",
-                        title: "OpenRouter API Key",
-                        placeholder: "sk-or-...",
-                        text: $openRouterAPIKey,
-                        isSecure: true
-                    )
-                    .disabled(!meetingSummariesEnabled)
-
-                    SettingsModelPickerRow(
-                        icon: "cpu",
-                        title: "OpenRouter Model",
-                        selection: $openRouterModel,
-                        presets: SummaryModelPreset.openRouterModels
-                    )
-                    .disabled(!meetingSummariesEnabled)
+                if selectedSummaryBackend != .chatGPT {
+                    SummaryAPISettingsView(backend: selectedSummaryBackend)
+                        .id(selectedSummaryBackend)
+                        .disabled(!meetingSummariesEnabled)
                 } else {
                     SettingsRow(
                         icon: "person.crop.circle.badge.checkmark",
@@ -663,7 +652,7 @@ struct SettingsView: View {
                         title: "ChatGPT Model",
                         selection: $chatGPTModel,
                         presets: SummaryModelPreset.chatGPTModels,
-                        preserveCustomValue: false,
+                        preserveCustomValue: true,
                         fallbackSelection: MeetingSummaryBackend.defaultChatGPTModel
                     )
                     .disabled(!meetingSummariesEnabled)
@@ -702,7 +691,6 @@ struct SettingsView: View {
     }
 
     private func refreshSummarySettings() {
-        openRouterAPIKey = MeetingSummaryClient.storedOpenRouterAPIKey()
         chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
     }
 
@@ -714,17 +702,6 @@ struct SettingsView: View {
         refreshAppleSyncSettings()
     }
 
-    private func saveOpenRouterAPIKey(_ apiKey: String) {
-        do {
-            try MeetingSummaryClient.saveOpenRouterAPIKey(apiKey)
-            summaryStatusText = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "OpenRouter key cleared."
-                : "OpenRouter key saved in Keychain."
-        } catch {
-            summaryStatusText = error.localizedDescription
-        }
-    }
-
     private func toggleChatGPTSignIn() {
         if chatGPTSignedIn {
             ChatGPTAuthManager.shared.signOut()
@@ -733,16 +710,7 @@ struct SettingsView: View {
             return
         }
 
-        Task {
-            do {
-                try await ChatGPTAuthManager.shared.signIn()
-                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
-                summaryStatusText = "Signed in to ChatGPT."
-            } catch {
-                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
-                summaryStatusText = error.localizedDescription
-            }
-        }
+        isChatGPTSignInPresented = true
     }
 
     private func refreshAppleSyncSettings() {

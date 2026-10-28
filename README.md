@@ -42,7 +42,7 @@ This repository is suitable for source review, local development, CI, and TestFl
 - **Dictation history** - Saved local dictations can be copied, reused, and deleted from the main app.
 - **Meeting recorder** - Record in-person conversations, save sessions, transcribe locally, browse transcript history, and retain meeting audio only when enabled.
 - **Meeting templates** - Choose note formats for general meetings and structured follow-up workflows.
-- **Optional meeting summaries** - Generate structured notes with ChatGPT sign-in or OpenRouter BYOK after local transcription.
+- **Optional meeting summaries** - Generate structured notes with ChatGPT sign-in or OpenAI, Anthropic, and OpenRouter API keys after local transcription.
 - **Live Activities** - Track active meeting recording state from iOS surfaces when enabled.
 - **Personal dictionary** - Apply custom words, phrase replacements, and filler-word filtering after transcription.
 - **Local storage first** - App data is stored locally through the shared store and App Group boundary used by the app and keyboard.
@@ -152,7 +152,7 @@ Meeting sessions use the same local-first store, with optional retained audio, t
 | Keyboard | UIKit keyboard extension with SwiftUI-hosted UI |
 | Local ASR | [FluidAudio](https://github.com/FluidInference/FluidAudio) Parakeet on CoreML/ANE |
 | Storage | SQLite-backed shared store in the app/App Group boundary |
-| Summaries | ChatGPT OAuth or OpenRouter BYOK |
+| Summaries | ChatGPT device sign-in, OpenAI / Anthropic / OpenRouter API keys |
 | Live status | ActivityKit Live Activities |
 | Telemetry | TelemetryDeck Swift SDK |
 | Project generation | XcodeGen |
@@ -238,3 +238,30 @@ xcodebuild test -project MuesliiOS.xcodeproj -scheme Muesli -destination 'platfo
 ## License
 
 Muesli for iOS is released under the [MIT License](LICENSE).
+
+### Meeting summary providers
+
+ChatGPT sign-in uses a one-time device code and an in-app browser instead of a
+localhost callback. Device code login must be enabled in ChatGPT account security
+settings (or by a workspace administrator). Canceling the sign-in sheet stops
+polling; signing out also invalidates any in-flight refresh. Existing iOS Keychain
+credentials remain readable and move to one atomic record on the next successful
+refresh/sign-in. Codes and tokens are never included in logs or telemetry.
+
+The ChatGPT subscription transport follows the macOS app's Codex Responses lane,
+with Muesli's own client identity and bounded request/resource timeouts. This is a
+compatibility-sensitive integration, not the public OpenAI API. The process-only
+`MUESLI_CHATGPT_TRANSPORT=wham` override exists for emergency rollback and is never
+an automatic retry that resends transcripts to another backend.
+
+OpenAI API, Anthropic, and OpenRouter use separately stored API keys and their own
+model preferences. API usage is billed by the chosen provider. Summary generation
+snapshots the provider, model, template, and API key before starting; neither a
+settings change nor a title-generation retry switches providers mid-request.
+Partial or failed Responses streams are rejected instead of saved as complete
+notes. Meeting Q&A and desktop-local inference servers are not included.
+
+Protocol references:
+- [Codex device authentication](https://github.com/openai/codex/blob/main/codex-rs/login/src/device_code_auth.rs)
+- [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)
+- [Anthropic stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)

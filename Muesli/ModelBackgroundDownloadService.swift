@@ -630,6 +630,7 @@ struct ModelDownloadSpec: Sendable {
             .appendingPathComponent("Models", isDirectory: true)
 
         switch model {
+        case .appleSpeech: return nil
         case .parakeetUnified:
             remotePath = "FluidInference/parakeet-unified-en-0.6b-coreml"
             subPath = nil

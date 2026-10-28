@@ -62,6 +62,7 @@ struct MuesliApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     coordinator.recordCaptureLifecycle("scene.\(phase)")
                     if phase == .active {
+                        coordinator.refreshAudioImports()
                         coordinator.refreshDownloadedModels()
                         coordinator.copyPendingDictationIfActive()
                         #if DEBUG && targetEnvironment(simulator)

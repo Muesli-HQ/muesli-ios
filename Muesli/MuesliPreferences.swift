@@ -70,9 +70,10 @@ enum MuesliPreferences {
     }
 
     static var transcriptionModel: LocalTranscriptionModel {
-        LocalTranscriptionModel(
+        let model = LocalTranscriptionModel(
             rawValue: UserDefaults.standard.string(forKey: transcriptionModelKey) ?? ""
         ) ?? .defaultModel
+        return model.isAvailable ? model : .defaultModel
     }
 
     static var manuallyRemovedTranscriptionModel: LocalTranscriptionModel? {

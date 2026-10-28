@@ -235,10 +235,6 @@ xcodebuild test -project MuesliiOS.xcodeproj -scheme Muesli -destination 'platfo
 
 ---
 
-## License
-
-Muesli for iOS is released under the [MIT License](LICENSE).
-
 ### Meeting summary providers
 
 ChatGPT sign-in uses a one-time device code and an in-app browser instead of a
@@ -265,3 +261,7 @@ Protocol references:
 - [Codex device authentication](https://github.com/openai/codex/blob/main/codex-rs/login/src/device_code_auth.rs)
 - [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)
 - [Anthropic stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)
+
+## License
+
+Muesli for iOS is released under the [MIT License](LICENSE).

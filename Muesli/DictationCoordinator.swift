@@ -7614,13 +7614,13 @@ final class DictationCoordinator {
         return pasteboard.changeCount != previousCount
     }
 
-    func deliverKeyboardTranscript(_ text: String, requestID: UUID) {
+    func deliverKeyboardTranscript(_ text: String, requestID: UUID, now: Date = .now) {
         let extensionStatus = try? store.keyboardExtensionStatus()
         let session = try? store.recordingSession(requestID: requestID)
         let copiesActionButtonText = ActionButtonCaptureSource.isActionButton(session?.source)
         let keyboardCanInsertDirectly = extensionStatus?.hasOpenAccess == true
             && extensionStatus?.isVisible == true
-            && extensionStatus.map { Date.now.timeIntervalSince($0.lastSeenAt) < 3.5 } == true
+            && extensionStatus.map { now.timeIntervalSince($0.lastSeenAt) < 3.5 } == true
 
         if keyboardCanInsertDirectly {
             // Shortcuts copies the returned result in the background. Copy here

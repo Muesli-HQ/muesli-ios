@@ -2,8 +2,16 @@ import AVFoundation
 import XCTest
 #if canImport(MuesliDev)
 @testable import MuesliDev
+private typealias ImportStore = MuesliDev.SharedStore
+private typealias ImportSession = MuesliDev.RecordingSession
+private typealias ImportPhase = MuesliDev.RecordingSessionPhase
+private typealias ImportDestination = MuesliDev.AudioImportDestination
 #else
 @testable import Muesli
+private typealias ImportStore = Muesli.SharedStore
+private typealias ImportSession = Muesli.RecordingSession
+private typealias ImportPhase = Muesli.RecordingSessionPhase
+private typealias ImportDestination = Muesli.AudioImportDestination
 #endif
 
 final class AudioImportTests: XCTestCase {
@@ -27,6 +35,60 @@ final class AudioImportTests: XCTestCase {
                 XCTAssertEqual(interrupted.canRetryVoiceNoteTranscription, destination == .voiceNote)
             }
         }
+    }
+
+    @MainActor
+    func testLaunchRecoversInterruptedImportsWithoutChangingVoiceNoteIntent() async throws {
+        let store = ImportStore(containerURL: try temporaryDirectory())
+        var originals: [ImportSession] = []
+        for phase in [ImportPhase.transcriptionQueued, .transcribing] {
+            let id = UUID()
+            let audioURL = try store.newAudioFileURL(sessionID: id)
+            try writeAudio(to: audioURL)
+            var session = ImportDestination.voiceNote.session(id: id, title: "Monologue",
+                duration: 1, audioFileName: audioURL.lastPathComponent)
+            session.phase = phase
+            try store.saveSession(session)
+            originals.append(session)
+        }
+        let coordinator = DictationCoordinator(store: store)
+        // Launch recovery validates actual saved audio asynchronously.
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if try originals.allSatisfy({ try store.activeRecordingSession(id: $0.id)?.phase == .failed }) { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        for original in originals {
+            let recovered = try XCTUnwrap(store.activeRecordingSession(id: original.id))
+            XCTAssertEqual(recovered.phase, .failed)
+            XCTAssertTrue(recovered.canRetryVoiceNoteTranscription)
+            XCTAssertEqual(recovered.kind, .quickDictation)
+            XCTAssertFalse(recovered.isLongForm)
+            XCTAssertEqual(recovered.audioFileName, original.audioFileName)
+            XCTAssertEqual(recovered.requestID, original.requestID)
+            coordinator.openLongVoiceNote(recovered)
+            XCTAssertNil(coordinator.presentedLongVoiceNoteSessionID)
+        }
+    }
+
+    @MainActor
+    func testImportHandoffRechecksBusyAndModelStateAfterConversion() throws {
+        let coordinator = DictationCoordinator(store: ImportStore(containerURL: try temporaryDirectory()))
+        coordinator.modelPreparation = .init(phase: .ready, status: "Ready")
+        XCTAssertTrue(coordinator.canImportAudio)
+        // The import itself must not block its own post-conversion handoff.
+        coordinator.isImportingAudio = true
+        XCTAssertNoThrow(try coordinator.validateAudioImportHandoff())
+        coordinator.isRecording = true
+        XCTAssertThrowsError(try coordinator.validateAudioImportHandoff())
+        coordinator.isRecording = false
+        coordinator.statusText = "Transcribing"
+        XCTAssertThrowsError(try coordinator.validateAudioImportHandoff())
+        coordinator.statusText = "Ready"
+        coordinator.modelPreparation = .init(phase: .idle, status: "")
+        XCTAssertThrowsError(try coordinator.validateAudioImportHandoff())
+        coordinator.modelPreparation = .init(phase: .ready, status: "Ready")
+        XCTAssertNoThrow(try coordinator.validateAudioImportHandoff())
     }
 
     private func temporaryDirectory() throws -> URL {

@@ -1156,7 +1156,10 @@ final class DictationCoordinator {
             }
             let isCheckpointArmedRecording = original.phase == .recording
                 && original.longFormThresholdSeconds != nil
-            guard original.isLongForm || isCheckpointArmedRecording else { continue }
+            // Imported and stopped quick notes also own protected audio. Recover them
+            // without changing their destination or presenting the long-form UI.
+            guard original.isLongForm || isCheckpointArmedRecording
+                    || original.protectedAudioUntilTranscriptCompletes else { continue }
             guard [.recording, .transcriptionQueued, .transcribing, .failed].contains(original.phase),
                   voiceNoteLifecycleRunner?.sessionID != original.id,
                   original.phase != .failed || original.longFormRecoveryValidatedAt == nil
@@ -6462,7 +6465,22 @@ final class DictationCoordinator {
     var isImportingAudio = false
     private var receivingAudioCount = 0
     var isReceivingAudio: Bool { receivingAudioCount > 0 }
-    var canImportAudio: Bool { !isImportingAudio && isTranscriptionModelReady && canSelectTranscriptionModelsFromKeyboard }
+    var canImportAudio: Bool { !isImportingAudio && canAcceptImportedTranscription }
+    private var canAcceptImportedTranscription: Bool {
+        isTranscriptionModelReady && canSelectTranscriptionModelsFromKeyboard
+            && !recordingStartupInProgress
+    }
+
+    enum AudioImportHandoffError: LocalizedError {
+        case busy
+        var errorDescription: String? {
+            "Finish the current recording or transcription, then try importing again. Your audio is saved."
+        }
+    }
+
+    func validateAudioImportHandoff() throws {
+        guard canAcceptImportedTranscription else { throw AudioImportHandoffError.busy }
+    }
     private var audioImportTask: Task<Void, Never>?
 
     func reportAudioImportError(_ error: Error, stage: String) {
@@ -6521,6 +6539,7 @@ final class DictationCoordinator {
             defer { isImportingAudio = false; audioImportTask = nil }
             var stage = "Read saved import"
             do {
+                try validateAudioImportHandoff()
                 // A published session is authoritative if the app stopped before inbox cleanup.
                 if let existing = try store.activeRecordingSession(id: item.id) {
                     try AudioImportInbox.remove(item)
@@ -6534,6 +6553,10 @@ final class DictationCoordinator {
                 let (wav, duration) = try await AudioFileImporter.convert(sourceURL: source)
                 defer { try? FileManager.default.removeItem(at: wav) }
                 try Task.checkCancellation()
+                // Conversion suspends: a keyboard or Action Button recording may now
+                // own the workflow. Keep the inbox item until it can be handed off.
+                // No suspension occurs between this check and transcription startup.
+                try validateAudioImportHandoff()
                 stage = "Save imported audio"
                 let destinationURL = try store.newAudioFileURL(sessionID: item.id)
                 // A previous interrupted import can leave audio without a published session.

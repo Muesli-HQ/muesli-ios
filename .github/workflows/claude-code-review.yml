@@ -51,30 +51,3 @@ jobs:
           display_report: true
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-
-      - name: Report Claude failure details
-        if: failure() && steps.claude-review.outcome == 'failure'
-        shell: python
-        run: |
-          import json
-          import os
-          from pathlib import Path
-
-          output = Path(os.environ["RUNNER_TEMP"]) / "claude-execution-output.json"
-          if not output.exists():
-              print("Claude did not produce an execution result file.")
-          else:
-              raw = output.read_text()
-              try:
-                  payload = json.loads(raw)
-                  messages = payload if isinstance(payload, list) else [payload]
-              except json.JSONDecodeError:
-                  messages = [json.loads(line) for line in raw.splitlines() if line.strip()]
-              results = [message for message in messages
-                         if isinstance(message, dict) and message.get("type") == "result"]
-              # Report only final error fields, not prompts, tool payloads, or environment.
-              for result in results:
-                  print(json.dumps({key: result[key] for key in
-                      ("subtype", "is_error", "result", "errors") if key in result}, indent=2))
-              if not results:
-                  print("Claude output contained no final result message.")

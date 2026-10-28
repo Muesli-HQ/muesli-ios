@@ -13,7 +13,9 @@ enum AudioFileImporter {
             }
         }
     }
-    static func convert(sourceURL: URL) async throws -> (URL, TimeInterval) {
+    static func convert(sourceURL: URL,
+                        didWriteSamples: (@Sendable (URL) async -> Void)? = nil) async throws -> (URL, TimeInterval) {
+        try Task.checkCancellation()
         let asset = AVURLAsset(url: sourceURL)
         let tracks = try await asset.load(.tracks)
         guard let audioTrack = tracks.first(where: { $0.mediaType == .audio }) else {
@@ -72,6 +74,7 @@ enum AudioFileImporter {
                 return true
             }
             if !didRead { break }
+            if let didWriteSamples { await didWriteSamples(wavURL) }
         }
 
         guard reader.status == .completed else {
@@ -83,4 +86,22 @@ enum AudioFileImporter {
         return (wavURL, Double(frameCount) / 16_000)
     }
 
+    /// The source stays owned by the caller until this task has finished, even
+    /// when cancellation arrives during a synchronous filesystem copy.
+    static func copyConvertedAudio(from source: URL, to destination: URL) async throws {
+        let copy = Task.detached(priority: .utility) {
+            var completed = false
+            defer { if !completed { try? FileManager.default.removeItem(at: destination) } }
+            try Task.checkCancellation()
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: source, to: destination)
+            try Task.checkCancellation()
+            completed = true
+        }
+        try await withTaskCancellationHandler {
+            try await copy.value
+        } onCancel: { copy.cancel() }
+    }
 }

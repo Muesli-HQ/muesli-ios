@@ -1,5 +1,6 @@
 import AVFoundation
 import XCTest
+import Speech
 #if canImport(MuesliDev)
 @testable import MuesliDev
 private typealias ImportStore = MuesliDev.SharedStore
@@ -178,19 +179,49 @@ final class AudioImportTests: XCTestCase {
         } catch { XCTAssertTrue(FileManager.default.fileExists(atPath: source.path)) }
     }
 
-    func testCancelledConversionDoesNotReturnAudio() async throws {
+    func testCancellationDuringDecodeRemovesPartialAudio() async throws {
         let source = try temporaryDirectory().appendingPathComponent("cancel.wav")
         try writeAudio(to: source)
+        let probe = ConversionProbe()
         let task = Task {
-            try Task.checkCancellation()
-            return try await AudioFileImporter.convert(sourceURL: source)
+            try await AudioFileImporter.convert(sourceURL: source) { output in
+                await probe.record(output)
+                // Cancel the actual conversion task after it has written samples.
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
         }
-        task.cancel()
         do {
-            let (output, _) = try await task.value
-            try? FileManager.default.removeItem(at: output)
+            _ = try await task.value
             XCTFail("Cancelled import completed")
         } catch is CancellationError { }
+        let partial = await probe.output
+        let output = try XCTUnwrap(partial)
+        let existed = await probe.existed
+        XCTAssertTrue(existed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testConvertedAudioCopyPreservesSourceAndReplacesOrphan() async throws {
+        let directory = try temporaryDirectory()
+        let source = directory.appendingPathComponent("source.wav")
+        let destination = directory.appendingPathComponent("owned.wav")
+        try Data("audio".utf8).write(to: source)
+        try Data("orphan".utf8).write(to: destination)
+        try await AudioFileImporter.copyConvertedAudio(from: source, to: destination)
+        XCTAssertEqual(try Data(contentsOf: source), try Data(contentsOf: destination))
+    }
+
+    func testAppleSpeechPreservesWordTimingAcrossSpeakerBoundary() throws {
+        guard #available(iOS 26, *) else { throw XCTSkip("SpeechAnalyzer requires iOS 26") }
+        var first = AttributedString("First speaker. ")
+        first.audioTimeRange = CMTimeRange(start: CMTime(seconds: 1, preferredTimescale: 1000), duration: CMTime(seconds: 1, preferredTimescale: 1000))
+        var second = AttributedString("Second speaker.")
+        second.audioTimeRange = CMTimeRange(start: CMTime(seconds: 3, preferredTimescale: 1000), duration: CMTime(seconds: 2, preferredTimescale: 1000))
+        let tokens = AppleSpeechRuntime.timedTokens(from: first + second, fallbackRange: CMTimeRange(start: .zero, duration: CMTime(seconds: 5, preferredTimescale: 1000)))
+        XCTAssertEqual(tokens.map(\.token), ["First speaker. ", "Second speaker."])
+        XCTAssertEqual(tokens.map(\.startTime), [1, 3])
+        XCTAssertEqual(tokens.map(\.endTime), [2, 5])
     }
 
     func testAppleSpeechUsesSystemAssetsInsteadOfModelDownloadDirectory() {
@@ -210,5 +241,14 @@ final class AudioImportTests: XCTestCase {
             }
         }
         try writer.write(from: buffer)
+    }
+}
+
+private actor ConversionProbe {
+    var output: URL?
+    var existed = false
+    func record(_ url: URL) {
+        output = url
+        existed = FileManager.default.fileExists(atPath: url.path)
     }
 }

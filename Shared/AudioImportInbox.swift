@@ -17,7 +17,20 @@ enum AudioImportInbox {
         let title: String
         let fileName: String
     }
+    #if DEBUG && targetEnvironment(simulator)
+    // Unsigned UI-test apps have no App Group entitlement. Keep their inbox
+    // isolated per launch, just like the coordinator's fixture store.
+    private static let uiTestRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("AudioImportUITests-" + UUID().uuidString, isDirectory: true)
+    #endif
+
     static func directory() throws -> URL {
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.uiTestingLaunchArgument) {
+            try FileManager.default.createDirectory(at: uiTestRoot, withIntermediateDirectories: true)
+            return uiTestRoot
+        }
+        #endif
         guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: MuesliAppConstants.appGroupIdentifier) else {
             throw CocoaError(.fileNoSuchFile)
         }

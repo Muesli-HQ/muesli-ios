@@ -6553,19 +6553,17 @@ final class DictationCoordinator {
                 let (wav, duration) = try await AudioFileImporter.convert(sourceURL: source)
                 defer { try? FileManager.default.removeItem(at: wav) }
                 try Task.checkCancellation()
-                // Conversion suspends: a keyboard or Action Button recording may now
-                // own the workflow. Keep the inbox item until it can be handed off.
-                // No suspension occurs between this check and transcription startup.
+                // Decoding and copying both suspend. Keep the inbox item until
+                // the recording workflow can accept the completed import.
                 try validateAudioImportHandoff()
                 stage = "Save imported audio"
                 let destinationURL = try store.newAudioFileURL(sessionID: item.id)
-                // A previous interrupted import can leave audio without a published session.
-                if FileManager.default.fileExists(atPath: destinationURL.path) {
-                    try FileManager.default.removeItem(at: destinationURL)
-                }
-                try FileManager.default.copyItem(at: wav, to: destinationURL)
                 var saved = false
                 defer { if !saved { try? FileManager.default.removeItem(at: destinationURL) } }
+                try await AudioFileImporter.copyConvertedAudio(from: wav, to: destinationURL)
+                try Task.checkCancellation()
+                try validateAudioImportHandoff()
+                // No suspension between the final guard and transcription startup.
                 let session = destination.session(id: item.id, title: item.title,
                     duration: duration, audioFileName: destinationURL.lastPathComponent)
                 try store.saveSession(session)

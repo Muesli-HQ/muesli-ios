@@ -19,7 +19,7 @@ actor AppleSpeechRuntime {
     func prepare(progress: (@Sendable (Double, String?) -> Void)?) async throws {
         guard SpeechTranscriber.isAvailable else { throw Failure.unavailable }
         guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) else { throw Failure.unsupportedLanguage }
-        let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
+        let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
         progress?(0.05, "Preparing Apple Speech…")
         _ = try await AssetInventory.reserve(locale: locale)
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
@@ -44,7 +44,7 @@ actor AppleSpeechRuntime {
     }
     func transcribe(_ url: URL, progress: (@Sendable (TranscriptionProgressUpdate) -> Void)? = nil) async throws -> DetailedTranscriptionResult {
         guard let locale = preparedLocale else { throw Failure.assetsMissing }
-        let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
+        let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let file = try AVAudioFile(forReading: url)
         let duration = Double(file.length) / file.processingFormat.sampleRate
@@ -68,6 +68,18 @@ actor AppleSpeechRuntime {
             Task { await analyzer.cancelAndFinishNow() }
         }
     }
+    nonisolated static func timedTokens(from text: AttributedString, fallbackRange: CMTimeRange) -> [TimedTranscriptToken] {
+        text.runs.compactMap { run in
+            let range = run.audioTimeRange ?? fallbackRange
+            let start = CMTimeGetSeconds(range.start)
+            let end = CMTimeGetSeconds(CMTimeRangeGetEnd(range))
+            let token = String(text[run.range].characters)
+            guard start.isFinite, end.isFinite, end >= start, !token.isEmpty else { return nil }
+            return TimedTranscriptToken(token: token, startTime: max(0, start),
+                                        endTime: max(0, end), confidence: 1)
+        }
+    }
+
     private static func collect(_ transcriber: SpeechTranscriber, duration: TimeInterval,
                                 progress: (@Sendable (TranscriptionProgressUpdate) -> Void)?) async throws -> DetailedTranscriptionResult {
         var fragments: [String] = []
@@ -79,10 +91,7 @@ actor AppleSpeechRuntime {
             if result.isFinal {
                 let text = String(result.text.characters)
                 fragments.append(text)
-                let start = CMTimeGetSeconds(result.range.start)
-                if start.isFinite && end.isFinite {
-                    tokens.append(.init(token: text, startTime: max(0, start), endTime: max(start, end), confidence: 1))
-                }
+                tokens.append(contentsOf: timedTokens(from: result.text, fallbackRange: result.range))
             }
         }
         return DetailedTranscriptionResult(text: fragments.joined().trimmingCharacters(in: .whitespacesAndNewlines),

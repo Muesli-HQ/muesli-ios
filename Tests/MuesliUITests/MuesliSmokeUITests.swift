@@ -33,6 +33,7 @@ final class MuesliSmokeUITests: XCTestCase {
         let app = launchApp()
 
         XCTAssertTrue(app.staticTexts["muesli"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.alerts["Audio Import"].exists)
         XCTAssertTrue(app.buttons["Quick Note"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Notepad"].exists)
         XCTAssertTrue(app.staticTexts["Start Quick Note"].exists)

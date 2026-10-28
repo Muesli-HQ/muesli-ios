@@ -93,10 +93,15 @@ final class MuesliSmokeUITests: XCTestCase {
                         ? app.staticTexts["islandPreview.failure"].label : "Island preview did not become ready")
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        try await Task.sleep(for: .seconds(6))
+        // Activity.request succeeding does not mean SpringBoard has rendered the
+        // widget yet. CI can still show an empty island after a fixed delay.
+        let microphone = springboard.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Muesli microphone")).firstMatch
+        XCTAssertTrue(microphone.waitForExistence(timeout: 30), "Dynamic Island content did not render")
         captureActionButton(springboard, name: "Dynamic Island speech input")
-        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.035)).press(forDuration: 1)
-        XCTAssertTrue(springboard.staticTexts["Listening"].waitForExistence(timeout: 15))
+        microphone.press(forDuration: 1)
+        XCTAssertTrue(springboard.staticTexts["Listening"].waitForExistence(timeout: 30),
+                      "Dynamic Island did not expand to show Listening")
         captureActionButton(springboard, name: "Dynamic Island expanded dictation")
         XCTAssertTrue(springboard.buttons["Stop keyboard dictation recording"].exists)
         try await Task.sleep(for: .seconds(6))

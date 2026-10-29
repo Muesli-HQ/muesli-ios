@@ -28,10 +28,9 @@ struct OnboardingView: View {
         forKey: MuesliPreferences.meetingSummariesEnabledKey
     ) == nil ? true : UserDefaults.standard.bool(forKey: MuesliPreferences.meetingSummariesEnabledKey)
     @State private var summaryBackend = MuesliPreferences.meetingSummaryBackend
-    @State private var openRouterAPIKey = MeetingSummaryClient.storedOpenRouterAPIKey()
     @State private var chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
-    @State private var isSigningInChatGPT = false
     @State private var summaryStatusText: String?
+    @State private var isChatGPTSignInPresented = false
     @AppStorage(MuesliPreferences.iCloudSyncEnabledKey) private var iCloudSyncEnabled = false
     @State private var appleSyncSnapshot = AppleSyncAccountSnapshot.checking
     @State private var appleSyncStatusText: String?
@@ -136,6 +135,12 @@ struct OnboardingView: View {
         }
         .onChange(of: coordinator.syncSetupRequestID) { _, _ in
             routeToSyncStepIfRequested()
+        }
+        .sheet(isPresented: $isChatGPTSignInPresented) {
+            ChatGPTSignInView {
+                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
+                summaryStatusText = "Signed in to ChatGPT."
+            }
         }
         .sheet(isPresented: $isSyncQRCodeScannerPresented) {
             SyncQRCodeScannerView(
@@ -818,7 +823,7 @@ struct OnboardingView: View {
                 Text("Meeting Summaries")
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("Connect ChatGPT or OpenRouter now so meeting recordings can become structured notes after local transcription and diarization.")
+                Text("Choose a provider for meeting summaries. Transcription stays on your iPhone; summaries send the transcript to your selected provider.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -845,13 +850,15 @@ struct OnboardingView: View {
                             Text(backend.label).tag(backend)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .disabled(!meetingSummariesEnabled)
 
                     if summaryBackend == .chatGPT {
                         chatGPTSummarySetup
                     } else {
-                        openRouterSummarySetup
+                        SummaryAPISettingsView(backend: summaryBackend)
+                            .id(summaryBackend)
+                            .disabled(!meetingSummariesEnabled)
                     }
 
                     if let summaryStatusText {
@@ -887,7 +894,7 @@ struct OnboardingView: View {
 
             Button(action: toggleChatGPTSignIn) {
                 HStack(spacing: MuesliTheme.spacing8) {
-                    if isSigningInChatGPT {
+                    if isChatGPTSignInPresented {
                         ProgressView()
                             .tint(.white)
                     } else {
@@ -904,7 +911,7 @@ struct OnboardingView: View {
                 .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
-            .disabled(!meetingSummariesEnabled || isSigningInChatGPT)
+            .disabled(!meetingSummariesEnabled || isChatGPTSignInPresented)
 
             SettingsModelPickerRow(
                 icon: "cpu",
@@ -914,42 +921,10 @@ struct OnboardingView: View {
                     set: { UserDefaults.standard.set($0, forKey: MuesliPreferences.chatGPTModelKey) }
                 ),
                 presets: SummaryModelPreset.chatGPTModels,
-                preserveCustomValue: false,
+                preserveCustomValue: true,
                 fallbackSelection: MeetingSummaryBackend.defaultChatGPTModel
             )
             .disabled(!meetingSummariesEnabled)
-        }
-    }
-
-    private var openRouterSummarySetup: some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            Text("OpenRouter supports several hosted model providers through one API key.")
-                .font(MuesliTheme.caption())
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            SettingsTextFieldRow(
-                icon: "key",
-                title: "OpenRouter API Key",
-                placeholder: "sk-or-...",
-                text: $openRouterAPIKey,
-                isSecure: true
-            )
-            .disabled(!meetingSummariesEnabled)
-
-            SettingsModelPickerRow(
-                icon: "cpu",
-                title: "OpenRouter Model",
-                selection: Binding(
-                    get: { MuesliPreferences.openRouterModel },
-                    set: { UserDefaults.standard.set($0, forKey: MuesliPreferences.openRouterModelKey) }
-                ),
-                presets: SummaryModelPreset.openRouterModels
-            )
-            .disabled(!meetingSummariesEnabled)
-        }
-        .onChange(of: openRouterAPIKey) { _, apiKey in
-            saveOpenRouterAPIKey(apiKey)
         }
     }
 
@@ -1031,7 +1006,7 @@ struct OnboardingView: View {
         case .test:
             !isOnboardingTestActive
         case .summary:
-            !isSigningInChatGPT
+            !isChatGPTSignInPresented
         }
     }
 
@@ -1193,7 +1168,6 @@ struct OnboardingView: View {
     }
 
     private func refreshSummaryStatus() {
-        openRouterAPIKey = MeetingSummaryClient.storedOpenRouterAPIKey()
         chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
     }
 
@@ -1256,26 +1230,12 @@ struct OnboardingView: View {
     private func saveSummaryConfiguration() {
         UserDefaults.standard.set(meetingSummariesEnabled, forKey: MuesliPreferences.meetingSummariesEnabledKey)
         UserDefaults.standard.set(summaryBackend.rawValue, forKey: MuesliPreferences.meetingSummaryBackendKey)
-        if summaryBackend == .openRouter {
-            saveOpenRouterAPIKey(openRouterAPIKey)
-        }
         AppTelemetry.signal("onboarding_summary_configured", parameters: [
             "enabled": meetingSummariesEnabled ? "true" : "false",
             "backend": summaryBackend.rawValue,
             "chatgpt_signed_in": chatGPTSignedIn ? "true" : "false",
             "openrouter_key_present": MeetingSummaryClient.storedOpenRouterAPIKey().isEmpty ? "false" : "true"
         ])
-    }
-
-    private func saveOpenRouterAPIKey(_ apiKey: String) {
-        do {
-            try MeetingSummaryClient.saveOpenRouterAPIKey(apiKey)
-            summaryStatusText = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "OpenRouter key cleared."
-                : "OpenRouter key saved in Keychain."
-        } catch {
-            summaryStatusText = error.localizedDescription
-        }
     }
 
     private func toggleChatGPTSignIn() {
@@ -1286,19 +1246,8 @@ struct OnboardingView: View {
             return
         }
 
-        isSigningInChatGPT = true
         summaryStatusText = nil
-        Task {
-            do {
-                try await ChatGPTAuthManager.shared.signIn()
-                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
-                summaryStatusText = "Signed in to ChatGPT."
-            } catch {
-                chatGPTSignedIn = ChatGPTAuthManager.shared.isAuthenticated
-                summaryStatusText = error.localizedDescription
-            }
-            isSigningInChatGPT = false
-        }
+        isChatGPTSignInPresented = true
     }
 
     private var modelActionTitle: String {

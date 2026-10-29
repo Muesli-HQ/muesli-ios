@@ -24,8 +24,7 @@ enum MeetingSummaryClient {
     static let openRouterAPIKeyAccount = "openrouter_api_key"
 
     private static let openRouterURL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
-    private static let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/responses")!
-    private static let maxOutputTokens = 2500
+    private static let maxOutputTokens = 16_384
     private static let keychain = KeychainStore(service: "\(MuesliAppConstants.bundleIdentifier).summary")
 
     private static let baseSummaryInstructions = """
@@ -39,47 +38,50 @@ enum MeetingSummaryClient {
     Return only the title text, with no quotes, prefix, or explanation.
     """
 
-    static func storedOpenRouterAPIKey() -> String {
-        (try? keychain.string(for: openRouterAPIKeyAccount)) ?? ""
+    static func storedAPIKey(for backend: MeetingSummaryBackend) -> String {
+        (try? keychain.string(for: "\(backend.rawValue)_api_key")) ?? ""
     }
 
-    static func saveOpenRouterAPIKey(_ apiKey: String) throws {
+    static func saveAPIKey(_ apiKey: String, for backend: MeetingSummaryBackend) throws {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            keychain.delete(account: openRouterAPIKeyAccount)
-        } else {
-            try keychain.set(trimmed, for: openRouterAPIKeyAccount)
-        }
+        let account = "\(backend.rawValue)_api_key"
+        if trimmed.isEmpty { keychain.delete(account: account) }
+        else { try keychain.set(trimmed, for: account) }
     }
+
+    static func storedOpenRouterAPIKey() -> String { storedAPIKey(for: .openRouter) }
+    static func saveOpenRouterAPIKey(_ key: String) throws { try saveAPIKey(key, for: .openRouter) }
 
     static func summarize(
         transcript: String,
         meetingTitle: String,
-        manualNotesToRetain: String? = nil
+        manualNotesToRetain: String? = nil,
+        configuration: MeetingSummaryConfiguration = .current()
     ) async throws -> MeetingSummaryResult {
-        let backend = MuesliPreferences.meetingSummaryBackend
-        switch backend {
-        case .openRouter:
-            let model = MuesliPreferences.openRouterModel
-            let notes = try await summarizeWithOpenRouter(
-                transcript: transcript,
-                meetingTitle: meetingTitle,
-                manualNotesToRetain: manualNotesToRetain,
-                model: model
-            )
-            let title = await generateTitleWithOpenRouter(transcript: transcript, model: model) ?? meetingTitle
-            return MeetingSummaryResult(notes: notes, title: title, backend: backend, model: model)
-        case .chatGPT:
-            let model = MuesliPreferences.chatGPTModel
-            let notes = try await summarizeWithChatGPT(
-                transcript: transcript,
-                meetingTitle: meetingTitle,
-                manualNotesToRetain: manualNotesToRetain,
-                model: model
-            )
-            let title = await generateTitleWithChatGPT(transcript: transcript, model: model) ?? meetingTitle
-            return MeetingSummaryResult(notes: notes, title: title, backend: backend, model: model)
+        // Snapshot the user's choices before the first suspension point. A settings
+        // change during generation must not send the title to a different provider.
+        let backend = configuration.backend
+        let model = configuration.model
+        let template = configuration.template
+        let apiKey = configuration.apiKey
+        try Task.checkCancellation()
+        let notes = try await generate(backend: backend, model: model, apiKey: apiKey,
+            systemPrompt: baseSummaryInstructions,
+            userPrompt: summaryPrompt(transcript: transcript, meetingTitle: meetingTitle,
+                                      manualNotesToRetain: manualNotesToRetain, template: template), maxTokens: maxOutputTokens)
+        try Task.checkCancellation()
+        let title: String
+        do {
+            title = try await generate(backend: backend, model: model, apiKey: apiKey,
+                systemPrompt: titleInstructions, userPrompt: String(transcript.prefix(6000)) + optionalNotesSection(header: "Written notes:", notes: manualNotesToRetain), maxTokens: 1024)
+                .trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"")))
+        } catch {
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
+            title = meetingTitle
         }
+        try Task.checkCancellation()
+        return MeetingSummaryResult(notes: notes, title: title.isEmpty ? meetingTitle : title, backend: backend, model: model)
     }
 
     static func failureNotes(
@@ -109,66 +111,104 @@ enum MeetingSummaryClient {
         """
     }
 
-    private static func summarizeWithOpenRouter(
-        transcript: String,
-        meetingTitle: String,
-        manualNotesToRetain: String?,
-        model: String
-    ) async throws -> String {
-        let apiKey = storedOpenRouterAPIKey()
-        guard !apiKey.isEmpty else {
-            throw MeetingSummaryError.missingCredentials(.openRouter)
+    private static func generate(backend: MeetingSummaryBackend, model: String, apiKey: String,
+                                 systemPrompt: String, userPrompt: String, maxTokens: Int) async throws -> String {
+        try Task.checkCancellation()
+        if backend == .chatGPT {
+            return try await callChatGPT(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model)
         }
-        return try await callChatCompletions(
-            url: openRouterURL,
-            backend: "OpenRouter",
-            apiKey: apiKey,
-            model: model,
-            systemPrompt: baseSummaryInstructions,
-            userPrompt: summaryPrompt(
-                transcript: transcript,
-                meetingTitle: meetingTitle,
-                manualNotesToRetain: manualNotesToRetain
-            ),
-            maxTokens: maxOutputTokens,
-            extraHeaders: ["X-OpenRouter-Title": "Muesli"]
-        )
+        guard !apiKey.isEmpty else { throw MeetingSummaryError.missingCredentials(backend) }
+        if backend == .openRouter {
+            return try await callChatCompletions(url: openRouterURL, backend: backend.label, apiKey: apiKey,
+                model: model, systemPrompt: systemPrompt, userPrompt: userPrompt, maxTokens: maxTokens,
+                extraHeaders: ["X-OpenRouter-Title": "Muesli"])
+        }
+        let limit: Int
+        if backend == .anthropic {
+            let metadataSession = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration())
+            defer { metadataSession.invalidateAndCancel() }
+            limit = try await AnthropicSummaryPolicy.maximum(model: model, apiKey: apiKey, session: metadataSession)
+        } else {
+            limit = maxTokens
+        }
+        let streaming = backend == .anthropic && limit > 21_333
+        let session = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration(streaming: streaming))
+        defer { session.invalidateAndCancel() }
+        let request = try publicAPIRequest(backend: backend, model: model, apiKey: apiKey,
+                                          systemPrompt: systemPrompt, userPrompt: userPrompt, maxTokens: limit)
+        if streaming {
+            let (bytes, response) = try await session.bytes(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw MeetingSummaryError.backendFailed(backend: backend.label, statusCode: (response as? HTTPURLResponse)?.statusCode,
+                                                       message: "Check your API key and model access, then retry.")
+            }
+            var stream = AnthropicSummaryStream()
+            for try await line in bytes.lines {
+                try Task.checkCancellation()
+                try stream.consume(line: line)
+                if stream.finished { break }
+            }
+            try Task.checkCancellation()
+            return try stream.result()
+        }
+        let (data, response) = try await session.data(for: request)
+        try Task.checkCancellation()
+        try validateHTTPResponse(response, data: data, backend: backend.label)
+        return try publicAPIText(data, backend: backend)
     }
 
-    private static func summarizeWithChatGPT(
-        transcript: String,
-        meetingTitle: String,
-        manualNotesToRetain: String?,
-        model: String
-    ) async throws -> String {
-        do {
-            let text = try await callWHAM(
-                systemPrompt: baseSummaryInstructions,
-                userPrompt: summaryPrompt(
-                    transcript: transcript,
-                    meetingTitle: meetingTitle,
-                    manualNotesToRetain: manualNotesToRetain
-                ),
-                model: model
-            )
-            guard !text.isEmpty else {
-                throw MeetingSummaryError.emptyResponse("ChatGPT")
-            }
-            return text
-        } catch {
-            if error is MeetingSummaryError {
-                throw error
-            }
-            throw MeetingSummaryError.requestFailed(backend: "ChatGPT", underlying: error)
+    static func publicAPIRequest(backend: MeetingSummaryBackend, model: String, apiKey: String,
+                                 systemPrompt: String, userPrompt: String, maxTokens: Int) throws -> URLRequest {
+        let anthropic = backend == .anthropic
+        let endpoint = anthropic ? "https://api.anthropic.com/v1/messages" : "https://api.openai.com/v1/responses"
+        var request = URLRequest(url: URL(string: endpoint)!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = anthropic && maxTokens > 21_333 ? 120 : 300
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any]
+        if anthropic {
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            body = ["model": model, "max_tokens": maxTokens, "stream": maxTokens > 21_333, "system": systemPrompt,
+                    "messages": [["role": "user", "content": userPrompt]]]
+        } else {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            // Avoid arbitrary output caps consuming a reasoning model's whole budget.
+            body = ["model": model, "store": false, "instructions": systemPrompt, "input": userPrompt]
         }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    static func publicAPIText(_ data: Data, backend: MeetingSummaryBackend) throws -> String {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw MeetingSummaryError.emptyResponse(backend.label)
+        }
+        let text: String?
+        if backend == .anthropic {
+            guard ["end_turn", "stop_sequence"].contains(json["stop_reason"] as? String ?? "") else {
+                throw MeetingSummaryError.backendFailed(backend: backend.label, statusCode: nil, message: "The summary was interrupted. Please retry.")
+            }
+            text = (json["content"] as? [[String: Any]] ?? []).filter { $0["type"] as? String == "text" }
+                .compactMap { $0["text"] as? String }.joined(separator: "\n")
+        } else {
+            guard json["status"] as? String == "completed" else {
+                throw MeetingSummaryError.backendFailed(backend: backend.label, statusCode: nil, message: "The summary was interrupted. Please retry.")
+            }
+            text = SummaryResponseStream.outputText(json)
+        }
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            throw MeetingSummaryError.emptyResponse(backend.label)
+        }
+        return trimmed
     }
 
     private static func summaryPrompt(
         transcript: String,
         meetingTitle: String,
-        manualNotesToRetain: String?
+        manualNotesToRetain: String?,
+        template: MeetingTemplatePreset
     ) -> String {
-        let template = MuesliPreferences.meetingTemplate
         let manualNotesSection = optionalNotesSection(
             header: "User-written notes to retain:",
             notes: manualNotesToRetain
@@ -201,33 +241,6 @@ enum MeetingSummaryClient {
         """
     }
 
-    private static func generateTitleWithOpenRouter(transcript: String, model: String) async -> String? {
-        let apiKey = storedOpenRouterAPIKey()
-        guard !apiKey.isEmpty else { return nil }
-        return try? await callChatCompletions(
-            url: openRouterURL,
-            backend: "OpenRouter",
-            apiKey: apiKey,
-            model: model,
-            systemPrompt: titleInstructions,
-            userPrompt: String(transcript.prefix(1500)),
-            maxTokens: 80,
-            extraHeaders: ["X-OpenRouter-Title": "Muesli"]
-        )
-        .trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"")))
-    }
-
-    private static func generateTitleWithChatGPT(transcript: String, model: String) async -> String? {
-        guard let text = try? await callWHAM(
-            systemPrompt: titleInstructions,
-            userPrompt: String(transcript.prefix(1500)),
-            model: model
-        ) else {
-            return nil
-        }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"")))
-    }
-
     private static func callChatCompletions(
         url: URL,
         backend: String,
@@ -244,11 +257,11 @@ enum MeetingSummaryClient {
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": userPrompt],
             ],
-            "max_tokens": maxTokens,
         ]
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 300
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         for (key, value) in extraHeaders {
@@ -257,7 +270,10 @@ enum MeetingSummaryClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let session = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration(streaming: false))
+            defer { session.invalidateAndCancel() }
+            let (data, response) = try await session.data(for: request)
+            try Task.checkCancellation()
             try validateHTTPResponse(response, data: data, backend: backend)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let text = extractChatCompletionsText(from: json),
@@ -266,6 +282,8 @@ enum MeetingSummaryClient {
             }
             return text
         } catch {
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
             if error is MeetingSummaryError {
                 throw error
             }
@@ -273,72 +291,33 @@ enum MeetingSummaryClient {
         }
     }
 
-    private static func callWHAM(systemPrompt: String, userPrompt: String, model: String) async throws -> String {
-        let (token, accountId) = try await ChatGPTAuthManager.shared.validAccessToken()
-        let body: [String: Any] = [
-            "model": model,
-            "store": false,
-            "stream": true,
-            "instructions": systemPrompt,
-            "input": [
-                [
-                    "role": "user",
-                    "content": [
-                        ["type": "input_text", "text": userPrompt],
-                    ],
-                ] as [String: Any],
-            ],
-        ]
-
-        var request = URLRequest(url: whamURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if !accountId.isEmpty {
-            request.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
+    private static func callChatGPT(systemPrompt: String, userPrompt: String, model: String) async throws -> String {
+        let (token, accountID) = try await ChatGPTAuthManager.shared.validAccessToken()
+        try Task.checkCancellation()
+        let body: [String: Any] = ["model": model, "store": false, "stream": true, "instructions": systemPrompt,
+            "input": [["role": "user", "content": [["type": "input_text", "text": userPrompt]]]] as [[String: Any]]]
+        let request = try ChatGPTResponsesTransport.makeRequest(body: body, token: token, accountID: accountID)
+        let session = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration())
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw MeetingSummaryError.backendFailed(backend: "ChatGPT", statusCode: (response as? HTTPURLResponse)?.statusCode,
+                                                   message: "Please check your ChatGPT access and try again.")
         }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode
-        guard statusCode == 200 else {
-            var errorData = Data()
-            for try await byte in bytes {
-                errorData.append(byte)
-            }
-            let message = extractErrorMessage(from: errorData)
-                ?? String(data: errorData, encoding: .utf8)
-                ?? "unknown error"
-            throw MeetingSummaryError.backendFailed(
-                backend: "ChatGPT",
-                statusCode: statusCode,
-                message: String(message.prefix(800))
-            )
-        }
-
-        var fullText = ""
+        var stream = SummaryResponseStream()
         for try await line in bytes.lines {
-            guard line.hasPrefix("data: ") else { continue }
-            let payload = String(line.dropFirst(6))
-            if payload == "[DONE]" { break }
-            guard let data = payload.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                continue
-            }
-            if let outputText = json["output_text"] as? String, !outputText.isEmpty {
-                fullText = outputText
-            }
-            if let type = json["type"] as? String,
-               type == "response.output_text.delta",
-               let delta = json["delta"] as? String {
-                fullText += delta
-            }
+            try Task.checkCancellation()
+            try stream.consume(line: line)
+            if stream.completedText != nil { break }
         }
-        return fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+        try Task.checkCancellation()
+        return try stream.result()
     }
 
     private static func validateHTTPResponse(_ response: URLResponse, data: Data, backend: String) throws {
-        guard let httpResponse = response as? HTTPURLResponse else { return }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw MeetingSummaryError.backendFailed(backend: backend, statusCode: nil, message: "Invalid server response.")
+        }
         guard (200..<300).contains(httpResponse.statusCode) else {
             let message = extractErrorMessage(from: data)
                 ?? String(data: data, encoding: .utf8)
@@ -351,9 +330,10 @@ enum MeetingSummaryClient {
         }
     }
 
-    private static func extractChatCompletionsText(from payload: [String: Any]) -> String? {
+    static func extractChatCompletionsText(from payload: [String: Any]) -> String? {
         let choices = payload["choices"] as? [[String: Any]] ?? []
-        guard let message = choices.first?["message"] as? [String: Any] else { return nil }
+        guard choices.first?["finish_reason"] as? String == "stop",
+              let message = choices.first?["message"] as? [String: Any] else { return nil }
         if let content = message["content"] as? String {
             return content.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -386,4 +366,17 @@ struct MeetingSummaryResult {
     let title: String
     let backend: MeetingSummaryBackend
     let model: String
+}
+
+struct MeetingSummaryConfiguration {
+    let backend: MeetingSummaryBackend
+    let model: String
+    let template: MeetingTemplatePreset
+    let apiKey: String
+
+    static func current() -> Self {
+        let backend = MuesliPreferences.meetingSummaryBackend
+        return Self(backend: backend, model: MuesliPreferences.summaryModel(for: backend),
+                    template: MuesliPreferences.meetingTemplate, apiKey: MeetingSummaryClient.storedAPIKey(for: backend))
+    }
 }

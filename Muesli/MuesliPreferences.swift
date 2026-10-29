@@ -28,6 +28,8 @@ enum MuesliPreferences {
     static let meetingSummariesEnabledKey = "muesli.meetings.summaries.enabled"
     static let meetingSummaryBackendKey = "muesli.meetings.summary.backend"
     static let openRouterModelKey = "muesli.meetings.summary.openRouter.model"
+    static let openAIModelKey = "muesli.meetings.summary.openAI.model"
+    static let anthropicModelKey = "muesli.meetings.summary.anthropic.model"
     static let chatGPTModelKey = "muesli.meetings.summary.chatGPT.model"
     static let meetingTemplateKey = "muesli.meetings.template"
     static let iCloudSyncEnabledKey = "muesli.sync.icloud.enabled"
@@ -149,10 +151,17 @@ enum MuesliPreferences {
         let value = UserDefaults.standard.string(forKey: chatGPTModelKey) ?? ""
         let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedValue.isEmpty else { return MeetingSummaryBackend.defaultChatGPTModel }
-        guard SummaryModelPreset.chatGPTModels.contains(where: { $0.id == trimmedValue }) else {
-            return MeetingSummaryBackend.defaultChatGPTModel
-        }
         return trimmedValue
+    }
+
+    static func summaryModel(for backend: MeetingSummaryBackend) -> String {
+        switch backend {
+        case .chatGPT: return chatGPTModel
+        case .openRouter: return openRouterModel
+        case .openAI, .anthropic:
+            let value = UserDefaults.standard.string(forKey: backend.modelPreferenceKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return value.isEmpty ? backend.defaultModel : value
+        }
     }
 
     static func liveActivitiesEnabled(for kind: RecordingSessionKind) -> Bool {
@@ -174,9 +183,11 @@ enum MuesliPreferences {
 enum MeetingSummaryBackend: String, CaseIterable, Identifiable {
     case openRouter = "openrouter"
     case chatGPT = "chatgpt"
+    case openAI = "openai"
+    case anthropic = "anthropic"
 
-    static let defaultOpenRouterModel = "stepfun/step-3.5-flash:free"
-    static let defaultChatGPTModel = "gpt-5.5"
+    static let defaultOpenRouterModel = "openrouter/free"
+    static let defaultChatGPTModel = "gpt-6.1-sol"
 
     var id: String { rawValue }
 
@@ -186,6 +197,26 @@ enum MeetingSummaryBackend: String, CaseIterable, Identifiable {
             "OpenRouter"
         case .chatGPT:
             "ChatGPT"
+        case .openAI: "OpenAI API"
+        case .anthropic: "Anthropic"
+        }
+    }
+
+    var modelPreferenceKey: String {
+        switch self {
+        case .chatGPT: MuesliPreferences.chatGPTModelKey
+        case .openRouter: MuesliPreferences.openRouterModelKey
+        case .openAI: MuesliPreferences.openAIModelKey
+        case .anthropic: MuesliPreferences.anthropicModelKey
+        }
+    }
+
+    var presets: [SummaryModelPreset] {
+        switch self {
+        case .chatGPT: SummaryModelPreset.chatGPTModels
+        case .openRouter: SummaryModelPreset.openRouterModels
+        case .openAI: SummaryModelPreset.openAIModels
+        case .anthropic: SummaryModelPreset.anthropicModels
         }
     }
 
@@ -195,6 +226,8 @@ enum MeetingSummaryBackend: String, CaseIterable, Identifiable {
             Self.defaultOpenRouterModel
         case .chatGPT:
             Self.defaultChatGPTModel
+        case .openAI: "gpt-6.1-sol"
+        case .anthropic: "claude-sonnet-5-5"
         }
     }
 }
@@ -203,12 +236,23 @@ struct SummaryModelPreset: Identifiable, Hashable {
     let id: String
     let label: String
 
+    // Aligned with macOS Models.swift; subscription and public API catalogs differ.
     static let chatGPTModels: [SummaryModelPreset] = [
-        SummaryModelPreset(id: "gpt-5.5", label: "GPT-5.5 (default)"),
-        SummaryModelPreset(id: "gpt-5.4-mini", label: "GPT-5.4 Mini"),
+        .init(id: "gpt-6.1-sol", label: "GPT-6.1 Sol"),
+        .init(id: "gpt-6-astra", label: "GPT-6 Astra"),
+        .init(id: "gpt-6-sol", label: "GPT-6 Sol"),
+        .init(id: "gpt-6-luna", label: "GPT-6 Luna"),
+    ]
+    static let openAIModels = chatGPTModels + [.init(id: "chat-latest", label: "Chat Latest")]
+    static let anthropicModels: [SummaryModelPreset] = [
+        .init(id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5"),
+        .init(id: "claude-opus-5-5", label: "Claude Opus 5.5"),
+        .init(id: "claude-fable-5-1", label: "Claude Fable 5.1"),
+        .init(id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5"),
     ]
 
     static let openRouterModels: [SummaryModelPreset] = [
+        .init(id: "openrouter/free", label: "Auto (free models)"),
         SummaryModelPreset(id: "stepfun/step-3.5-flash:free", label: "Step 3.5 Flash (256k ctx)"),
         SummaryModelPreset(id: "nvidia/nemotron-3-super-120b-a12b:free", label: "Nemotron 3 Super 120B (262k ctx)"),
         SummaryModelPreset(id: "nvidia/nemotron-3-nano-30b-a3b:free", label: "Nemotron 3 Nano 30B (256k ctx)"),
@@ -231,12 +275,7 @@ struct SummaryModelPreset: Identifiable, Hashable {
         let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedModel.isEmpty else { return "unknown" }
 
-        let presets = switch backend {
-        case .openRouter:
-            openRouterModels
-        case .chatGPT:
-            chatGPTModels
-        }
+        let presets = backend.presets
         return presets.contains(where: { $0.id == trimmedModel }) ? trimmedModel : "custom"
     }
 }

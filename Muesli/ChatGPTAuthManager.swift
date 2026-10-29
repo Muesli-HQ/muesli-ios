@@ -170,7 +170,7 @@ final class ChatGPTAuthManager {
             refreshTask = Task {
                 let data = try await self.tokenRequest(body: ["grant_type": "refresh_token", "client_id": Self.clientID, "refresh_token": stored.refreshToken])
                 try Task.checkCancellation()
-                guard self.generation == epoch else { throw CancellationError() }
+                guard self.generation == epoch else { throw ChatGPTAuthError.notAuthenticated }
                 let tokens = try ChatGPTTokens.decode(data, now: self.now(), previous: stored)
                 try self.saveTokens(tokens)
                 return tokens
@@ -180,9 +180,18 @@ final class ChatGPTAuthManager {
         defer {
             if refreshID == flight { refreshTask = nil; refreshID = nil }
         }
-        let tokens = try await task.value
+        let tokens: ChatGPTTokens
+        do {
+            tokens = try await task.value
+        } catch {
+            // Cancelling a shared refresh on logout is not cancellation of the
+            // caller's meeting. Let it save the transcript with a failed summary.
+            try Task.checkCancellation()
+            guard generation == epoch else { throw ChatGPTAuthError.notAuthenticated }
+            throw error
+        }
         try Task.checkCancellation()
-        guard generation == epoch else { throw CancellationError() }
+        guard generation == epoch else { throw ChatGPTAuthError.notAuthenticated }
         return (tokens.accessToken, tokens.accountID)
     }
 

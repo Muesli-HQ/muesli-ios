@@ -121,9 +121,46 @@ final class ChatGPTAuthTests: XCTestCase {
         while await network.count == 0 { await Task.yield() }
         auth.signOut()
         await network.release()
-        do { _ = try await task.value; XCTFail("Expected cancellation") }
-        catch is CancellationError {} catch { XCTFail("Unexpected \(error)") }
+        do { _ = try await task.value; XCTFail("Expected authentication failure") }
+        catch ChatGPTAuthError.notAuthenticated {} catch { XCTFail("Unexpected \(error)") }
         XCTAssertTrue(store.values.isEmpty)
+    }
+
+    @MainActor
+    func testLogoutMapsCancelledRefreshTransportToAuthenticationFailure() async throws {
+        let store = legacyStore()
+        let network = AuthNetwork([(200, tokens)])
+        await network.setBlocked()
+        let auth = ChatGPTAuthManager(store: store, send: {
+            let response = try await network.send($0)
+            // URLSession reports a cancelled request when logout stops refresh.
+            if Task.isCancelled { throw URLError(.cancelled) }
+            return response
+        })
+        let task = Task { try await auth.validAccessToken() }
+        while await network.count == 0 { await Task.yield() }
+        auth.signOut()
+        await network.release()
+        do { _ = try await task.value; XCTFail("Expected authentication failure") }
+        catch ChatGPTAuthError.notAuthenticated {} catch { XCTFail("Unexpected \(error)") }
+        XCTAssertTrue(store.values.isEmpty)
+    }
+
+    @MainActor
+    func testCallerCancellationRemainsCancellationDuringRefresh() async throws {
+        let store = legacyStore()
+        let network = AuthNetwork([(200, tokens)])
+        await network.setBlocked()
+        let auth = ChatGPTAuthManager(store: store, send: { try await network.send($0) })
+        let task = Task { try await auth.validAccessToken() }
+        while await network.count == 0 { await Task.yield() }
+        task.cancel()
+        await network.release()
+        do { _ = try await task.value; XCTFail("Expected caller cancellation") }
+        catch is CancellationError {} catch { XCTFail("Unexpected \(error)") }
+        // The shared refresh remains usable by other callers.
+        let token = try await auth.validAccessToken()
+        XCTAssertEqual(token.token, "new-access")
     }
 
     @MainActor

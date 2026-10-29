@@ -55,7 +55,7 @@ struct SummaryResponseStream {
             throw failure("The response was malformed.")
         }
         let type = payload["type"] as? String ?? ""
-        if ["error", "response.failed", "response.incomplete"].contains(type) || payload["error"] as? [String: Any] != nil {
+        if ["error", "response.failed", "response.incomplete"].contains(type) || payload["error"] is [String: Any] {
             throw failure("The summary could not be completed. Please retry.")
         }
         if type == "response.output_text.delta", let text = payload["delta"] as? String { delta += text }

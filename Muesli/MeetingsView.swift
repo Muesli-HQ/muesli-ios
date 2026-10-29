@@ -1,10 +1,12 @@
 import AVFoundation
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct MeetingsView: View {
     @Bindable var coordinator: DictationCoordinator
     var isActive = true
+    @State private var showsAudioPicker = false
     @State private var meetingTitle = ""
     @State private var sessionPendingDelete: RecordingSession?
     @State private var navigationPath: [UUID] = []
@@ -70,12 +72,28 @@ struct MeetingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
                     header
+                    Button { showsAudioPicker = true } label: {
+                        Label("Import Audio from Files", systemImage: "square.and.arrow.down")
+                    }
+                    .accessibilityIdentifier("meetings.importAudio")
+                    .disabled(coordinator.isReceivingAudio)
+                    if coordinator.isReceivingAudio { ProgressView("Copying audio…") }
+                    if !coordinator.pendingAudioImports.isEmpty {
+                        Button("Review Shared Audio (\(coordinator.pendingAudioImports.count))") { coordinator.isAudioImportPresented = true }
+                    }
                     startMeetingPanel
                     sessionsSection
                 }
                 .padding(.horizontal, MuesliTheme.spacing20)
                 .padding(.top, MuesliTheme.spacing24)
                 .padding(.bottom, 112)
+            }
+            .fileImporter(isPresented: $showsAudioPicker,
+                allowedContentTypes: [.audio, .mpeg4Movie]) { result in
+                switch result {
+                case .success(let url): coordinator.receiveAudioFile(url)
+                case .failure(let error): coordinator.reportAudioImportError(error, stage: "Choose file")
+                }
             }
             .background(MuesliTheme.backgroundBase)
             .toolbar(.hidden, for: .navigationBar)

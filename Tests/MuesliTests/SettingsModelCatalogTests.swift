@@ -186,13 +186,13 @@ final class SettingsModelCatalogTests: XCTestCase {
         XCTAssertEqual(Set(models.map(\.id)).count, models.count)
         XCTAssertEqual(
             models.count,
-            LocalTranscriptionModel.parakeetModels.count + LocalTranscriptionModel.whisperModels.count
+            LocalTranscriptionModel.parakeetModels.count + LocalTranscriptionModel.whisperModels.count + 1
         )
     }
 
     func testEverySelectableModelHasABackgroundDownloadPlan() {
         XCTAssertTrue(
-            LocalTranscriptionModel.allCases.allSatisfy {
+            LocalTranscriptionModel.allCases.filter { $0 != .appleSpeech }.allSatisfy {
                 ModelBackgroundDownloadService.supportsBackgroundDownload($0)
             }
         )
@@ -275,7 +275,7 @@ final class SettingsModelCatalogTests: XCTestCase {
             ModelBackgroundDownloadService.storageDirectory(for: $0)?.standardizedFileURL.path
         }
 
-        XCTAssertEqual(directories.count, LocalTranscriptionModel.allCases.count)
+        XCTAssertEqual(directories.count, LocalTranscriptionModel.allCases.count - 1)
         XCTAssertEqual(Set(directories).count, directories.count)
         XCTAssertTrue(directories.allSatisfy { !$0.isEmpty && $0 != "/" })
     }

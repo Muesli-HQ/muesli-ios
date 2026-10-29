@@ -1156,7 +1156,10 @@ final class DictationCoordinator {
             }
             let isCheckpointArmedRecording = original.phase == .recording
                 && original.longFormThresholdSeconds != nil
-            guard original.isLongForm || isCheckpointArmedRecording else { continue }
+            // Imported and stopped quick notes also own protected audio. Recover them
+            // without changing their destination or presenting the long-form UI.
+            guard original.isLongForm || isCheckpointArmedRecording
+                    || original.protectedAudioUntilTranscriptCompletes else { continue }
             guard [.recording, .transcriptionQueued, .transcribing, .failed].contains(original.phase),
                   voiceNoteLifecycleRunner?.sessionID != original.id,
                   original.phase != .failed || original.longFormRecoveryValidatedAt == nil
@@ -1336,6 +1339,7 @@ final class DictationCoordinator {
     }
 
     func handleOpenURL(_ url: URL) {
+        if url.isFileURL { receiveAudioFile(url); return }
         if url.scheme == MuesliAppConstants.urlScheme, url.host == "copy-dictation",
            let requestID = UUID(uuidString: url.lastPathComponent) {
             pendingDictationCopyRequestID = requestID
@@ -3391,9 +3395,15 @@ final class DictationCoordinator {
     }
 
     func retryVoiceNoteTranscription(sessionID: UUID) {
-        guard canRetrySavedVoiceNote,
+        transcribeSavedVoiceNote(sessionID: sessionID, isInitialImport: false)
+    }
+
+    private func transcribeSavedVoiceNote(sessionID: UUID, isInitialImport: Bool) {
+        guard canRetrySavedVoiceNote, !isMeetingTranscribing,
               var session = try? store.activeRecordingSession(id: sessionID),
-              session.canRetryVoiceNoteTranscription,
+              (isInitialImport
+                ? session.kind == .quickDictation && session.phase == .transcriptionQueued
+                : session.canRetryVoiceNoteTranscription),
               let requestID = session.requestID,
               let audioFileName = session.audioFileName,
               let audioURL = try? store.audioFileURL(fileName: audioFileName)
@@ -3411,7 +3421,7 @@ final class DictationCoordinator {
             return
         }
         session.phase = .transcriptionQueued
-        session.transcriptionRetryCount += 1
+        if !isInitialImport { session.transcriptionRetryCount += 1 }
         session.lastTranscriptionAttemptAt = .now
         session.errorMessage = nil
         try? store.saveSession(session)
@@ -4165,7 +4175,7 @@ final class DictationCoordinator {
     private func publishKeyboardModelCatalog() {
         let catalog = KeyboardTranscriptionModelCatalog(
             selectedRawValue: selectedTranscriptionModel.rawValue,
-            models: LocalTranscriptionModel.allCases.map(\.keyboardCatalogOption),
+            models: LocalTranscriptionModel.availableModels.map(\.keyboardCatalogOption),
             canSelectModels: canSelectTranscriptionModelsFromKeyboard
         )
         try? store.saveKeyboardModelCatalog(catalog)
@@ -4346,17 +4356,15 @@ final class DictationCoordinator {
             prepareSelectedModel(reason: "prewarm_\(reason)")
             return
         }
-        modelPreparation = ModelPreparationState(
-            phase: .preparing,
-            progress: nil,
-            status: "Warming up the transcription engine...",
-            detail: model.shortName
-        )
         let coordinator = self
         modelPrewarmTask = Task { [engine, model] in
             do {
+                try Task.checkCancellation()
                 await engine.selectModel(model)
-                guard await !engine.isLoaded(for: model) else {
+                let isLoaded = await engine.isLoaded(for: model)
+                try Task.checkCancellation()
+                guard coordinator.selectedTranscriptionModel == model else { return }
+                guard !isLoaded else {
                     await MainActor.run {
                         guard coordinator.selectedTranscriptionModel == model else { return }
                         coordinator.modelPrewarmTask = nil
@@ -4370,6 +4378,13 @@ final class DictationCoordinator {
                     return
                 }
 
+                // Foreground checks must not flash a loading state for a warm model.
+                coordinator.modelPreparation = ModelPreparationState(
+                    phase: .preparing,
+                    progress: nil,
+                    status: "Warming up the transcription engine...",
+                    detail: model.shortName
+                )
                 AppTelemetry.signal(
                     "model_prewarm_started",
                     parameters: ["engine": model.engineIdentifier, "reason": reason]
@@ -6441,12 +6456,147 @@ final class DictationCoordinator {
         setMeetingFinalizationTask(task, sessionID: initialSession.id)
     }
 
+    var isAudioImportPresented = false
+    var audioImportNavigationID: UUID?
+    var audioImportDestination: AudioImportDestination = .voiceNote
+    var pendingAudioImports: [AudioImportInbox.Item] = []
+    var audioImportError: String?
+    var audioImportErrorDetails: String?
+    var isImportingAudio = false
+    private var receivingAudioCount = 0
+    var isReceivingAudio: Bool { receivingAudioCount > 0 }
+    var canImportAudio: Bool { !isImportingAudio && canAcceptImportedTranscription }
+    private var canAcceptImportedTranscription: Bool {
+        isTranscriptionModelReady && canSelectTranscriptionModelsFromKeyboard
+            && !recordingStartupInProgress
+    }
+
+    enum AudioImportHandoffError: LocalizedError {
+        case busy
+        var errorDescription: String? {
+            "Finish the current recording or transcription, then try importing again. Your audio is saved."
+        }
+    }
+
+    func validateAudioImportHandoff() throws {
+        guard canAcceptImportedTranscription else { throw AudioImportHandoffError.busy }
+    }
+    private var audioImportTask: Task<Void, Never>?
+
+    func reportAudioImportError(_ error: Error, stage: String) {
+        let nsError = error as NSError
+        guard !(nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError) else { return }
+        if let described = error as? LocalizedError, let description = described.errorDescription {
+            audioImportError = description
+        } else if stage == "Decode audio" {
+            audioImportError = "This audio could not be decoded. Try exporting it as M4A or WAV."
+        } else if stage == "Choose file" || stage == "Copy from Files" {
+            audioImportError = "Couldn’t read this file from Files. Download it to On My iPhone, then try again."
+        } else {
+            audioImportError = "Couldn’t finish importing the audio. Your source file is unchanged."
+        }
+        var details = "\(stage): \(nsError.domain) (\(nsError.code))"
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            details += " · \(underlying.domain) (\(underlying.code))"
+        }
+        audioImportErrorDetails = details
+    }
+
+    func refreshAudioImports() {
+        do { pendingAudioImports = try AudioImportInbox.items() }
+        catch { reportAudioImportError(error, stage: "Read saved imports") }
+    }
+
+    func receiveAudioFile(_ url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
+        receivingAudioCount += 1
+        Task {
+            defer {
+                receivingAudioCount -= 1
+                if access { url.stopAccessingSecurityScopedResource() }
+            }
+            do {
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try AudioImportInbox.enqueue(url)
+                }.value
+                refreshAudioImports()
+            } catch { reportAudioImportError(error, stage: "Copy from Files") }
+        }
+    }
+
+    func dismissAudioImport(_ item: AudioImportInbox.Item) {
+        do { try AudioImportInbox.remove(item); refreshAudioImports() }
+        catch { reportAudioImportError(error, stage: "Remove import") }
+    }
+
+    func cancelAudioImport() { audioImportTask?.cancel() }
+
+    func importAudio(_ item: AudioImportInbox.Item, destination: AudioImportDestination = .voiceNote) {
+        guard canImportAudio else { return }
+        isImportingAudio = true
+        audioImportError = nil
+        audioImportTask = Task {
+            defer { isImportingAudio = false; audioImportTask = nil }
+            var stage = "Read saved import"
+            do {
+                try validateAudioImportHandoff()
+                // A published session is authoritative if the app stopped before inbox cleanup.
+                if let existing = try store.activeRecordingSession(id: item.id) {
+                    try AudioImportInbox.remove(item)
+                    refreshAudioImports()
+                    transcribeImportedSession(existing)
+                    audioImportNavigationID = existing.id
+                    return
+                }
+                let source = try AudioImportInbox.audioURL(item)
+                stage = "Decode audio"
+                let (wav, duration) = try await AudioFileImporter.convert(sourceURL: source)
+                defer { try? FileManager.default.removeItem(at: wav) }
+                try Task.checkCancellation()
+                // Decoding and copying both suspend. Keep the inbox item until
+                // the recording workflow can accept the completed import.
+                try validateAudioImportHandoff()
+                stage = "Save imported audio"
+                let destinationURL = try store.newAudioFileURL(sessionID: item.id)
+                var saved = false
+                defer { if !saved { try? FileManager.default.removeItem(at: destinationURL) } }
+                try await AudioFileImporter.copyConvertedAudio(from: wav, to: destinationURL)
+                try Task.checkCancellation()
+                try validateAudioImportHandoff()
+                // No suspension between the final guard and transcription startup.
+                let session = destination.session(id: item.id, title: item.title,
+                    duration: duration, audioFileName: destinationURL.lastPathComponent)
+                try store.saveSession(session)
+                saved = true
+                try AudioImportInbox.remove(item)
+                refreshAudioImports()
+                refreshHistory()
+                transcribeImportedSession(session)
+                audioImportNavigationID = session.id
+            } catch is CancellationError {
+                // Keep the inbox copy so the user can retry without finding the original again.
+            } catch { reportAudioImportError(error, stage: stage) }
+        }
+    }
+
+    private func transcribeImportedSession(_ session: RecordingSession) {
+        audioImportDestination = session.kind == .meeting ? .meeting : .voiceNote
+        if session.kind == .meeting {
+            transcribeSession(session)
+        } else if session.phase == .transcriptionQueued {
+            transcribeSavedVoiceNote(sessionID: session.id, isInitialImport: true)
+        } else if session.canRetryVoiceNoteTranscription {
+            retryVoiceNoteTranscription(sessionID: session.id)
+        }
+    }
+
     func transcribeSession(_ session: RecordingSession) {
         startMeetingTranscription(session, useStreamingChunks: false)
     }
 
     private func startMeetingTranscription(_ queuedSession: RecordingSession, useStreamingChunks: Bool) {
-        guard isTranscriptionModelReady else { return }
+        guard isTranscriptionModelReady, !voiceNoteLifecycleState.isWorkActive,
+              activeRequest == nil, statusText != "Transcribing", !recordingStartupInProgress else { return }
         guard !isRecording,
               !hasMeetingRecordingInProgress,
               !isMeetingTranscribing,
@@ -7464,13 +7614,15 @@ final class DictationCoordinator {
         return pasteboard.changeCount != previousCount
     }
 
-    func deliverKeyboardTranscript(_ text: String, requestID: UUID) {
+    /// Uses an explicit time for deterministic tests; otherwise evaluates freshness
+    /// after the store reads so their latency cannot keep an expired status fresh.
+    func deliverKeyboardTranscript(_ text: String, requestID: UUID, now: Date? = nil) {
         let extensionStatus = try? store.keyboardExtensionStatus()
         let session = try? store.recordingSession(requestID: requestID)
         let copiesActionButtonText = ActionButtonCaptureSource.isActionButton(session?.source)
         let keyboardCanInsertDirectly = extensionStatus?.hasOpenAccess == true
             && extensionStatus?.isVisible == true
-            && extensionStatus.map { Date.now.timeIntervalSince($0.lastSeenAt) < 3.5 } == true
+            && extensionStatus.map { (now ?? .now).timeIntervalSince($0.lastSeenAt) < 3.5 } == true
 
         if keyboardCanInsertDirectly {
             // Shortcuts copies the returned result in the background. Copy here

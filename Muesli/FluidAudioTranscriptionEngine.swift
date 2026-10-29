@@ -18,6 +18,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         MuesliPreferences.transcriptionModel.engineIdentifier
     }
 
+    private var appleRuntime: Any?
     private var unifiedManager: UnifiedAsrManager?
     private var isLoadingUnified = false
     private var modelGeneration = UUID()
@@ -36,6 +37,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         let runtimeToUnload = whisperRuntime
         selectedModel = model
         modelGeneration = UUID()
+        appleRuntime = nil
         unifiedManager = nil
         isLoadingUnified = false
         manager = nil
@@ -50,6 +52,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
 
     func isLoaded(for model: LocalTranscriptionModel) -> Bool {
         guard selectedModel == model else { return false }
+        if model == .appleSpeech { return appleRuntime != nil }
         if model == .parakeetUnified { return unifiedManager != nil }
         if model.family == .whisper {
             return loadedWhisperModel == model && whisperRuntime != nil
@@ -66,6 +69,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             await whisperRuntime.unload()
         }
         modelGeneration = UUID()
+        appleRuntime = nil
         unifiedManager = nil
         isLoadingUnified = false
         manager = nil
@@ -78,6 +82,18 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
     }
 
     func prepare(progress: (@Sendable (Double, String?) -> Void)? = nil) async throws {
+        if selectedModel == .appleSpeech {
+            if #available(iOS 26, *) {
+                let generation = modelGeneration
+                let runtime = AppleSpeechRuntime()
+                try await runtime.prepare(progress: progress)
+                try Task.checkCancellation()
+                guard generation == modelGeneration else { throw CancellationError() }
+                appleRuntime = runtime
+                return
+            }
+            throw CocoaError(.featureUnsupported)
+        }
         if selectedModel == .parakeetUnified {
             _ = try await loadedUnifiedManager(progress: progress)
         } else if selectedModel.family == .whisper {
@@ -101,6 +117,13 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         audioURL: URL,
         progress: (@Sendable (TranscriptionProgressUpdate) -> Void)? = nil
     ) async throws -> DetailedTranscriptionResult {
+        if selectedModel == .appleSpeech {
+            if #available(iOS 26, *), let runtime = appleRuntime as? AppleSpeechRuntime {
+                progress?(.init(fractionCompleted: nil, message: "Transcribing"))
+                return try await runtime.transcribe(audioURL, progress: progress)
+            }
+            throw CocoaError(.featureUnsupported)
+        }
         if selectedModel == .parakeetUnified {
             let manager = try await loadedUnifiedManager { fraction, message in
                 progress?(.init(fractionCompleted: fraction, message: message))

@@ -3,10 +3,11 @@ import Foundation
 /// Matches the macOS Codex transport without pretending to be an OpenAI client.
 /// This subscription-backed endpoint is compatibility-sensitive, not the public API.
 enum ChatGPTResponsesTransport {
-    static func sessionConfiguration() -> URLSessionConfiguration {
+    static func sessionConfiguration(streaming: Bool = true) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 120
-        configuration.timeoutIntervalForResource = 180
+        // Non-streaming generation can remain silent until the full summary is ready.
+        configuration.timeoutIntervalForRequest = streaming ? 120 : 300
+        configuration.timeoutIntervalForResource = streaming ? 180 : 600
         configuration.urlCache = nil
         configuration.waitsForConnectivity = false
         return configuration

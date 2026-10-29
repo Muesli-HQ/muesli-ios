@@ -63,6 +63,7 @@ struct ChatGPTSignInView: View {
                     // Dismissing the sheet cancels polling without replacing credentials.
                 } catch {
                     guard !Task.isCancelled else { return }
+                    showBrowser = false
                     code = nil
                     errorMessage = error.localizedDescription
                 }

@@ -123,14 +123,20 @@ enum MeetingSummaryClient {
                 model: model, systemPrompt: systemPrompt, userPrompt: userPrompt, maxTokens: maxTokens,
                 extraHeaders: ["X-OpenRouter-Title": "Muesli"])
         }
-        let session = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration())
+        let limit: Int
+        if backend == .anthropic {
+            let metadataSession = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration())
+            defer { metadataSession.invalidateAndCancel() }
+            limit = try await AnthropicSummaryPolicy.maximum(model: model, apiKey: apiKey, session: metadataSession)
+        } else {
+            limit = maxTokens
+        }
+        let streaming = backend == .anthropic && limit > 21_333
+        let session = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration(streaming: streaming))
         defer { session.invalidateAndCancel() }
-        let limit = backend == .anthropic
-            ? try await AnthropicSummaryPolicy.maximum(model: model, apiKey: apiKey, session: session)
-            : maxTokens
         let request = try publicAPIRequest(backend: backend, model: model, apiKey: apiKey,
                                           systemPrompt: systemPrompt, userPrompt: userPrompt, maxTokens: limit)
-        if backend == .anthropic, limit > 21_333 {
+        if streaming {
             let (bytes, response) = try await session.bytes(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 throw MeetingSummaryError.backendFailed(backend: backend.label, statusCode: (response as? HTTPURLResponse)?.statusCode,
@@ -157,7 +163,7 @@ enum MeetingSummaryClient {
         let endpoint = anthropic ? "https://api.anthropic.com/v1/messages" : "https://api.openai.com/v1/responses"
         var request = URLRequest(url: URL(string: endpoint)!)
         request.httpMethod = "POST"
-        request.timeoutInterval = 120
+        request.timeoutInterval = anthropic && maxTokens > 21_333 ? 120 : 300
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any]
         if anthropic {
@@ -255,6 +261,7 @@ enum MeetingSummaryClient {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 300
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         for (key, value) in extraHeaders {
@@ -263,7 +270,7 @@ enum MeetingSummaryClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         do {
-            let session = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration())
+            let session = URLSession(configuration: ChatGPTResponsesTransport.sessionConfiguration(streaming: false))
             defer { session.invalidateAndCancel() }
             let (data, response) = try await session.data(for: request)
             try Task.checkCancellation()

@@ -897,3 +897,18 @@ struct KeyboardLiveTranscript: Codable, Sendable, Equatable {
         self.updatedAt = updatedAt
     }
 }
+
+/// The user's choice, independent of the audio's duration.
+enum AudioImportDestination: Hashable {
+    case voiceNote
+    case meeting
+
+    func session(id: UUID, title: String, duration: TimeInterval, audioFileName: String) -> RecordingSession {
+        RecordingSession(id: id, requestID: self == .voiceNote ? id : nil,
+            kind: self == .voiceNote ? .quickDictation : .meeting, title: title,
+            startedAt: .now.addingTimeInterval(-duration), endedAt: .now,
+            phase: .transcriptionQueued, audioFileName: audioFileName,
+            keepsAudioRecording: true, source: "app",
+            hasDurableAudioCheckpoint: true, protectedAudioUntilTranscriptCompletes: true)
+    }
+}

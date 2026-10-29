@@ -41,6 +41,8 @@ This repository is suitable for source review, local development, CI, and TestFl
 - **Keyboard Session Mode** - Keep the containing app ready for lower-friction keyboard dictation while the extension remains the text input surface.
 - **Dictation history** - Saved local dictations can be copied, reused, and deleted from the main app.
 - **Meeting recorder** - Record in-person conversations, save sessions, transcribe locally, browse transcript history, and retain meeting audio only when enabled.
+- **Audio import** - Import WAV, MP3, M4A, MP4 audio, AIFF, or CAF from Files or apps that offer document opening. Apps that only provide share-extension payloads may require Save to Files first. Review the audio in Muesli, choose Voice Note or Meeting, select a ready model, and transcribe. Voice Note is the default; the choice is independent of duration, so long monologues can stay in Voice Notes. Imports retain an owned local audio copy for retry; only text follows iCloud sync settings.
+- **Apple Speech** - On supported iOS 26+ devices, select Apple Speech for on-device transcription in the iPhone’s current language. iOS downloads and manages its language assets; preparation completes before recording is enabled. Unsupported devices continue to use Parakeet or Whisper.
 - **Meeting templates** - Choose note formats for general meetings and structured follow-up workflows.
 - **Optional meeting summaries** - Generate structured notes with ChatGPT sign-in or OpenAI, Anthropic, and OpenRouter API keys after local transcription.
 - **Live Activities** - Track active meeting recording state from iOS surfaces when enabled.
@@ -61,7 +63,7 @@ Muesli for iOS is currently distributed to testers through TestFlight. Public Gi
 
 **Requirements**
 
-- macOS with Xcode 16+
+- macOS with Xcode 26+
 - iOS 17+ simulator or device
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 - Apple Developer account for device builds, keyboard extension signing, App Groups, and TestFlight uploads
@@ -235,7 +237,7 @@ xcodebuild test -project MuesliiOS.xcodeproj -scheme Muesli -destination 'platfo
 
 ---
 
-### Meeting summary providers
+## Meeting summary providers
 
 ChatGPT sign-in uses a one-time device code and an in-app browser instead of a
 localhost callback. Device code login must be enabled in ChatGPT account security
@@ -261,6 +263,14 @@ Protocol references:
 - [Codex device authentication](https://github.com/openai/codex/blob/main/codex-rs/login/src/device_code_auth.rs)
 - [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)
 - [Anthropic stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)
+
+## Audio document handoff
+
+Audio documents are registered in `Muesli/Info.plist` and delivered to the host app through `onOpenURL`. The app copies the security-scoped file into its import inbox and presents Import Audio. Files → Open With → Muesli uses this route directly.
+
+The app targets deliberately do not embed the legacy share-extension targets: the extension's save-only destination competes with the host's document-opening destination in Files. Keep the existing App Group inbox so pending imports from older builds remain available. Sources that offer only extension payloads, rather than document URLs, may not offer Muesli; those files can be saved to Files and opened in Muesli.
+
+When changing embedded extensions, remove stale `.appex` products from an existing build directory or use a clean app build. Verify both Files → Open With and Files → Share on a device after installing an update.
 
 ## License
 

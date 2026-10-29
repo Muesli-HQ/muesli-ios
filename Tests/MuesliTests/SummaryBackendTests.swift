@@ -2,6 +2,24 @@ import XCTest
 @testable import Muesli
 
 final class SummaryBackendTests: XCTestCase {
+    func testNonStreamingSummaryRequestsAllowLongGeneration() throws {
+        let config = ChatGPTResponsesTransport.sessionConfiguration(streaming: false)
+        XCTAssertEqual(config.timeoutIntervalForRequest, 300)
+        XCTAssertEqual(config.timeoutIntervalForResource, 600)
+        for backend: MeetingSummaryBackend in [.openAI, .anthropic] {
+            let request = try MeetingSummaryClient.publicAPIRequest(backend: backend, model: "test", apiKey: "test", systemPrompt: "", userPrompt: "", maxTokens: 2500)
+            XCTAssertEqual(request.timeoutInterval, config.timeoutIntervalForRequest)
+        }
+    }
+
+    func testStreamingTimeoutsRemainBounded() throws {
+        let config = ChatGPTResponsesTransport.sessionConfiguration()
+        XCTAssertEqual(config.timeoutIntervalForRequest, 120)
+        XCTAssertEqual(config.timeoutIntervalForResource, 180)
+        let request = try MeetingSummaryClient.publicAPIRequest(backend: .anthropic, model: "test", apiKey: "test", systemPrompt: "", userPrompt: "", maxTokens: 128_000)
+        XCTAssertEqual(request.timeoutInterval, config.timeoutIntervalForRequest)
+    }
+
     func testCodexTransportHeadersAndUnsupportedTokenCap() throws {
         let request = try ChatGPTResponsesTransport.makeRequest(body: ["model": "test", "max_output_tokens": 3, "store": false], token: "test-token", accountID: "account", environment: [:])
         XCTAssertEqual(request.url?.path, "/backend-api/codex/responses")

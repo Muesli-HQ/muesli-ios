@@ -14,10 +14,30 @@ final class MuesliSmokeUITests: XCTestCase {
         return app
     }
 
+    func testAudioImportOpensFilesPicker() {
+        let app = launchApp()
+        app.buttons["tab.meetings"].tap()
+        let importButton = app.buttons["meetings.importAudio"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+        importButton.tap()
+        // The system document-picker service cold-starts on CI. Its remote
+        // accessibility tree can arrive well after the app finishes presenting.
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 60), "Files picker did not become available")
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Audio import Files picker"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 10), "Files picker did not dismiss")
+        XCTAssertTrue(importButton.isHittable)
+    }
+
     func testMainShellShowsVoiceNotesSmokeState() {
         let app = launchApp()
 
         XCTAssertTrue(app.staticTexts["muesli"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.alerts["Audio Import"].exists)
         XCTAssertTrue(app.buttons["Quick Note"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Notepad"].exists)
         XCTAssertTrue(app.staticTexts["Start Quick Note"].exists)
@@ -73,10 +93,15 @@ final class MuesliSmokeUITests: XCTestCase {
                         ? app.staticTexts["islandPreview.failure"].label : "Island preview did not become ready")
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        try await Task.sleep(for: .seconds(6))
+        // Activity.request succeeding does not mean SpringBoard has rendered the
+        // widget yet. CI can still show an empty island after a fixed delay.
+        let microphone = springboard.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Muesli microphone")).firstMatch
+        XCTAssertTrue(microphone.waitForExistence(timeout: 30), "Dynamic Island content did not render")
         captureActionButton(springboard, name: "Dynamic Island speech input")
-        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.035)).press(forDuration: 1)
-        XCTAssertTrue(springboard.staticTexts["Listening"].waitForExistence(timeout: 15))
+        microphone.press(forDuration: 1)
+        XCTAssertTrue(springboard.staticTexts["Listening"].waitForExistence(timeout: 30),
+                      "Dynamic Island did not expand to show Listening")
         captureActionButton(springboard, name: "Dynamic Island expanded dictation")
         XCTAssertTrue(springboard.buttons["Stop keyboard dictation recording"].exists)
         try await Task.sleep(for: .seconds(6))
@@ -339,9 +364,9 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(models.exists)
         models.tap()
 
-        XCTAssertTrue(app.staticTexts["Choose model"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["Transcription model"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Prepare Model"].exists)
-        XCTAssertTrue(app.staticTexts["Downloaded and ready"].exists)
+        XCTAssertTrue(app.staticTexts["Downloaded Models"].exists)
 
         let removeModel = app.buttons["model.remove.parakeet-tdt-ctc-110m"]
         let tabBar = app.buttons["tab.settings"]

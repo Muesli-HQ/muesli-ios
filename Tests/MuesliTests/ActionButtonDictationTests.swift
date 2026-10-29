@@ -14,14 +14,18 @@ private typealias AppActionButtonCaptureMode = Muesli.ActionButtonCaptureMode
 @MainActor
 final class ActionButtonDictationTests: XCTestCase {
     func testActionButtonDeliveryUsesVisibleFreshKeyboardAndPreservesClipboardOutput() throws {
-        let statuses: [KeyboardExtensionStatus?] = [
-            .init(lastSeenAt: .now, hasOpenAccess: true),
-            .init(lastSeenAt: .now, hasOpenAccess: true, isVisible: false),
-            .init(lastSeenAt: .now.addingTimeInterval(-10), hasOpenAccess: true),
-            .init(lastSeenAt: .now, hasOpenAccess: false),
-            nil
+        // Keep freshness independent of coordinator startup and CI scheduling.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let cases: [(status: KeyboardExtensionStatus?, shouldInsert: Bool)] = [
+            (.init(lastSeenAt: now, hasOpenAccess: true), true),
+            (.init(lastSeenAt: now.addingTimeInterval(-3.499), hasOpenAccess: true), true),
+            (.init(lastSeenAt: now.addingTimeInterval(-3.5), hasOpenAccess: true), false),
+            (.init(lastSeenAt: now, hasOpenAccess: true, isVisible: false), false),
+            (.init(lastSeenAt: now.addingTimeInterval(-10), hasOpenAccess: true), false),
+            (.init(lastSeenAt: now, hasOpenAccess: false), false),
+            (nil, false)
         ]
-        for (index, status) in statuses.enumerated() {
+        for (status, shouldInsert) in cases {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
             let bus = ActionButtonStubEventBus()
@@ -35,8 +39,8 @@ final class ActionButtonDictationTests: XCTestCase {
                                        engineIdentifier: "test", source: session.source))
             if let status { try store.saveKeyboardExtensionStatus(status) }
             let coordinator = DictationCoordinator(store: AppSharedStore(containerURL: directory))
-            coordinator.deliverKeyboardTranscript("Both destinations", requestID: request.id)
-            XCTAssertEqual(try store.pendingKeyboardDeliveries().count, index == 0 ? 1 : 0)
+            coordinator.deliverKeyboardTranscript("Both destinations", requestID: request.id, now: now)
+            XCTAssertEqual(try store.pendingKeyboardDeliveries().count, shouldInsert ? 1 : 0)
             // Reopening after clipboard-only completion must not retroactively insert.
             try store.saveKeyboardExtensionStatus(.init(lastSeenAt: .now, hasOpenAccess: true))
             var inserted: [String] = []
@@ -45,7 +49,7 @@ final class ActionButtonDictationTests: XCTestCase {
                 keyboard.textInserter = { inserted.append($0) }
                 keyboard.prepareInitialPresentationState()
             }
-            XCTAssertEqual(inserted, index == 0 ? ["Both destinations"] : [])
+            XCTAssertEqual(inserted, shouldInsert ? ["Both destinations"] : [])
             XCTAssertEqual(try store.result(for: request.id)?.text, "Both destinations")
         }
     }

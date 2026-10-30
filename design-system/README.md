@@ -80,3 +80,16 @@ build is not proof of visual quality or real-device accessibility.
   test was corrected; its end-to-end rerun passed in 35 seconds. Xcode's first
   run stalled collecting failure diagnostics and was stopped; the successful
   rerun disabled verbose diagnostic collection. Hosted CI has not been awaited.
+
+### Dynamic Island publication follow-up
+
+The simulator background task now has an expiration handler and idempotent
+cleanup. An awaited callback immediately after ActivityKit's copy-state update
+releases that task, before the separate display delay, and exposes
+`islandPreview.copyPublished`. XCTest waits for this marker while foregrounded
+before pressing Home. Production callers retain the default ten-second window
+and do not supply the callback.
+
+The native Dynamic Island end-to-end test passed in 41.4 seconds, including the
+publication checkpoint, real copy link and clipboard confirmation. Build/test
+log: `/private/tmp/pr50-publication-fix-tests.log`. Hosted CI was not awaited.

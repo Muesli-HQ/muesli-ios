@@ -61,6 +61,8 @@ final class DictationCoordinator {
     var waveformPreviewFailure: String?
     var waveformPreviewIsProcessing = false
     var waveformPreviewFinishRequested = false
+    var waveformPreviewCopyPublished = false
+    @ObservationIgnored private var waveformPreviewBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     @ObservationIgnored private var waveformPreviewStopRequested = false
     #endif
     @ObservationIgnored private var startupLiveActivityCleanupTask: Task<Void, Never>?
@@ -7190,8 +7192,14 @@ final class DictationCoordinator {
     private func previewLiveActivityWaveform() async {
         if let startupLiveActivityCleanupTask { await startupLiveActivityCleanupTask.value }
         UserDefaults.standard.set(true, forKey: MuesliPreferences.liveActivitiesForDictationsKey)
-        let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Waveform simulator preview")
-        defer { if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) } }
+        waveformPreviewBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Waveform simulator preview") { [weak self] in
+            Task { @MainActor in
+                // Expiration releases the allowance; the synthetic fixture may
+                // resume when XCTest foregrounds it. Never keep an expired task.
+                self?.endWaveformPreviewBackgroundTask()
+            }
+        }
+        defer { endWaveformPreviewBackgroundTask() }
         let previewRequestID = UUID()
         let session = RecordingSession(requestID: previewRequestID, kind: .keyboardDictation, startedAt: .now, phase: .recording, source: "action_button")
         // This fixture has no audio background mode to extend its lifetime.
@@ -7260,12 +7268,29 @@ final class DictationCoordinator {
         }
         activeSession = nil
         if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-copy") {
-            await liveActivityController.offerForegroundCopy(session: session, requestID: previewRequestID, displayDuration: .seconds(60))
+            await liveActivityController.offerForegroundCopy(
+                session: session,
+                requestID: previewRequestID,
+                displayDuration: .seconds(60),
+                onPublished: { [weak self] in
+                    guard let self else { return }
+                    // Release the finite background allowance before the display
+                    // delay. Publish readiness only after ActivityKit's update.
+                    self.endWaveformPreviewBackgroundTask()
+                    self.waveformPreviewCopyPublished = true
+                }
+            )
             // Keep the preview transcript available while the Live Activity offers
             // its copy link, just as completed recordings remain available.
         } else {
             await liveActivityController.end(phase: "Ended", detail: "Preview ended", session: session, dismissal: .immediate)
         }
+    }
+    private func endWaveformPreviewBackgroundTask() {
+        guard waveformPreviewBackgroundTask != .invalid else { return }
+        let token = waveformPreviewBackgroundTask
+        waveformPreviewBackgroundTask = .invalid
+        UIApplication.shared.endBackgroundTask(token)
     }
     #endif
 

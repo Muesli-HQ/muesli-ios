@@ -135,6 +135,10 @@ final class MuesliSmokeUITests: XCTestCase {
         let finish = app.buttons["islandPreview.finish"]
         XCTAssertTrue(finish.waitForExistence(timeout: 10))
         finish.tap()
+        // Finish only requests completion. Stay foregrounded until ActivityKit
+        // has accepted copy state and the fixture has released its background task.
+        XCTAssertTrue(app.staticTexts["islandPreview.copyPublished"].waitForExistence(timeout: 30),
+                      "Fixture did not publish copy state before backgrounding")
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(microphone.waitForExistence(timeout: 30))
         microphone.press(forDuration: 1)

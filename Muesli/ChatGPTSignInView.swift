@@ -13,7 +13,7 @@ struct ChatGPTSignInView: View {
         NavigationStack {
             VStack(spacing: 20) {
                 Image(systemName: "person.crop.circle.badge.checkmark")
-                    .font(.largeTitle)
+                    .font(MuesliTheme.title1())
                 if let code {
                     Text("Enter this code on the ChatGPT sign-in page.")
                         .multilineTextAlignment(.center)
@@ -27,7 +27,7 @@ struct ChatGPTSignInView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     Text("Return here after approving. The code expires in 15 minutes.")
-                        .font(.footnote)
+                        .font(MuesliTheme.callout())
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 } else if errorMessage == nil {

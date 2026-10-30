@@ -17,8 +17,8 @@ struct SummaryAPISettingsView: View {
             SettingsTextFieldRow(icon: "key", title: "\(backend.label) API Key", placeholder: "API key", text: $apiKey, isSecure: true)
             SettingsModelPickerRow(icon: "cpu", title: "Model", selection: $model, presets: backend.presets)
             Text("Transcripts are sent to \(backend.label) for summaries. API usage is billed separately.")
-                .font(.footnote).foregroundStyle(.secondary)
-            if let saveError { Text(saveError).font(.footnote).foregroundStyle(.red) }
+                .font(MuesliTheme.callout()).foregroundStyle(.secondary)
+            if let saveError { Text(saveError).font(MuesliTheme.callout()).foregroundStyle(.red) }
         }
         .onChange(of: apiKey) { _, value in
             do { try MeetingSummaryClient.saveAPIKey(value, for: backend); saveError = nil }

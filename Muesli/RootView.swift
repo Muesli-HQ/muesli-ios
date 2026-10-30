@@ -38,6 +38,7 @@ struct RootView: View {
         } message: { Text(coordinator.audioImportError ?? "") }
         .onAppear { coordinator.refreshAudioImports() }
         .background(MuesliTheme.backgroundBase)
+        .font(MuesliTheme.body())
         .tint(currentAccent)
         .environment(\.muesliAccent, currentAccent)
         .preferredColorScheme(preferredColorScheme)
@@ -431,7 +432,7 @@ private struct MuesliTabSwitcher: View {
                                 .frame(height: 20)
 
                             Text(section.title)
-                                .font(.system(size: 10.5, weight: .medium))
+                                .font(MuesliTheme.captionMedium())
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.78)
                         }

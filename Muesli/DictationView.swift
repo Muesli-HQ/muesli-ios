@@ -205,9 +205,6 @@ struct DictationView: View {
                     .foregroundStyle(MuesliTheme.textPrimary)
             }
 
-            Text("Local-first voice notes for iOS")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textSecondary)
         }
     }
 
@@ -1028,7 +1025,7 @@ private struct DictationHomeStatTile: View {
 
             VStack(spacing: 1) {
                 Text(value)
-                    .font(.system(size: 21, weight: .semibold, design: .rounded))
+                    .font(MuesliTheme.font(size: 21, weight: .semibold, relativeTo: .title3))
                     .monospacedDigit()
                     .minimumScaleFactor(0.76)
                     .lineLimit(1)
@@ -1045,30 +1042,8 @@ private struct DictationHomeStatTile: View {
         .frame(height: 68)
         .padding(.horizontal, 6)
         .padding(.vertical, 6)
-        .background {
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            MuesliTheme.backgroundRaised.opacity(0.80),
-                            MuesliTheme.backgroundDeep.opacity(0.68)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        }
-        .overlay(alignment: .top) {
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
-                .strokeBorder(MuesliTheme.glassHighlight.opacity(0.72), lineWidth: 0.7)
-                .blendMode(.screen)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
-                .strokeBorder(MuesliTheme.accent.opacity(0.34), lineWidth: 1)
-        }
-        .shadow(color: MuesliTheme.accent.opacity(0.07), radius: 9, x: 0, y: 5)
-        .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 3)
+        .background(MuesliTheme.backgroundRaised,
+                    in: RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(value) \(label)")
     }
@@ -1179,155 +1154,20 @@ private struct VoiceNoteRecordButtonLabel: View {
     let isDisabled: Bool
 
     var body: some View {
-        VStack(spacing: MuesliTheme.spacing8) {
-            ZStack {
-                Circle()
-                    .fill(color.opacity(isStopState ? 0.18 : 0.16))
-                    .frame(width: haloSize, height: haloSize)
-                    .blur(radius: 0.5)
-
-                Circle()
-                    .fill(outerRingFill)
-                    .frame(width: outerRingSize, height: outerRingSize)
-                    .overlay(
-                        Circle()
-                            .strokeBorder(outerRingBorder, lineWidth: 1.2)
-                    )
-                    .shadow(color: outerShadow, radius: 14, x: 0, y: 9)
-                    .shadow(color: color.opacity(isStopState ? 0.10 : 0.22), radius: 18, x: 0, y: 7)
-
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: circleGradient,
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: innerCircleSize, height: innerCircleSize)
-                    .overlay(alignment: .topLeading) {
-                        Circle()
-                            .strokeBorder(.white.opacity(isDisabled ? 0.08 : 0.42), lineWidth: 2)
-                            .padding(4)
-                            .blur(radius: 0.2)
-                            .mask(
-                                LinearGradient(
-                                    colors: [.white, .clear],
-                                    startPoint: .topLeading,
-                                    endPoint: .center
-                                )
-                            )
-                    }
-                    .overlay {
-                        Circle()
-                            .strokeBorder(circleBorder, lineWidth: 1)
-                    }
-                    .shadow(color: .white.opacity(isDisabled ? 0 : 0.10), radius: 2, x: -1, y: -1)
-                    .shadow(color: .black.opacity(0.20), radius: 7, x: 0, y: 5)
-
-                Image(systemName: systemImage)
-                    .font(.system(size: 23, weight: .semibold))
-                    .foregroundStyle(iconColor)
-            }
-
+        HStack(spacing: MuesliTheme.spacing12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 20, weight: .semibold))
             Text(title)
                 .font(MuesliTheme.headline())
-                .foregroundStyle(titleColor)
+                .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 92)
-        .contentShape(Rectangle())
-    }
-
-    private var haloSize: CGFloat {
-        78
-    }
-
-    private var outerRingSize: CGFloat {
-        70
-    }
-
-    private var innerCircleSize: CGFloat {
-        60
-    }
-
-    private var outerRingFill: Color {
-        if isDisabled {
-            return MuesliTheme.surfacePrimary.opacity(0.72)
-        }
-        if isStopState {
-            return MuesliTheme.recordingStop.opacity(0.24)
-        }
-        return color.opacity(0.18)
-    }
-
-    private var outerRingBorder: Color {
-        if isDisabled {
-            return MuesliTheme.surfaceBorder
-        }
-        if isStopState {
-            return MuesliTheme.recordingStop.opacity(0.58)
-        }
-        return color.opacity(0.54)
-    }
-
-    private var circleGradient: [Color] {
-        if isDisabled {
-            return [
-                MuesliTheme.surfacePrimary.opacity(0.72),
-                MuesliTheme.surfacePrimary.opacity(0.52)
-            ]
-        }
-        if isStopState {
-            return [
-                MuesliTheme.recordingStop,
-                MuesliTheme.recordingStop.opacity(0.86)
-            ]
-        }
-        return [
-            color.opacity(0.96),
-            Color(hex: 0x1B56D8).opacity(0.95)
-        ]
-    }
-
-    private var circleBorder: Color {
-        if isDisabled {
-            MuesliTheme.surfaceBorder
-        } else if isStopState {
-            MuesliTheme.recordingStop.opacity(0.52)
-        } else {
-            color.opacity(0.36)
-        }
-    }
-
-    private var outerShadow: Color {
-        if isDisabled {
-            return .clear
-        }
-        if isStopState {
-            return MuesliTheme.recordingStop.opacity(0.28)
-        }
-        return MuesliTheme.accent.opacity(0.18)
-    }
-
-    private var iconColor: Color {
-        if isDisabled {
-            MuesliTheme.textTertiary
-        } else if isStopState {
-            .white
-        } else {
-            .white
-        }
-    }
-
-    private var titleColor: Color {
-        if isDisabled {
-            MuesliTheme.textTertiary
-        } else if isStopState {
-            MuesliTheme.textPrimary
-        } else {
-            MuesliTheme.textPrimary
-        }
+        .foregroundStyle(isDisabled ? MuesliTheme.textSecondary : (isStopState ? .white : MuesliTheme.onAccent))
+        .padding(.horizontal, MuesliTheme.spacing20)
+        .padding(.vertical, MuesliTheme.spacing16)
+        .frame(maxWidth: .infinity, minHeight: 56)
+        .background(isDisabled ? MuesliTheme.surfacePrimary : (isStopState ? MuesliTheme.recordingStop : color),
+                    in: RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
     }
 }
 
@@ -1347,7 +1187,7 @@ private struct VoiceNoteRecordingActionLabel: View {
                     Circle()
                         .strokeBorder(.white.opacity(0.16), lineWidth: 1)
                 }
-                .shadow(color: color.opacity(0.28), radius: 12, x: 0, y: 7)
+
 
             Text(title)
                 .font(MuesliTheme.captionMedium())

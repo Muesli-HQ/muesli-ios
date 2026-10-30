@@ -84,7 +84,15 @@ enum MuesliTheme {
     static func title3() -> Font { font(size: 19, weight: .semibold, relativeTo: .headline) }
     static func headline() -> Font { font(size: 16, weight: .semibold, relativeTo: .callout) }
     static func body() -> Font { font(size: 16, relativeTo: .body) }
-    static func transcript() -> Font { font(size: 17, relativeTo: .body) }
+    static let transcriptPointSize: CGFloat = 17
+    static func transcript() -> Font { font(size: transcriptPointSize, relativeTo: .body) }
+
+    /// UIKit measurement must use the same face, base size and scaling as SwiftUI.
+    static func transcriptUIFont(compatibleWith traits: UITraitCollection) -> UIFont {
+        let base = UIFont(name: "NunitoSans-Regular", size: transcriptPointSize)
+            ?? UIFont.systemFont(ofSize: transcriptPointSize)
+        return UIFontMetrics(forTextStyle: .body).scaledFont(for: base, compatibleWith: traits)
+    }
     static func callout() -> Font { font(size: 15, relativeTo: .subheadline) }
     static func caption() -> Font { font(size: 13, relativeTo: .footnote) }
     static func captionMedium() -> Font { font(size: 13, weight: .medium, relativeTo: .footnote) }
@@ -385,7 +393,7 @@ enum MuesliAccentTheme: String, CaseIterable, Identifiable {
         case .blue:
             0x2563EB
         case .green:
-            0x059669
+            0x047857
         case .slate:
             0x475569
         }

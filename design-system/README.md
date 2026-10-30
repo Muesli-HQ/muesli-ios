@@ -58,3 +58,25 @@ build is not proof of visual quality or real-device accessibility.
   data preserved. The user tested the updated UI and approved its appearance.
 - Full app-wide visual review, accessibility-size layouts and keyboard-extension
   visual checks are not yet complete.
+
+## PR #50 review follow-up
+
+- Transcript overflow uses Nunito Sans with the same base size and Dynamic Type
+  scaling as the rendered preview. Wrap-boundary checks cover standard, larger
+  and accessibility text sizes.
+- Removed circular hit-target overrides from the rounded sidebar and sync
+  buttons. A native UI test verifies a tap inside the rounded corner opens the sidebar.
+- Light green is now #047857. Contrast checks pass for primary-button foregrounds
+  across every supported accent in both appearances.
+- Font reproduction instructions link to the generator at its source commit and
+  describe XcodeGen/UIAppFonts packaging.
+- The simulator-only Island fixture waits for an explicit completion action
+  instead of a background timer. Its copy presentation lasts 60 seconds for UI
+  automation; production retains the existing 10-second window. The UI test
+  reopens the Island if it collapses after Stop and still verifies processing,
+  the real copy link and foreground clipboard confirmation.
+- Validation: seven font/contrast/overflow unit tests and the corner-tap UI test
+  passed. The first Island run exposed the short processing-state wait and the
+  test was corrected; its end-to-end rerun passed in 35 seconds. Xcode's first
+  run stalled collecting failure diagnostics and was stopped; the successful
+  rerun disabled verbose diagnostic collection. Hosted CI has not been awaited.

@@ -130,7 +130,7 @@ actor MuesliLiveActivityController {
 
     /// Show an actionable completion briefly in the Island, then retain it on
     /// the Lock Screen. No transcript text is put in the URL or widget state.
-    func offerForegroundCopy(session: RecordingSession, requestID: UUID) async {
+    func offerForegroundCopy(session: RecordingSession, requestID: UUID, displayDuration: Duration = .seconds(10)) async {
         guard !endedSessionIDs.contains(session.id),
               let current = resolvedActivity(for: session),
               let url = URL(string: "\(MuesliAppConstants.urlScheme)://copy-dictation/\(requestID.uuidString)") else { return }
@@ -140,7 +140,7 @@ actor MuesliLiveActivityController {
         await current.update(content)
         // The transcription background task remains alive during this short
         // completion window; do not leave a completed recording active forever.
-        try? await Task.sleep(for: .seconds(10))
+        try? await Task.sleep(for: displayDuration)
         guard !endedSessionIDs.contains(session.id), current.activityState == .active else { return }
         endedSessionIDs.insert(session.id)
         await current.end(content, dismissalPolicy: .after(Date.now.addingTimeInterval(120)))

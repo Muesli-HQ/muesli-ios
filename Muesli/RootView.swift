@@ -127,7 +127,6 @@ struct RootView: View {
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .frame(width: 44, height: 44)
                             .muesliGlassButton(cornerRadius: 22, tint: currentAccent)
-                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, MuesliTheme.spacing20)
@@ -531,7 +530,6 @@ private struct MuesliDrawer: View {
                             .foregroundStyle(MuesliTheme.textSecondary)
                             .frame(width: 44, height: 44)
                             .muesliGlassButton(cornerRadius: 22)
-                            .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }

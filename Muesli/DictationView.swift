@@ -1257,7 +1257,6 @@ struct ICloudSyncStatusButton: View {
             .foregroundStyle(tint)
             .frame(width: 44, height: 44)
             .muesliGlassButton(cornerRadius: 22, tint: tint)
-            .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(isSyncing)
@@ -1610,7 +1609,7 @@ enum TranscriptOverflowDetector {
         guard !text.isEmpty, width > 0, lineLimit > 0 else { return false }
 
         let traits = UITraitCollection(preferredContentSizeCategory: sizeCategory.uiKitCategory)
-        let font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits)
+        let font = MuesliTheme.transcriptUIFont(compatibleWith: traits)
         let sampleEnd = text.index(
             text.startIndex,
             offsetBy: sampleCharacterLimit,

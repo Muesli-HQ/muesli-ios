@@ -59,6 +59,8 @@ final class DictationCoordinator {
     @ObservationIgnored private var waveformPreviewTask: Task<Void, Never>?
     @ObservationIgnored private var waveformPreviewSessionID: UUID?
     var waveformPreviewFailure: String?
+    var waveformPreviewIsProcessing = false
+    var waveformPreviewFinishRequested = false
     @ObservationIgnored private var waveformPreviewStopRequested = false
     #endif
     @ObservationIgnored private var startupLiveActivityCleanupTask: Task<Void, Never>?
@@ -7240,10 +7242,25 @@ final class DictationCoordinator {
         isRecording = false
         stopMetering()
         await liveActivityController.update(phase: "Transcribing", detail: "Processing preview", session: session)
-        try? await Task.sleep(for: .seconds(7))
+        // The fixture records no audio and can be suspended in the background.
+        // Let XCTest finish synthetic transcription after foregrounding the app,
+        // rather than depending on a seven-second background sleep.
+        waveformPreviewIsProcessing = true
+        let processingDeadline = ProcessInfo.processInfo.systemUptime + 90
+        while !waveformPreviewFinishRequested, !Task.isCancelled,
+              ProcessInfo.processInfo.systemUptime < processingDeadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        waveformPreviewIsProcessing = false
+        guard waveformPreviewFinishRequested, !Task.isCancelled else {
+            activeSession = nil
+            waveformPreviewFailure = "Preview completion was not requested"
+            await liveActivityController.end(phase: "Ended", detail: "Preview timed out", session: session, dismissal: .immediate)
+            return
+        }
         activeSession = nil
         if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-copy") {
-            await liveActivityController.offerForegroundCopy(session: session, requestID: previewRequestID)
+            await liveActivityController.offerForegroundCopy(session: session, requestID: previewRequestID, displayDuration: .seconds(60))
             // Keep the preview transcript available while the Live Activity offers
             // its copy link, just as completed recordings remain available.
         } else {

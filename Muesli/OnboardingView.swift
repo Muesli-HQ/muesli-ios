@@ -1479,6 +1479,11 @@ struct KeyboardSetupVerificationView: View {
                     .font(MuesliTheme.caption())
                     .foregroundStyle(fullAccessVerified ? MuesliTheme.success : MuesliTheme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(
+                        fullAccessVerified ? "onboarding.keyboardVerificationStatus.verified"
+                            : keyboardVerified ? "onboarding.keyboardVerificationStatus.keyboardOnly"
+                            : "onboarding.keyboardVerificationStatus.pending"
+                    )
             }
             .padding(MuesliTheme.spacing16)
         }

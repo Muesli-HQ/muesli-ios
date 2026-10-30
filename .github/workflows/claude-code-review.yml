@@ -23,7 +23,6 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
-      checks: write
       actions: read
       id-token: write
 
@@ -48,8 +47,9 @@ jobs:
           additional_permissions: |
             pull_requests: write
             issues: write
-            checks: write
             actions: read
+          # The Claude GitHub App token exchange does not grant checks: write.
+          # Reviews use PR comments; display_report writes the job summary.
           use_sticky_comment: true
           track_progress: true
           display_report: true

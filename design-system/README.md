@@ -54,6 +54,7 @@ build is not proof of visual quality or real-device accessibility.
 - Existing dashboard smoke test passed, including switching Quick Note to Notepad.
 - Inspected native empty-dashboard screenshots in Light and Dark. Text, button
   contrast and bottom navigation rendered correctly at the default text size.
-- Full app-wide visual review, accessibility-size layouts and physical-device
-  testing are not yet complete. No claim of Opus-assisted review: that model is
-  unavailable in this session.
+- MuesliDev device build passed and was installed on picophone with existing
+  data preserved. The user tested the updated UI and approved its appearance.
+- Full app-wide visual review, accessibility-size layouts and keyboard-extension
+  visual checks are not yet complete.

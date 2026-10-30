@@ -304,7 +304,10 @@ struct OnboardingView: View {
             if useCaseDraft.needsKeyboardSetup {
                 KeyboardSetupVerificationView(
                     keyboardVerified: $keyboardEnabledConfirmed,
-                    fullAccessVerified: $fullAccessConfirmed
+                    fullAccessVerified: $fullAccessConfirmed,
+                    guidePlaybackAllowed: !coordinator.isRecording
+                        && !coordinator.hasMeetingRecordingInProgress
+                        && !coordinator.isKeyboardMicOn
                 )
             }
         }
@@ -1381,6 +1384,7 @@ private struct ModelPreparationPie: Shape {
 struct KeyboardSetupVerificationView: View {
     @Binding var keyboardVerified: Bool
     @Binding var fullAccessVerified: Bool
+    var guidePlaybackAllowed = true
 
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var verificationFieldFocused: Bool
@@ -1395,25 +1399,42 @@ struct KeyboardSetupVerificationView: View {
                     Text("Verify the keyboard")
                         .font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("Add Muesli Keyboard and enable Full Access in Settings. Then return, select Muesli with the globe key, and tap its Verify button below.")
+                    Text("Enable Muesli in Settings, then try it here.")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Button {
-                    openAppSettings()
-                } label: {
-                    Label("Open Muesli Settings", systemImage: "arrow.up.right")
-                        .font(MuesliTheme.headline())
-                        .foregroundStyle(MuesliTheme.accent)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                }
-                .buttonStyle(.plain)
-                .background(MuesliTheme.accentSubtle, in: RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                if !fullAccessVerified {
+                    KeyboardSetupGuideView(playbackAllowed: guidePlaybackAllowed) {
+                        verificationFieldFocused = false
+                    }
 
-                TextField("Tap, choose Muesli Keyboard, then Verify", text: $verificationText)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Open Keyboards in Muesli’s Settings", systemImage: "1.circle")
+                        Label("Enable Muesli", systemImage: "2.circle")
+                        Label("Turn on Allow Full Access", systemImage: "3.circle")
+                    }
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !fullAccessVerified {
+                    DisclosureGroup("Can’t find Keyboards?") {
+                        Text("In Settings, open General → Keyboard → Keyboards → Add New Keyboard, then choose Muesli.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                    }
+                    .font(MuesliTheme.caption())
+                }
+
+                Text("Back here: tap below, hold the globe key, choose Muesli, then tap Verify on its keyboard.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                TextField("Tap to try Muesli Keyboard", text: $verificationText)
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textPrimary)
                     .textInputAutocapitalization(.never)
@@ -1458,6 +1479,11 @@ struct KeyboardSetupVerificationView: View {
                     .font(MuesliTheme.caption())
                     .foregroundStyle(fullAccessVerified ? MuesliTheme.success : MuesliTheme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(
+                        fullAccessVerified ? "onboarding.keyboardVerificationStatus.verified"
+                            : keyboardVerified ? "onboarding.keyboardVerificationStatus.keyboardOnly"
+                            : "onboarding.keyboardVerificationStatus.pending"
+                    )
             }
             .padding(MuesliTheme.spacing16)
         }
@@ -1486,7 +1512,7 @@ struct KeyboardSetupVerificationView: View {
         if keyboardVerified {
             return "Keyboard verified. Enable Full Access, then select Muesli and tap Verify once more."
         }
-        return "The Continue button unlocks only after Muesli receives both proofs."
+        return "Use Muesli’s Verify button to finish keyboard setup."
     }
 
     private func verificationStatus(title: String, verified: Bool) -> some View {
@@ -1526,11 +1552,6 @@ struct KeyboardSetupVerificationView: View {
         fullAccessVerified = true
         verificationText = "Muesli Keyboard + Full Access verified"
         verificationFieldFocused = false
-    }
-
-    private func openAppSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-        UIApplication.shared.open(url)
     }
 }
 

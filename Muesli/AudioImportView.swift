@@ -18,7 +18,7 @@ struct AudioImportView: View {
                 }
                 ForEach(coordinator.pendingAudioImports) { item in
                     VStack(alignment: .leading, spacing: 12) {
-                        Text(item.title).font(.headline)
+                        Text(item.title).font(MuesliTheme.headline())
                         Picker("Save as", selection: Binding(
                             get: { destinations[item.id] ?? .voiceNote },
                             set: { destinations[item.id] = $0 }
@@ -30,15 +30,9 @@ struct AudioImportView: View {
                         .disabled(coordinator.isImportingAudio)
                         Button { coordinator.importAudio(item, destination: destinations[item.id] ?? .voiceNote) } label: {
                             Text("Transcribe")
-                                .font(.body.weight(.semibold))
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                                .foregroundStyle(.white)
-                                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
-                                .opacity(coordinator.canImportAudio ? 1 : 0.45)
-                                .contentShape(RoundedRectangle(cornerRadius: 12))
+                                .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(MuesliPrimaryButtonStyle())
                         .disabled(!coordinator.canImportAudio)
                         Button("Remove", role: .destructive) { coordinator.dismissAudioImport(item) }
                             .buttonStyle(.borderless)
@@ -53,7 +47,7 @@ struct AudioImportView: View {
                     Section {
                         Text(error).foregroundStyle(.red)
                         if let details = coordinator.audioImportErrorDetails {
-                            DisclosureGroup("Error Details") { Text(details).font(.caption).textSelection(.enabled) }
+                            DisclosureGroup("Error Details") { Text(details).font(MuesliTheme.caption()).textSelection(.enabled) }
                         }
                         Button("Choose Another File") { showsPicker = true }
                     }

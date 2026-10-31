@@ -46,6 +46,17 @@ struct MuesliApp: App {
                 .overlay(alignment: .top) {
                     if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform"), coordinator.isRecording {
                         Text("Waveform preview ready").accessibilityIdentifier("islandPreview.ready")
+                    } else if coordinator.waveformPreviewCopyPublished {
+                        Text("Preview copy state published")
+                            .accessibilityIdentifier("islandPreview.copyPublished")
+                    } else if coordinator.waveformPreviewIsProcessing {
+                        Button("Finish preview transcription") {
+                            coordinator.finishWaveformPreview?()
+                        }
+                        .accessibilityIdentifier("islandPreview.finish")
+                    } else if let finish = coordinator.finishMeetingSummaryPreview {
+                        Button("Finish meeting summary preview", action: finish)
+                            .accessibilityIdentifier("meetingPreview.finish")
                     } else if let failure = coordinator.waveformPreviewFailure {
                         Text(failure).accessibilityIdentifier("islandPreview.failure")
                     }

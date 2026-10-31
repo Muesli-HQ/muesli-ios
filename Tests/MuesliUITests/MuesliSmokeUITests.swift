@@ -33,6 +33,15 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(importButton.isHittable)
     }
 
+    func testSidebarButtonRespondsInsideRoundedCorner() {
+        let app = launchApp()
+        let sidebar = app.buttons["Open sidebar"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 8))
+        // Inside the rounded rectangle, outside its former circular hit target.
+        sidebar.coordinate(withNormalizedOffset: CGVector(dx: 0.14, dy: 0.14)).tap()
+        XCTAssertTrue(app.staticTexts["Pin up to 3 sections"].waitForExistence(timeout: 5))
+    }
+
     func testMainShellShowsVoiceNotesSmokeState() {
         let app = launchApp()
 
@@ -108,12 +117,33 @@ final class MuesliSmokeUITests: XCTestCase {
         try await Task.sleep(for: .seconds(6))
         captureActionButton(springboard, name: "Dynamic Island returned to quiet")
         springboard.buttons["Stop keyboard dictation recording"].tap()
-        XCTAssertTrue(springboard.staticTexts["Transcribing"].waitForExistence(timeout: 5))
+        let transcribing = springboard.staticTexts["Transcribing"]
+        if !transcribing.waitForExistence(timeout: 5) {
+            // SpringBoard may collapse the expanded presentation after an intent.
+            // Reopen it rather than waiting for expanded-only text in compact UI.
+            XCTAssertTrue(microphone.waitForExistence(timeout: 30))
+            microphone.press(forDuration: 1)
+        }
+        XCTAssertTrue(transcribing.waitForExistence(timeout: 30), "Stop intent did not produce the processing state")
         XCTAssertFalse(springboard.staticTexts["Listening"].exists)
         captureActionButton(springboard, name: "Dynamic Island processing after recording")
         XCTAssertFalse(springboard.buttons["Stop keyboard dictation recording"].exists)
+        // A synthetic recording has no audio background execution. Foreground
+        // it to explicitly finish transcription; retain the real Stop intent and
+        // copy deep-link assertions without racing a background timer.
+        app.activate()
+        let finish = app.buttons["islandPreview.finish"]
+        XCTAssertTrue(finish.waitForExistence(timeout: 10))
+        finish.tap()
+        // Finish only requests completion. Stay foregrounded until ActivityKit
+        // has accepted copy state and the fixture has released its background task.
+        XCTAssertTrue(app.staticTexts["islandPreview.copyPublished"].waitForExistence(timeout: 30),
+                      "Fixture did not publish copy state before backgrounding")
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(microphone.waitForExistence(timeout: 30))
+        microphone.press(forDuration: 1)
         let copy = springboard.buttons["Open to copy"].firstMatch
-        XCTAssertTrue(copy.waitForExistence(timeout: 10))
+        XCTAssertTrue(copy.waitForExistence(timeout: 30), "Completed preview did not expose the copy link")
         captureActionButton(springboard, name: "Dynamic Island transcript ready to copy")
         copy.tap()
         XCTAssertTrue(app.alerts["Copied to clipboard"].waitForExistence(timeout: 8))
@@ -492,8 +522,13 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Return to Meeting"].waitForExistence(timeout: 5))
         app.buttons["Return to Meeting"].tap()
 
+        XCTAssertTrue(app.scrollViews["meeting.detail"].waitForExistence(timeout: 10),
+                      "Return to Meeting did not open the meeting details")
         let rawTranscript = app.staticTexts["Raw transcript should no longer be selected after processing."]
         XCTAssertTrue(rawTranscript.waitForExistence(timeout: 5))
+        let finish = app.buttons["meetingPreview.finish"]
+        XCTAssertTrue(finish.waitForExistence(timeout: 5))
+        finish.tap()
         XCTAssertTrue(app.staticTexts["The generated meeting summary is selected by default."].waitForExistence(timeout: 25))
         XCTAssertTrue(rawTranscript.waitForNonExistence(timeout: 5))
     }

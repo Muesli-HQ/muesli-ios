@@ -43,7 +43,7 @@ struct ActionButtonOnboardingView: View {
             HStack {
                 Image("MuesliAppIcon").resizable().scaledToFit().frame(width: 28, height: 28)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
-                Text("muesli").font(.headline)
+                Text("muesli").font(MuesliTheme.headline())
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark").frame(width: 44, height: 44)
@@ -120,7 +120,7 @@ struct ActionButtonOnboardingView: View {
             shortcutCard
             Text("Tap Add to Shortcuts below, then confirm Add Shortcut in Apple’s screen. If asked, replace the earlier version.")
                 .foregroundStyle(MuesliTheme.textSecondary)
-            Text("Then return here to assign your Action Button.").font(.headline)
+            Text("Then return here to assign your Action Button.").font(MuesliTheme.headline())
             if importOpened {
                 Text("Added it? Continue below. If you cancelled, tap Add to Shortcuts again.")
                     .foregroundStyle(MuesliTheme.textSecondary)
@@ -144,7 +144,7 @@ struct ActionButtonOnboardingView: View {
         HStack(spacing: 16) {
             Image("MuesliAppIcon").resizable().scaledToFit().frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-            Text(shortcutName).font(.headline).fixedSize(horizontal: false, vertical: true)
+            Text(shortcutName).font(MuesliTheme.headline()).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
@@ -154,7 +154,7 @@ struct ActionButtonOnboardingView: View {
     private var footer: some View {
         VStack(spacing: 10) {
             Button(primaryTitle) { primaryAction() }
-                .font(.headline).foregroundStyle(Color(hex: 0x101721))
+                .font(MuesliTheme.headline()).foregroundStyle(Color(hex: 0x101721))
                 .frame(maxWidth: .infinity, minHeight: 54)
                 .background(tint, in: RoundedRectangle(cornerRadius: 16))
                 .disabled(openingImport || (step == .add && shortcutURL == nil))
@@ -235,9 +235,9 @@ struct ActionButtonOnboardingView: View {
     }
     private func instruction(_ number: Int, _ title: String, _ detail: String) -> some View {
         HStack(alignment: .top, spacing: 16) {
-            Text("\(number)").font(.headline).foregroundStyle(tint)
+            Text("\(number)").font(MuesliTheme.headline()).foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.headline)
+                Text(title).font(MuesliTheme.headline())
                 Text(detail).foregroundStyle(MuesliTheme.textSecondary)
             }
         }
@@ -261,10 +261,10 @@ private struct ActionButtonModeCard: View {
                     .font(.system(size: 23, weight: .medium)).foregroundStyle(tint)
                     .frame(width: 44, height: 44).background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(mode == .dictation ? "Dictate text" : "Record a meeting").font(.headline)
+                    Text(mode == .dictation ? "Dictate text" : "Record a meeting").font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text(mode == .dictation ? "A thought, straight into words." : "A conversation, kept together.")
-                        .font(.subheadline).foregroundStyle(MuesliTheme.textSecondary)
+                        .font(MuesliTheme.body()).foregroundStyle(MuesliTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
@@ -290,14 +290,14 @@ private struct ActionButtonOutputPreview: View {
             HStack {
                 Text("A GLIMPSE OF THE RESULT").font(.system(.caption2, weight: .semibold)).tracking(1.2)
                 Spacer()
-                Text("Preview").font(.caption)
+                Text("Preview").font(MuesliTheme.caption())
             }.foregroundStyle(MuesliTheme.textSecondary)
             Rectangle().fill(tint).frame(width: 32, height: 3).accessibilityHidden(true)
             Text(mode == .dictation ? "Let's make space for a good idea." : "Monday's next big idea")
                 .font(.title3.weight(.medium)).fixedSize(horizontal: false, vertical: true)
             Label(mode == .dictation ? "Ready to paste from your clipboard" : "Recording, transcript, and notes in Meetings",
                   systemImage: mode == .dictation ? "text.cursor" : "note.text")
-                .font(.footnote).foregroundStyle(MuesliTheme.textSecondary)
+                .font(MuesliTheme.callout()).foregroundStyle(MuesliTheme.textSecondary)
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)

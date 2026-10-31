@@ -811,7 +811,7 @@ private struct MeetingPanel<Content: View>: View {
                 RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge, style: .continuous)
                     .strokeBorder(panelBorder, lineWidth: 1)
             )
-            .shadow(color: MuesliTheme.glassShadow.opacity(isProminent ? 0.9 : 0.45), radius: isProminent ? 14 : 8, x: 0, y: isProminent ? 8 : 4)
+
     }
 
     private var panelFill: Color {
@@ -1014,6 +1014,7 @@ private struct MeetingSessionDetailView: View {
             .padding(.bottom, 112)
         }
         .background(MuesliTheme.backgroundBase)
+        .accessibilityIdentifier("meeting.detail")
         .navigationTitle("Meeting")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sharePayload) { payload in

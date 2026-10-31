@@ -2,12 +2,12 @@ import SwiftUI
 import UIKit
 
 enum MuesliTheme {
-    static let backgroundDeep = Color.adaptive(dark: 0x111214, light: 0xF0F4FA)
-    static let backgroundBase = Color.adaptive(dark: 0x15171B, light: 0xF7F9FC)
-    static let backgroundRaised = Color.adaptive(dark: 0x1B1D22, light: 0xFFFFFF)
+    static let backgroundDeep = Color.adaptive(dark: 0x0B0C0E, light: 0xF3F4F6)
+    static let backgroundBase = Color.adaptive(dark: 0x161719, light: 0xF8F9FA)
+    static let backgroundRaised = Color.adaptive(dark: 0x1E2023, light: 0xFFFFFF)
     static let backgroundHover = Color.adaptive(dark: 0x252A32, light: 0xE8EEF8)
 
-    static let surfacePrimary = Color.adaptive(dark: 0x252934, light: 0xEEF3FB)
+    static let surfacePrimary = Color.adaptive(dark: 0x25272B, light: 0xEFF1F4)
     static let surfaceSelected = Color.adaptive(dark: 0x2A3243, light: 0xE4EEFF)
     static let surfaceBorder = Color.adaptiveAlpha(
         dark: .white,
@@ -24,20 +24,22 @@ enum MuesliTheme {
     )
     static let textSecondary = Color.adaptiveAlpha(
         dark: .white,
-        darkAlpha: 0.62,
+        darkAlpha: 0.72,
         light: .black,
-        lightAlpha: 0.55
+        lightAlpha: 0.66
     )
     static let textTertiary = Color.adaptiveAlpha(
         dark: .white,
-        darkAlpha: 0.40,
+        darkAlpha: 0.55,
         light: .black,
-        lightAlpha: 0.33
+        lightAlpha: 0.55
     )
 
     static var defaultAccent: Color { color(for: .blue) }
     static var accent: Color { color(for: selectedAccentTheme) }
     static var accentSubtle: Color { accent.opacity(0.14) }
+
+    static let onAccent = Color.adaptive(dark: 0x0B0C0E, light: 0xFFFFFF)
 
     static let brandBlue = Color(hex: 0x69A1FF)
     static let brandBlueSubtle = Color.adaptive(dark: 0x18253A, light: 0xE6F0FF)
@@ -63,15 +65,37 @@ enum MuesliTheme {
     static let destructive = Color.adaptive(dark: 0xFF453A, light: 0xD70015)
     static var destructiveSubtle: Color { destructive.opacity(0.16) }
 
-    static func title1() -> Font { .system(.title, design: .default, weight: .bold) }
-    static func title2() -> Font { .system(.title2, design: .default, weight: .semibold) }
-    static func title3() -> Font { .system(.headline, design: .default, weight: .semibold) }
-    static func headline() -> Font { .system(.callout, design: .default, weight: .semibold) }
-    static func body() -> Font { .system(.subheadline, design: .default, weight: .regular) }
-    static func transcript() -> Font { .system(.body, design: .default, weight: .regular) }
-    static func callout() -> Font { .system(.footnote, design: .default, weight: .regular) }
-    static func caption() -> Font { .system(.caption, design: .default, weight: .regular) }
-    static func captionMedium() -> Font { .system(.caption, design: .default, weight: .medium) }
+    // Match macOS PR #705's family, with iOS-sized, Dynamic Type-aware roles.
+    // UIAppFonts registers the bundled faces once at process launch.
+    static func font(size: CGFloat, weight: Font.Weight = .regular,
+                     relativeTo style: Font.TextStyle = .body) -> Font {
+        let face: String
+        switch weight {
+        case .bold, .heavy, .black: face = "Bold"
+        case .semibold: face = "SemiBold"
+        case .medium: face = "Medium"
+        default: face = "Regular"
+        }
+        return .custom("NunitoSans-\(face)", size: size, relativeTo: style)
+    }
+
+    static func title1() -> Font { font(size: 28, weight: .bold, relativeTo: .title) }
+    static func title2() -> Font { font(size: 22, weight: .semibold, relativeTo: .title2) }
+    static func title3() -> Font { font(size: 19, weight: .semibold, relativeTo: .headline) }
+    static func headline() -> Font { font(size: 16, weight: .semibold, relativeTo: .callout) }
+    static func body() -> Font { font(size: 16, relativeTo: .body) }
+    static let transcriptPointSize: CGFloat = 17
+    static func transcript() -> Font { font(size: transcriptPointSize, relativeTo: .body) }
+
+    /// UIKit measurement must use the same face, base size and scaling as SwiftUI.
+    static func transcriptUIFont(compatibleWith traits: UITraitCollection) -> UIFont {
+        let base = UIFont(name: "NunitoSans-Regular", size: transcriptPointSize)
+            ?? UIFont.systemFont(ofSize: transcriptPointSize)
+        return UIFontMetrics(forTextStyle: .body).scaledFont(for: base, compatibleWith: traits)
+    }
+    static func callout() -> Font { font(size: 15, relativeTo: .subheadline) }
+    static func caption() -> Font { font(size: 13, relativeTo: .footnote) }
+    static func captionMedium() -> Font { font(size: 13, weight: .medium, relativeTo: .footnote) }
 
     static let spacing4: CGFloat = 4
     static let spacing8: CGFloat = 8
@@ -90,9 +114,9 @@ enum MuesliTheme {
         static let horizontalInset: CGFloat = 28
         static let itemSpacing: CGFloat = 4
         static let itemHeight: CGFloat = 44
-        static let containerPadding: CGFloat = 2
-        static let containerCornerRadius: CGFloat = 24
-        static let selectionCornerRadius: CGFloat = 23
+        static let containerPadding: CGFloat = 5
+        static let containerCornerRadius: CGFloat = 18
+        static let selectionCornerRadius: CGFloat = 12
     }
 
     static func color(for accent: MuesliAccentTheme) -> Color {
@@ -245,38 +269,15 @@ extension View {
     }
 }
 
+// Shared surface names remain stable for existing callers. Content cards are
+// opaque, so text contrast does not depend on the content scrolling behind them.
 private struct MuesliNavigationGlassSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
-
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            content
-                .background(Color.white.opacity(0.055), in: shape)
-                .glassEffect(
-                    .regular.tint(Color.black.opacity(0.16)),
-                    in: .rect(cornerRadius: cornerRadius)
-                )
-                .overlay(shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8))
-                .shadow(color: Color.black.opacity(0.28), radius: 12, x: 0, y: 6)
-        } else {
-            fallback(content: content, shape: shape)
-        }
-        #else
-        fallback(content: content, shape: shape)
-        #endif
-    }
-
-    private func fallback(content: Content, shape: RoundedRectangle) -> some View {
         content
-            .background {
-                shape.fill(.ultraThinMaterial)
-                shape.fill(Color.black.opacity(0.34))
-            }
-            .overlay(shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8))
-            .shadow(color: Color.black.opacity(0.28), radius: 12, x: 0, y: 6)
+            .background(MuesliTheme.backgroundRaised, in: shape)
+            .overlay(shape.strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 0.5))
     }
 }
 
@@ -284,57 +285,11 @@ private struct MuesliNavigationSelectionModifier: ViewModifier {
     let isSelected: Bool
     let tint: Color
     let namespace: Namespace.ID
-
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if isSelected {
-            selected(content)
-        } else {
-            content
+        content.background {
+            RoundedRectangle(cornerRadius: MuesliTheme.Navigation.selectionCornerRadius, style: .continuous)
+                .fill(isSelected ? tint.opacity(0.12) : .clear)
         }
-    }
-
-    @ViewBuilder
-    private func selected(_ content: Content) -> some View {
-        let shape = RoundedRectangle(
-            cornerRadius: MuesliTheme.Navigation.selectionCornerRadius,
-            style: .continuous
-        )
-
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            content
-                .background(tint.opacity(0.12), in: shape)
-                .glassEffect(
-                    .regular.tint(tint.opacity(0.30)).interactive(),
-                    in: .rect(cornerRadius: MuesliTheme.Navigation.selectionCornerRadius)
-                )
-                .glassEffectID("navigation-selection", in: namespace)
-                .overlay(shape.strokeBorder(Color.white.opacity(0.23), lineWidth: 0.9))
-                .overlay(alignment: .top) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.20))
-                        .frame(height: 1)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 1)
-                }
-                .shadow(color: tint.opacity(0.22), radius: 8, x: 0, y: 2)
-        } else {
-            fallback(content: content, shape: shape)
-        }
-        #else
-        fallback(content: content, shape: shape)
-        #endif
-    }
-
-    private func fallback(content: Content, shape: RoundedRectangle) -> some View {
-        content
-            .background {
-                shape.fill(.ultraThinMaterial)
-                shape.fill(tint.opacity(0.24))
-            }
-            .overlay(shape.strokeBorder(Color.white.opacity(0.20), lineWidth: 0.9))
-            .shadow(color: tint.opacity(0.20), radius: 7, x: 0, y: 2)
     }
 }
 
@@ -342,78 +297,42 @@ private struct MuesliGlassSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
     let tint: Color?
     let isInteractive: Bool
-
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            content
-                .background(tintBackground, in: shape)
-                .glassEffect(glassEffect(), in: .rect(cornerRadius: cornerRadius))
-                .overlay(shape.strokeBorder(MuesliTheme.glassHighlight, lineWidth: 0.7))
-                .shadow(color: MuesliTheme.glassShadow, radius: 10, x: 0, y: 5)
-        } else {
-            fallback(content: content, shape: shape)
-        }
-        #else
-        fallback(content: content, shape: shape)
-        #endif
-    }
-
-    private var tintBackground: Color {
-        tint?.opacity(0.08) ?? MuesliTheme.backgroundRaised.opacity(0.74)
-    }
-
-    #if compiler(>=6.2)
-    @available(iOS 26.0, *)
-    private func glassEffect() -> Glass {
-        let base = Glass.regular.tint(tint?.opacity(0.18) ?? .clear)
-        return isInteractive ? base.interactive() : base
-    }
-    #endif
-
-    private func fallback(content: Content, shape: RoundedRectangle) -> some View {
         content
-            .background {
-                shape.fill(.regularMaterial)
-                shape.fill(tintBackground)
-            }
-            .overlay(shape.strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1))
-            .shadow(color: MuesliTheme.glassShadow, radius: 8, x: 0, y: 4)
+            .background(MuesliTheme.backgroundRaised, in: shape)
+            .overlay(shape.strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 0.5))
     }
 }
 
 private struct MuesliGlassButtonModifier: ViewModifier {
     let cornerRadius: CGFloat
     let tint: Color?
-
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            content
-                .background((tint ?? MuesliTheme.accent).opacity(0.10), in: shape)
-                .glassEffect(.regular.tint((tint ?? MuesliTheme.accent).opacity(0.22)).interactive(), in: .rect(cornerRadius: cornerRadius))
-                .overlay(shape.strokeBorder((tint ?? MuesliTheme.accent).opacity(0.24), lineWidth: 1))
-                .contentShape(shape)
-        } else {
-            fallback(content: content, shape: shape)
-        }
-        #else
-        fallback(content: content, shape: shape)
-        #endif
-    }
-
-    private func fallback(content: Content, shape: RoundedRectangle) -> some View {
+        let shape = RoundedRectangle(cornerRadius: min(cornerRadius, MuesliTheme.cornerMedium), style: .continuous)
         content
-            .background {
-                shape.fill(.ultraThinMaterial)
-                shape.fill((tint ?? MuesliTheme.accent).opacity(0.12))
-            }
-            .overlay(shape.strokeBorder((tint ?? MuesliTheme.accent).opacity(0.24), lineWidth: 1))
+            .background((tint ?? MuesliTheme.accent).opacity(0.10), in: shape)
+            .overlay(shape.strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 0.5))
             .contentShape(shape)
+    }
+}
+
+/// A consistent primary action: comfortable touch target, quiet shape, no glow.
+struct MuesliPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.muesliAccent) private var accent
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(MuesliTheme.headline())
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .frame(minHeight: 48)
+            .foregroundStyle(isEnabled ? MuesliTheme.onAccent : MuesliTheme.textSecondary)
+            .background(isEnabled ? accent : MuesliTheme.surfacePrimary,
+                        in: RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium, style: .continuous))
+            .opacity(configuration.isPressed ? 0.8 : 1)
     }
 }
 
@@ -474,7 +393,7 @@ enum MuesliAccentTheme: String, CaseIterable, Identifiable {
         case .blue:
             0x2563EB
         case .green:
-            0x059669
+            0x047857
         case .slate:
             0x475569
         }

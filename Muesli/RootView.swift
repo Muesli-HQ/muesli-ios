@@ -38,6 +38,7 @@ struct RootView: View {
         } message: { Text(coordinator.audioImportError ?? "") }
         .onAppear { coordinator.refreshAudioImports() }
         .background(MuesliTheme.backgroundBase)
+        .font(MuesliTheme.body())
         .tint(currentAccent)
         .environment(\.muesliAccent, currentAccent)
         .preferredColorScheme(preferredColorScheme)
@@ -126,7 +127,6 @@ struct RootView: View {
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .frame(width: 44, height: 44)
                             .muesliGlassButton(cornerRadius: 22, tint: currentAccent)
-                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, MuesliTheme.spacing20)
@@ -431,7 +431,7 @@ private struct MuesliTabSwitcher: View {
                                 .frame(height: 20)
 
                             Text(section.title)
-                                .font(.system(size: 10.5, weight: .medium))
+                                .font(MuesliTheme.captionMedium())
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.78)
                         }
@@ -530,7 +530,6 @@ private struct MuesliDrawer: View {
                             .foregroundStyle(MuesliTheme.textSecondary)
                             .frame(width: 44, height: 44)
                             .muesliGlassButton(cornerRadius: 22)
-                            .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }

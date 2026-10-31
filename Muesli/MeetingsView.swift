@@ -1014,6 +1014,7 @@ private struct MeetingSessionDetailView: View {
             .padding(.bottom, 112)
         }
         .background(MuesliTheme.backgroundBase)
+        .accessibilityIdentifier("meeting.detail")
         .navigationTitle("Meeting")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sharePayload) { payload in

@@ -60,10 +60,13 @@ final class DictationCoordinator {
     @ObservationIgnored private var waveformPreviewSessionID: UUID?
     var waveformPreviewFailure: String?
     var waveformPreviewIsProcessing = false
-    var waveformPreviewFinishRequested = false
+    var finishWaveformPreview: (() -> Void)?
     var waveformPreviewCopyPublished = false
     @ObservationIgnored private var waveformPreviewBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     @ObservationIgnored private var waveformPreviewStopRequested = false
+    #endif
+    #if DEBUG
+    var finishMeetingSummaryPreview: (() -> Void)?
     #endif
     @ObservationIgnored private var startupLiveActivityCleanupTask: Task<Void, Never>?
     private var modelPreparationTask: Task<Void, Never>?
@@ -1819,9 +1822,10 @@ final class DictationCoordinator {
         transitionMeetingLifecycle(.transcriptionStarted(session.id))
         meetingStatusText = "Transcribing"
 
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(10))
+        // XCTest advances this fixture after verifying the initial detail state.
+        finishMeetingSummaryPreview = { [weak self] in
             guard let self else { return }
+            self.finishMeetingSummaryPreview = nil
             let completedTranscript = Transcript(
                 id: partialTranscript.id,
                 sessionID: session.id,
@@ -7252,40 +7256,32 @@ final class DictationCoordinator {
         await liveActivityController.update(phase: "Transcribing", detail: "Processing preview", session: session)
         // The fixture records no audio and can be suspended in the background.
         // Let XCTest finish synthetic transcription after foregrounding the app,
-        // rather than depending on a seven-second background sleep.
+        // without a timer advancing or expiring the processing state.
         waveformPreviewIsProcessing = true
-        let processingDeadline = ProcessInfo.processInfo.systemUptime + 90
-        while !waveformPreviewFinishRequested, !Task.isCancelled,
-              ProcessInfo.processInfo.systemUptime < processingDeadline {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
-        waveformPreviewIsProcessing = false
-        guard waveformPreviewFinishRequested, !Task.isCancelled else {
-            activeSession = nil
-            waveformPreviewFailure = "Preview completion was not requested"
-            await liveActivityController.end(phase: "Ended", detail: "Preview timed out", session: session, dismissal: .immediate)
-            return
-        }
-        activeSession = nil
-        if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-copy") {
-            await liveActivityController.offerForegroundCopy(
-                session: session,
-                requestID: previewRequestID,
-                displayDuration: .seconds(60),
-                onPublished: { [weak self] in
-                    guard let self else { return }
-                    // Release the finite background allowance before the display
-                    // delay. Publish readiness only after ActivityKit's update.
-                    self.endWaveformPreviewBackgroundTask()
-                    self.waveformPreviewCopyPublished = true
+        // Do not race XCTest's foreground/idle wait against a wall-clock deadline.
+        // Release background execution while waiting for an explicit test action.
+        finishWaveformPreview = { [weak self] in
+            guard let self else { return }
+            self.finishWaveformPreview = nil
+            self.waveformPreviewIsProcessing = false
+            self.activeSession = nil
+            Task { @MainActor in
+                if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-copy") {
+                    await self.liveActivityController.offerForegroundCopy(
+                        session: session,
+                        requestID: previewRequestID,
+                        displayDuration: .seconds(60),
+                        onPublished: { [weak self] in
+                            self?.waveformPreviewCopyPublished = true
+                        }
+                    )
+                } else {
+                    await self.liveActivityController.end(phase: "Ended", detail: "Preview ended", session: session, dismissal: .immediate)
                 }
-            )
-            // Keep the preview transcript available while the Live Activity offers
-            // its copy link, just as completed recordings remain available.
-        } else {
-            await liveActivityController.end(phase: "Ended", detail: "Preview ended", session: session, dismissal: .immediate)
+            }
         }
     }
+
     private func endWaveformPreviewBackgroundTask() {
         guard waveformPreviewBackgroundTask != .invalid else { return }
         let token = waveformPreviewBackgroundTask

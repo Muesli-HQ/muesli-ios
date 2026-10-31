@@ -93,3 +93,15 @@ and do not supply the callback.
 The native Dynamic Island end-to-end test passed in 41.4 seconds, including the
 publication checkpoint, real copy link and clipboard confirmation. Build/test
 log: `/private/tmp/pr50-publication-fix-tests.log`. Hosted CI was not awaited.
+
+### Explicit UI fixture completion
+
+The follow-up CI run exposed a simulator-only processing deadline during XCTest's
+foreground idle wait. The Dynamic Island fixture now exposes a one-shot completion
+action and releases background execution while waiting, rather than polling against
+a deadline. The meeting-summary fixture likewise waits for an explicit completion
+action after the test has verified navigation and the raw transcript.
+
+Both targeted native simulator UI tests passed locally: meeting summary (15.574s)
+and Dynamic Island through clipboard confirmation (42.075s). Validation log:
+`/private/tmp/pr50-explicit-fixtures.log`. Production transcription timing is unchanged.

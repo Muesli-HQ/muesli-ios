@@ -522,8 +522,13 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Return to Meeting"].waitForExistence(timeout: 5))
         app.buttons["Return to Meeting"].tap()
 
+        XCTAssertTrue(app.scrollViews["meeting.detail"].waitForExistence(timeout: 10),
+                      "Return to Meeting did not open the meeting details")
         let rawTranscript = app.staticTexts["Raw transcript should no longer be selected after processing."]
         XCTAssertTrue(rawTranscript.waitForExistence(timeout: 5))
+        let finish = app.buttons["meetingPreview.finish"]
+        XCTAssertTrue(finish.waitForExistence(timeout: 5))
+        finish.tap()
         XCTAssertTrue(app.staticTexts["The generated meeting summary is selected by default."].waitForExistence(timeout: 25))
         XCTAssertTrue(rawTranscript.waitForNonExistence(timeout: 5))
     }

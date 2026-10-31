@@ -51,9 +51,12 @@ struct MuesliApp: App {
                             .accessibilityIdentifier("islandPreview.copyPublished")
                     } else if coordinator.waveformPreviewIsProcessing {
                         Button("Finish preview transcription") {
-                            coordinator.waveformPreviewFinishRequested = true
+                            coordinator.finishWaveformPreview?()
                         }
                         .accessibilityIdentifier("islandPreview.finish")
+                    } else if let finish = coordinator.finishMeetingSummaryPreview {
+                        Button("Finish meeting summary preview", action: finish)
+                            .accessibilityIdentifier("meetingPreview.finish")
                     } else if let failure = coordinator.waveformPreviewFailure {
                         Text(failure).accessibilityIdentifier("islandPreview.failure")
                     }

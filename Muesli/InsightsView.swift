@@ -52,7 +52,7 @@ struct InsightsView: View {
                         stat("Speaking pace", value: data.averageWPM.map { "\(Int($0.rounded())) WPM" } ?? "—")
                     }
                     if data.timedNotes > 0 {
-                        Text("Pace is based on \(data.timedNotes.formatted()) notes with recording duration.")
+                        Text("Pace is based on \(data.timedNotes.formatted()) \(data.timedNotes == 1 ? "note" : "notes") with recording duration.")
                             .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
                     } else {
                         Text("Speaking pace appears when recording duration is available.")
@@ -61,10 +61,10 @@ struct InsightsView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Keep the momentum").font(MuesliTheme.title3())
                         HStack(alignment: .top, spacing: 12) {
-                            stat("Current streak", value: "\(data.currentStreak) days")
-                            stat("Longest streak", value: "\(data.longestStreak) days")
+                            stat("Current streak", value: "\(data.currentStreak) \(data.currentStreak == 1 ? "day" : "days")")
+                            stat("Longest streak", value: "\(data.longestStreak) \(data.longestStreak == 1 ? "day" : "days")")
                         }
-                        Text("All-time activity for \(source.title.lowercased()). A note or completed meeting keeps your streak going.")
+                        Text("Streaks use all-time activity from the selected devices. A note or completed meeting keeps your streak going.")
                             .font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)
                     }
                     if source == .all && data.words > 0 {

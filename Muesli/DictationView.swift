@@ -30,6 +30,7 @@ struct DictationView: View {
     @State private var sourceFilter: DictationSourceFilter = .all
     @State private var isSyncSetupPromptPresented = false
     @State private var shouldShowKeyboardSetupRow = false
+    @State private var showsInsights = false
     @State private var dashboardStats = DictationDashboardStats.empty
     @State private var navigationPath = NavigationPath()
     @State private var captureMode: DashboardCaptureMode = .quickNote
@@ -40,7 +41,10 @@ struct DictationView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
                     header
-                    homeStatsRow
+                    Button { showsInsights = true } label: { homeStatsRow }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens activity insights")
+                        .accessibilityIdentifier("dashboard.insights")
                     keyboardSessionHomeControl
                     if shouldShowActionButtonInvitation {
                         actionButtonInvitation
@@ -51,6 +55,11 @@ struct DictationView: View {
                 .padding(.horizontal, MuesliTheme.spacing20)
                 .padding(.top, MuesliTheme.spacing24)
                 .padding(.bottom, 112)
+            }
+            .sheet(isPresented: $showsInsights) {
+                InsightsView(history: displayHistory,
+                             sessions: coordinator.voiceNoteHistoryPresentation.sessions,
+                             source: sourceFilter)
             }
             .refreshable {
                 triggerHomeSync()
@@ -211,11 +220,12 @@ struct DictationView: View {
     private func updateDashboardStats() {
         let history = statsHistory
         let sessions = statsSessions
+        let snapshot = InsightsSnapshot(history: history, sessions: sessions, range: .allTime)
         dashboardStats = DictationDashboardStats(
-            words: formattedCompactCount(totalDictationWords(in: history)),
-            wpm: formattedAverageWPM(history: history, sessions: sessions),
-            meetings: formattedCompactCount(totalMeetingCount(in: sessions)),
-            streak: "\(currentActivityStreak(history: history, sessions: sessions))"
+            words: formattedCompactCount(snapshot.words),
+            wpm: snapshot.averageWPM.map { "\(Int($0.rounded()))" } ?? "—",
+            meetings: formattedCompactCount(snapshot.meetings),
+            streak: "\(snapshot.currentStreak)"
         )
     }
 
@@ -249,65 +259,6 @@ struct DictationView: View {
             .padding(.vertical, MuesliTheme.spacing4)
             .accessibilityHint("Turn on to keep the mic ready. Turn off to end the current mic session.")
         }
-    }
-
-    private func totalDictationWords(in history: [DictationResult]) -> Int {
-        history.reduce(0) { total, result in
-            total + result.text.split { $0.isWhitespace || $0.isNewline }.count
-        }
-    }
-
-    private func totalMeetingCount(in sessions: [RecordingSession]) -> Int {
-        sessions.filter { $0.kind == .meeting }.count
-    }
-
-    private func formattedAverageWPM(history: [DictationResult], sessions: [RecordingSession]) -> String {
-        let sessionsByID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
-        let completedDictationSessions = history.compactMap { result -> (words: Int, duration: TimeInterval)? in
-            guard let sessionID = result.sessionID,
-                  let session = sessionsByID[sessionID],
-                  let duration = session.duration,
-                  duration >= 10 else {
-                return nil
-            }
-
-            let words = result.text.split { $0.isWhitespace || $0.isNewline }.count
-            guard words > 0 else { return nil }
-            return (words, duration)
-        }
-
-        let totalWords = completedDictationSessions.reduce(0) { $0 + $1.words }
-        let totalSeconds = completedDictationSessions.reduce(0) { $0 + $1.duration }
-        guard totalWords > 0, totalSeconds > 0 else { return "0" }
-
-        let wpm = Double(totalWords) / max(totalSeconds / 60, 1 / 60)
-        return "\(Int(wpm.rounded()))"
-    }
-
-    private func currentActivityStreak(history: [DictationResult], sessions: [RecordingSession]) -> Int {
-        let calendar = Calendar.current
-        let countedSessions = sessions.filter { $0.phase != .cancelled && $0.phase != .failed }
-        let activeDays = Set(
-            history.map { calendar.startOfDay(for: $0.createdAt) }
-                + countedSessions.map { calendar.startOfDay(for: $0.createdAt) }
-        )
-
-        guard !activeDays.isEmpty else { return 0 }
-
-        var streak = 0
-        var day = calendar.startOfDay(for: .now)
-        if !activeDays.contains(day),
-           let yesterday = calendar.date(byAdding: .day, value: -1, to: day) {
-            day = yesterday
-        }
-
-        while activeDays.contains(day) {
-            streak += 1
-            guard let previousDay = calendar.date(byAdding: .day, value: -1, to: day) else { break }
-            day = previousDay
-        }
-
-        return streak
     }
 
     private func formattedCompactCount(_ value: Int) -> String {

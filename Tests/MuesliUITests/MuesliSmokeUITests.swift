@@ -14,6 +14,30 @@ final class MuesliSmokeUITests: XCTestCase {
         return app
     }
 
+    func testDashboardOpensInsightsAndChangesActivityMetric() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-mock-dictations"]
+        app.launch()
+        let insights = app.buttons["dashboard.insights"]
+        XCTAssertTrue(insights.waitForExistence(timeout: 8))
+        insights.tap()
+        XCTAssertTrue(app.navigationBars["Insights"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["insights.range"].exists)
+        app.buttons["insights.range"].tap()
+        app.buttons["30 days"].tap()
+        XCTAssertTrue(app.staticTexts["Words dictated · 30 days"].waitForExistence(timeout: 5))
+        app.buttons["insights.range"].tap()
+        app.buttons["All time"].tap()
+        XCTAssertTrue(app.staticTexts["Activity"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["Meetings"].tap()
+        app.segmentedControls.buttons["Words"].tap()
+        captureActionButton(app, name: "Insights with local and Mac history")
+        app.segmentedControls.buttons["From Mac"].tap()
+        XCTAssertTrue(app.staticTexts["Activity"].exists)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(insights.waitForExistence(timeout: 5))
+    }
+
     func testAudioImportOpensFilesPicker() {
         let app = launchApp()
         app.buttons["tab.meetings"].tap()

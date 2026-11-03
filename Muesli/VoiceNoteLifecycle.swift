@@ -347,3 +347,27 @@ enum VoiceNoteCheckpointRetentionPolicy {
             && !session.protectedAudioUntilTranscriptCompletes
     }
 }
+
+/// A backend may throw CancellationError after retiring a failed live session.
+/// Only task cancellation or loss of recording ownership should prevent recovery.
+@MainActor
+enum RealtimeTranscriptionRecovery {
+    static func finishOrUseSavedAudio(
+        validateOwnership: () throws -> Void,
+        finish: () async throws -> String
+    ) async throws -> String {
+        try Task.checkCancellation()
+        try validateOwnership()
+        let text: String
+        do {
+            text = try await finish()
+        } catch {
+            try Task.checkCancellation()
+            try validateOwnership()
+            return ""
+        }
+        try Task.checkCancellation()
+        try validateOwnership()
+        return text
+    }
+}

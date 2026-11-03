@@ -5423,7 +5423,23 @@ final class DictationCoordinator {
                     }
                     audioURL = retainedAudioURL
                     if usesRealtimeStreaming {
-                        realtimeText = postProcessTranscript(try await engine.finishRealtimeSession())
+                        if selectedTranscriptionModel == .nemotron35 {
+                            let finishedText = try await RealtimeTranscriptionRecovery.finishOrUseSavedAudio {
+                                guard !isRecordingSessionCancelled(requestID: request.id),
+                                      let currentSession = activeSession ?? session,
+                                      let lifecycleRunnerID,
+                                      isCurrentVoiceNoteLifecycle(
+                                        sessionID: currentSession.id,
+                                        requestID: request.id,
+                                        runnerID: lifecycleRunnerID
+                                      ) else { throw CancellationError() }
+                            } finish: {
+                                try await engine.finishRealtimeSession()
+                            }
+                            realtimeText = postProcessTranscript(finishedText)
+                        } else {
+                            realtimeText = postProcessTranscript(try await engine.finishRealtimeSession())
+                        }
                     }
                 } else {
                     audioURL = try recorder.stop()

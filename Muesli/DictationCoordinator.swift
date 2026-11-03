@@ -48,6 +48,7 @@ final class DictationCoordinator {
     private var meetingRecorder: StreamingMeetingRecorder?
     private var realtimeDictationRecorder: StreamingMeetingRecorder?
     private var realtimeDictationBufferPipe: RealtimeAudioBufferPipe?
+    private var realtimeEngineSessionID: UUID?
     private var realtimeDictationProcessingTask: Task<Void, Never>?
     private var realtimeDictationChunksDirectory: URL?
     private var isRealtimeDictationSessionActive = false
@@ -4653,7 +4654,7 @@ final class DictationCoordinator {
         clearKeyboardLiveTranscript()
         if enablesRealtimeTranscription {
             await engine.selectModel(selectedTranscriptionModel)
-            try await engine.startRealtimeSession(
+            realtimeEngineSessionID = try await engine.startRealtimeSession(
                 partialTranscript: { [weak self] partial in
                     Task { @MainActor in
                         self?.updateRealtimeDictationPartial(partial)
@@ -5422,7 +5423,23 @@ final class DictationCoordinator {
                     }
                     audioURL = retainedAudioURL
                     if usesRealtimeStreaming {
-                        realtimeText = postProcessTranscript(try await engine.finishRealtimeSession())
+                        if selectedTranscriptionModel == .nemotron35 {
+                            let finishedText = try await RealtimeTranscriptionRecovery.finishOrUseSavedAudio {
+                                guard !isRecordingSessionCancelled(requestID: request.id),
+                                      let currentSession = activeSession ?? session,
+                                      let lifecycleRunnerID,
+                                      isCurrentVoiceNoteLifecycle(
+                                        sessionID: currentSession.id,
+                                        requestID: request.id,
+                                        runnerID: lifecycleRunnerID
+                                      ) else { throw CancellationError() }
+                            } finish: {
+                                try await engine.finishRealtimeSession()
+                            }
+                            realtimeText = postProcessTranscript(finishedText)
+                        } else {
+                            realtimeText = postProcessTranscript(try await engine.finishRealtimeSession())
+                        }
                     }
                 } else {
                     audioURL = try recorder.stop()
@@ -5700,6 +5717,7 @@ final class DictationCoordinator {
                 resumeKeyboardSessionKeeperIfNeeded()
                 publishKeyboardSessionReadyIfAvailable()
                 clearPersistentKeyboardSessionRoute(for: request.id)
+                releaseRealtimeEngineSession()
                 realtimeDictationRecorder?.cancel()
                 realtimeDictationRecorder = nil
                 realtimeDictationBufferPipe?.finish()
@@ -7896,7 +7914,15 @@ final class DictationCoordinator {
         }
     }
 
+    private func releaseRealtimeEngineSession() {
+        if let token = realtimeEngineSessionID {
+            realtimeEngineSessionID = nil
+            Task { [engine] in await engine.cancelRealtimeSession(token) }
+        }
+    }
+
     private func cleanupRealtimeDictationRecorder() {
+        releaseRealtimeEngineSession()
         realtimeDictationRecorder?.cancel()
         realtimeDictationRecorder = nil
         realtimeDictationBufferPipe?.finish()
@@ -8100,13 +8126,14 @@ final class OfflineTranscriptionJobControl<Output: Sendable>: @unchecked Sendabl
 }
 
 extension DictationCoordinator: ModelBackgroundDownloadServiceDelegate {
-    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String) {
+    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String, transfer: ModelDownloadProgressSnapshot?) {
         guard selectedTranscriptionModel == model else { return }
         modelPreparation = ModelPreparationState(
             phase: .downloading,
             progress: progress,
             status: "Downloading \(model.shortName)",
-            detail: detail
+            detail: detail,
+            transfer: transfer
         )
     }
 

@@ -11,6 +11,73 @@ private typealias StopSession = Muesli.RecordingSession
 
 @MainActor
 final class VoiceNoteTranscriptionStopTests: XCTestCase {
+    func testRetiredNemotronSessionFallsBackToSavedAudio() async throws {
+        let text = try await RealtimeTranscriptionRecovery.finishOrUseSavedAudio(
+            validateOwnership: {}, finish: { throw CancellationError() }
+        )
+        XCTAssertTrue(text.isEmpty, "Empty live text must select the saved-audio path")
+    }
+
+    func testBackendFailureFallsBackAndSuccessfulLiveTextIsPreserved() async throws {
+        let failed = try await RealtimeTranscriptionRecovery.finishOrUseSavedAudio(
+            validateOwnership: {}, finish: { throw CocoaError(.coderInvalidValue) }
+        )
+        XCTAssertTrue(failed.isEmpty)
+        let success = try await RealtimeTranscriptionRecovery.finishOrUseSavedAudio(
+            validateOwnership: {}, finish: { "live transcript" }
+        )
+        XCTAssertEqual(success, "live transcript")
+    }
+
+    func testUserCancellationDuringFinishDoesNotFallBackOrReturnLateText() async {
+        for backendThrows in [false, true] {
+            let task = Task { @MainActor in
+                try await RealtimeTranscriptionRecovery.finishOrUseSavedAudio(
+                    validateOwnership: {}, finish: {
+                        withUnsafeCurrentTask { $0?.cancel() }
+                        if backendThrows { throw CancellationError() }
+                        return "late transcript"
+                    }
+                )
+            }
+            do {
+                _ = try await task.value
+                XCTFail("User cancellation must prevent both fallback and late success")
+            } catch { XCTAssertTrue(error is CancellationError) }
+        }
+    }
+
+    func testLostRecordingOwnershipDuringFinishPreventsFallback() async {
+        var ownsRecording = true
+        do {
+            _ = try await RealtimeTranscriptionRecovery.finishOrUseSavedAudio {
+                guard ownsRecording else { throw CancellationError() }
+            } finish: {
+                ownsRecording = false
+                throw CancellationError()
+            }
+            XCTFail("A cancelled or replaced recording must not start fallback")
+        } catch { XCTAssertTrue(error is CancellationError) }
+    }
+
+    func testAlreadyCancelledRequestNeverCallsBackend() async {
+        var calledBackend = false
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await RealtimeTranscriptionRecovery.finishOrUseSavedAudio(
+                validateOwnership: {}, finish: {
+                    calledBackend = true
+                    return "unexpected"
+                }
+            )
+        }
+        do {
+            _ = try await task.value
+            XCTFail("Cancelled request must stop immediately")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertFalse(calledBackend)
+    }
+
     func testStopReleasesJobPreservesQuickNoteAndIgnoresLateWork() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

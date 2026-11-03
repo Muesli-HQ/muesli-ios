@@ -1,4 +1,5 @@
 import XCTest
+import CoreML
 #if canImport(MuesliDev)
 @testable import MuesliDev
 private typealias CatalogTestStore = MuesliDev.SharedStore
@@ -8,6 +9,14 @@ private typealias CatalogTestStore = Muesli.SharedStore
 #endif
 
 final class SettingsModelCatalogTests: XCTestCase {
+    func testCompactModelEncoderPoliciesAvoidUnsupportedDeviceExecution() {
+        XCTAssertEqual(FluidAudioTranscriptionEngine.encoderComputeUnits(for: .parakeetRedux), .cpuOnly)
+        XCTAssertEqual(FluidAudioTranscriptionEngine.encoderComputeUnits(for: .phonon25), .cpuOnly)
+        XCTAssertNil(FluidAudioTranscriptionEngine.encoderComputeUnits(for: .parakeetV3))
+        XCTAssertTrue(LocalTranscriptionModel.nemotron35.supportsRealtimeStreaming)
+        XCTAssertFalse(LocalTranscriptionModel.phonon25.supportsRealtimeStreaming)
+    }
+
     @MainActor
     func testInventoryRefreshRemovesDeletedModelsAndClearsStaleReadyState() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -186,7 +195,9 @@ final class SettingsModelCatalogTests: XCTestCase {
         XCTAssertEqual(Set(models.map(\.id)).count, models.count)
         XCTAssertEqual(
             models.count,
-            LocalTranscriptionModel.parakeetModels.count + LocalTranscriptionModel.whisperModels.count + 1
+            LocalTranscriptionModelFamily.allCases.reduce(0) { count, family in
+                count + models.filter { $0.family == family }.count
+            }
         )
     }
 

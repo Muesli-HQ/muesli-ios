@@ -1,11 +1,15 @@
 #if DEBUG
 import Foundation
+import AVFoundation
 import UIKit
+import SwiftUI
+import Observation
 
 /// Opt-in physical-device validation in the separate development app. It uses
 /// the production background downloader and runtime, not a second download path.
 @MainActor
 final class ModelDownloadDeviceValidation: ModelBackgroundDownloadServiceDelegate {
+    static let display = ModelValidationDisplay()
     private var finished = false
     private var failure: String?
     private var lastPercent = -1
@@ -42,17 +46,15 @@ final class ModelDownloadDeviceValidation: ModelBackgroundDownloadServiceDelegat
         var results: [[String: String]] = []
         for name in names {
             guard let model = LocalTranscriptionModel(rawValue: name) else { continue }
+            display.model = model
+            display.state = .init(phase: .downloading, status: "Downloading", detail: "")
             runner.finished = false
             runner.failure = nil
             runner.lastPercent = -1
             var result = ["model": name, "status": "downloading", "startedAt": Date.now.ISO8601Format()]
             write(results + [result])
             do {
-                let receipt = ModelBackgroundDownloadService.storageDirectory(for: model)?
-                    .appendingPathComponent(".muesli-verified-manifest.json")
-                let cachedManifest = receipt.flatMap { try? Data(contentsOf: $0) }
-                    .flatMap { try? JSONDecoder().decode(ModelDownloadManifest.self, from: $0) }
-                let forceRefresh = arguments.contains("--muesli-validate-mirror-corruption") || cachedManifest?.source != .mirror
+                let forceRefresh = arguments.contains("--muesli-validate-mirror-corruption") || arguments.contains("--muesli-validate-force-download")
                 let pending = try await service.startDownload(for: model, forceRefresh: forceRefresh)
                 let deadline = Date.now.addingTimeInterval(1800)
                 var nextTaskReport = Date.distantPast
@@ -81,6 +83,7 @@ final class ModelDownloadDeviceValidation: ModelBackgroundDownloadServiceDelegat
                 }
                 result["status"] = "loading-runtime"
                 write(results + [result])
+                display.state = .init(phase: .preparing, status: "Loading", detail: "")
                 let engine = FluidAudioTranscriptionEngine()
                 await engine.selectModel(model)
                 try await engine.prepare { _, status in
@@ -94,14 +97,37 @@ final class ModelDownloadDeviceValidation: ModelBackgroundDownloadServiceDelegat
                         throw ValidationFailure(message: "Expected a fixture filename")
                     }
                     let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    let transcriptionStarted = Date.now
                     let output = try await engine.transcribeDetailed(audioURL: documents.appendingPathComponent(name))
+                    result["transcriptionSeconds"] = String(Date.now.timeIntervalSince(transcriptionStarted))
                     guard !output.text.isEmpty else { throw ValidationFailure(message: "Empty fixture transcript") }
                     result["transcript"] = output.text
                     result["tokenCount"] = String(output.tokens.count)
+                    if arguments.contains("--muesli-validate-streaming"), model.supportsRealtimeStreaming {
+                        try await engine.startRealtimeSession(partialTranscript: { text in
+                            print("MUESLI_STREAM_PARTIAL \(text)")
+                        })
+                        let file = try AVAudioFile(forReading: documents.appendingPathComponent(name))
+                        while file.framePosition < file.length {
+                            let frames = AVAudioFrameCount(min(4_000, file.length - file.framePosition))
+                            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else {
+                                throw ValidationFailure(message: "Cannot allocate streaming fixture buffer")
+                            }
+                            try file.read(into: buffer, frameCount: frames)
+                            try await engine.processRealtimeAudioBuffer(buffer)
+                        }
+                        let text = try await engine.finishRealtimeSession()
+                        guard !text.isEmpty else { throw ValidationFailure(message: "Empty streaming transcript") }
+                        result["streamingTranscript"] = text
+                    }
+                    // Repeat prepare must keep the ready runtime reusable, with no new download.
+                    try await engine.prepare()
+                    guard await engine.isLoaded(for: model) else { throw ValidationFailure(message: "Lost prepared runtime") }
                 }
                 await engine.unloadModel(model)
                 result["status"] = "passed"
             } catch { result["status"] = "failed"; result["error"] = error.localizedDescription }
+            display.state = result["status"] == "passed" ? .init(phase: .ready, status: "Ready", detail: "") : .init(phase: .failed, status: "Failed", detail: result["error"] ?? "")
             result["finishedAt"] = Date.now.ISO8601Format()
             results.append(result)
             write(results)
@@ -122,7 +148,8 @@ final class ModelDownloadDeviceValidation: ModelBackgroundDownloadServiceDelegat
             print("MUESLI_MODEL_VALIDATION \(String(decoding: data, as: UTF8.self))")
         }
     }
-    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String) {
+    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String, transfer: ModelDownloadProgressSnapshot?) {
+        Self.display.state = .init(phase: .downloading, progress: progress, status: "Downloading", detail: detail, transfer: transfer)
         let percent = Int(progress * 10) * 10
         if percent != lastPercent { lastPercent = percent; print("MUESLI_MODEL_DOWNLOAD \(model.rawValue) \(detail)") }
     }
@@ -131,6 +158,21 @@ final class ModelDownloadDeviceValidation: ModelBackgroundDownloadServiceDelegat
     private struct ValidationFailure: LocalizedError {
         let message: String
         var errorDescription: String? { message }
+    }
+}
+
+@MainActor @Observable
+final class ModelValidationDisplay {
+    var model: LocalTranscriptionModel = .defaultModel
+    var state = ModelPreparationState()
+}
+
+struct ModelValidationProgressView: View {
+    private var display: ModelValidationDisplay { ModelDownloadDeviceValidation.display }
+    var body: some View {
+        ModelReadinessView(state: display.state, modelName: display.model.displayName, retry: nil)
+            .padding(.horizontal, MuesliTheme.spacing16)
+            .padding(.vertical, MuesliTheme.spacing4)
     }
 }
 #endif

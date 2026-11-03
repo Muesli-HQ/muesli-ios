@@ -40,7 +40,6 @@ struct DictationView: View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-                    header
                     Button { showsInsights = true } label: { homeStatsRow }
                         .buttonStyle(.plain)
                         .accessibilityHint("Opens activity insights")
@@ -197,24 +196,6 @@ struct DictationView: View {
         .accessibilityLabel(
             "\(sourceFilter.title) stats: \(stats.streak) day streak, \(stats.words) words, \(stats.wpm) words per minute, \(stats.meetings) meetings"
         )
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-            HStack(spacing: MuesliTheme.spacing12) {
-                Image("MuesliAppIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 42, height: 42)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    .shadow(color: MuesliTheme.accent.opacity(0.24), radius: 8, x: 0, y: 3)
-                    .accessibilityHidden(true)
-                Text("muesli")
-                    .font(MuesliTheme.title2())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-            }
-
-        }
     }
 
     private func updateDashboardStats() {

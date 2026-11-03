@@ -120,19 +120,8 @@ struct RootView: View {
                         .padding(.top, MuesliTheme.spacing4)
                         .background(MuesliTheme.backgroundBase)
                 }
-                .overlay(alignment: .topTrailing) {
-                    Button(action: openDrawer) {
-                        Image(systemName: "sidebar.leading")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                            .frame(width: 44, height: 44)
-                            .muesliGlassButton(cornerRadius: 22, tint: currentAccent)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, MuesliTheme.spacing20)
-                    .padding(.top, MuesliTheme.spacing24)
-                    .opacity(isDrawerOpen ? 0 : 1)
-                    .accessibilityLabel("Open sidebar")
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    compactHeader
                 }
                 .overlay {
                     CompactSidebarOverlay(
@@ -145,6 +134,43 @@ struct RootView: View {
                 .contentShape(Rectangle())
             }
         }
+    }
+
+    private var compactHeader: some View {
+        ZStack {
+            HStack(spacing: MuesliTheme.spacing8) {
+                Image("MuesliAppIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 34, height: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Text("muesli")
+                    .font(MuesliTheme.title2())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("muesli")
+            .padding(.horizontal, 52)
+            .frame(maxWidth: .infinity)
+
+            HStack {
+                Button(action: openDrawer) {
+                    Image(systemName: "sidebar.leading")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .muesliGlassButton(cornerRadius: 22, tint: currentAccent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open sidebar")
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, MuesliTheme.spacing20)
+        .padding(.vertical, MuesliTheme.spacing8)
+        .background(MuesliTheme.backgroundBase)
     }
 
     private var pinnedSections: [AppSection] {

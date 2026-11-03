@@ -278,12 +278,14 @@ struct TranscriptionModelLogo: View {
         Group {
             if model.family == .apple {
                 Image(systemName: "apple.logo").font(.title2)
-            } else if model.family == .parakeet {
+            } else if model.family == .parakeet || model.family == .nemotron {
                 Image("NvidiaLogo")
                     .resizable()
                     .scaledToFit()
                     .padding(4)
                     .background(.white)
+            } else if model.family == .phonon {
+                Image(systemName: "waveform").font(.title2)
             } else {
                 OpenAILogoShape()
                     .fill(MuesliTheme.textPrimary)

@@ -14,6 +14,8 @@ struct ModelPreparationState: Equatable {
     var status = "\(LocalTranscriptionModel.defaultModel.shortName) is not downloaded"
     var detail = LocalTranscriptionModel.defaultModel.detail
 
+    var transfer: ModelDownloadProgressSnapshot?
+
     var isPreparing: Bool {
         phase == .downloading || phase == .preparing
     }

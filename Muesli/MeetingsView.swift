@@ -189,17 +189,6 @@ struct MeetingsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            HStack(spacing: MuesliTheme.spacing8) {
-                Image("MuesliAppIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 26, height: 26)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                Text("muesli")
-                    .font(MuesliTheme.headline())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-            }
-
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                 Text("Meetings")
                     .font(.system(.largeTitle, design: .default, weight: .bold))

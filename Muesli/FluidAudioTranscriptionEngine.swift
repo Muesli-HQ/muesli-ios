@@ -19,6 +19,8 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
     }
 
     private var appleRuntime: Any?
+    private var nemotronManager: StreamingNemotronMultilingualAsrManager?
+    private var isLoadingNemotron = false
     private var unifiedManager: UnifiedAsrManager?
     private var isLoadingUnified = false
     private var modelGeneration = UUID()
@@ -38,6 +40,8 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         selectedModel = model
         modelGeneration = UUID()
         appleRuntime = nil
+        nemotronManager = nil
+        isLoadingNemotron = false
         unifiedManager = nil
         isLoadingUnified = false
         manager = nil
@@ -54,6 +58,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         guard selectedModel == model else { return false }
         if model == .appleSpeech { return appleRuntime != nil }
         if model == .parakeetUnified { return unifiedManager != nil }
+        if model == .nemotron35 { return nemotronManager != nil }
         if model.family == .whisper {
             return loadedWhisperModel == model && whisperRuntime != nil
         }
@@ -70,6 +75,8 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         }
         modelGeneration = UUID()
         appleRuntime = nil
+        nemotronManager = nil
+        isLoadingNemotron = false
         unifiedManager = nil
         isLoadingUnified = false
         manager = nil
@@ -94,7 +101,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             }
             throw CocoaError(.featureUnsupported)
         }
-        if selectedModel == .parakeetUnified {
+        if selectedModel == .nemotron35 {
+            _ = try await loadedNemotronManager(progress: progress)
+        } else if selectedModel == .parakeetUnified {
             _ = try await loadedUnifiedManager(progress: progress)
         } else if selectedModel.family == .whisper {
             _ = try await loadedWhisperRuntime(progress: progress)
@@ -142,6 +151,9 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
                                          endTime: $0.endTime, confidence: $0.confidence)
                 }
             )
+        }
+        if selectedModel == .nemotron35 {
+            return try await transcribeWithNemotron(audioURL: audioURL, progress: progress)
         }
         if selectedModel.family == .whisper {
             return try await transcribeWithWhisperKit(audioURL: audioURL, progress: progress)
@@ -195,6 +207,12 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         endOfUtterance: (@Sendable (String) -> Void)? = nil,
         progress: (@Sendable (Double, String?) -> Void)? = nil
     ) async throws {
+        if selectedModel == .nemotron35 {
+            let manager = try await loadedNemotronManager(progress: progress)
+            await manager.reset()
+            await manager.setPartialCallback(partialTranscript ?? { _ in })
+            return
+        }
         let manager = try await loadedStreamingManager(progress: progress)
         await manager.reset()
         if let partialTranscript {
@@ -207,11 +225,20 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
 
     func processRealtimeAudioBuffer(_ buffer: AVAudioPCMBuffer) async throws {
         guard selectedModel.supportsRealtimeStreaming else { return }
+        if selectedModel == .nemotron35 {
+            let manager = try await loadedNemotronManager(progress: nil)
+            _ = try await manager.process(audioBuffer: buffer)
+            return
+        }
         let manager = try await loadedStreamingManager(progress: nil)
         _ = try await manager.process(audioBuffer: buffer)
     }
 
     func finishRealtimeSession() async throws -> String {
+        if selectedModel == .nemotron35 {
+            let manager = try await loadedNemotronManager(progress: nil)
+            return try await manager.finish().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         guard selectedModel.supportsRealtimeStreaming else {
             throw TranscriptionEngineError.unsupportedStreamingModel(selectedModel.shortName)
         }
@@ -230,6 +257,57 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
                 qualityScore: $0.qualityScore
             )
         }
+    }
+
+    // Uses the same multilingual/2240ms artifact layout as macOS Nemotron35ModelStore.
+    // FluidAudio's native streaming manager also supplies token timings for iOS meetings.
+    private func loadedNemotronManager(progress: (@Sendable (Double, String?) -> Void)?) async throws -> StreamingNemotronMultilingualAsrManager {
+        let generation = modelGeneration
+        while isLoadingNemotron {
+            try await Task.sleep(for: .milliseconds(150))
+            guard generation == modelGeneration else { throw CancellationError() }
+        }
+        try Task.checkCancellation()
+        guard selectedModel == .nemotron35, generation == modelGeneration else { throw CancellationError() }
+        if let nemotronManager { return nemotronManager }
+        isLoadingNemotron = true
+        defer { if generation == modelGeneration { isLoadingNemotron = false } }
+        let directory = try localModelDirectory(for: .nemotron35)
+        progress?(0.9, "Loading downloaded model...")
+        let manager = StreamingNemotronMultilingualAsrManager()
+        try await manager.loadModels(from: directory)
+        try Task.checkCancellation()
+        guard generation == modelGeneration else { throw CancellationError() }
+        nemotronManager = manager
+        progress?(1, "Nemotron 3.5 ready")
+        return manager
+    }
+
+    private func transcribeWithNemotron(audioURL: URL,
+        progress: (@Sendable (TranscriptionProgressUpdate) -> Void)?) async throws -> DetailedTranscriptionResult {
+        let manager = try await loadedNemotronManager { fraction, message in
+            progress?(.init(fractionCompleted: fraction, message: message))
+        }
+        await manager.reset()
+        await manager.setPartialCallback { _ in }
+        let file = try AVAudioFile(forReading: audioURL)
+        let duration = Double(file.length) / file.processingFormat.sampleRate
+        while file.framePosition < file.length {
+            try Task.checkCancellation()
+            let frames = AVAudioFrameCount(min(16_000, file.length - file.framePosition))
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            try file.read(into: buffer, frameCount: frames)
+            guard buffer.frameLength > 0 else { break }
+            _ = try await manager.process(audioBuffer: buffer)
+            progress?(.init(fractionCompleted: Double(file.framePosition) / Double(max(file.length, 1)), message: "Transcribing"))
+        }
+        try Task.checkCancellation()
+        let result = try await manager.finishWithTokenTimings()
+        try Task.checkCancellation()
+        return DetailedTranscriptionResult(text: result.text.trimmingCharacters(in: .whitespacesAndNewlines), duration: duration,
+            tokens: result.timings.map { TimedTranscriptToken(token: $0.token, startTime: $0.startTime, endTime: $0.endTime, confidence: $0.confidence) })
     }
 
     private func loadedUnifiedManager(progress: (@Sendable (Double, String?) -> Void)?) async throws -> UnifiedAsrManager {
@@ -256,22 +334,24 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         return manager
     }
 
-    private func loadedManager(progress: (@Sendable (Double, String?) -> Void)?) async throws -> AsrManager {
-        if let manager {
-            return manager
-        }
+    // Redux avoids its unsupported 2-bit ANE path, as on macOS. Phonon uses
+    // CPU on iPhone: macOS's GPU warmup was terminated on-device, and GPU
+    // inference is unavailable when dictating from the keyboard in another app.
+    static func encoderComputeUnits(for model: LocalTranscriptionModel) -> MLComputeUnits? {
+        model == .parakeetRedux || model == .phonon25 ? .cpuOnly : nil
+    }
 
+    private func loadedManager(progress: (@Sendable (Double, String?) -> Void)?) async throws -> AsrManager {
+        let generation = modelGeneration
         while isLoadingManager {
             try await Task.sleep(for: .milliseconds(150))
-            if let manager {
-                return manager
-            }
+            guard generation == modelGeneration else { throw CancellationError() }
         }
-
+        try Task.checkCancellation()
+        guard generation == modelGeneration else { throw CancellationError() }
+        if let manager { return manager }
         isLoadingManager = true
-        defer {
-            isLoadingManager = false
-        }
+        defer { if generation == modelGeneration { isLoadingManager = false } }
 
         let model = selectedModel
         guard let asrVersion = model.asrVersion else {
@@ -279,7 +359,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         }
         let modelDirectory = try localModelDirectory(for: model)
         progress?(0.88, "Loading downloaded model...")
-        let models = try await Self.loadLocalAsrModels(from: modelDirectory, version: asrVersion)
+        let models = try await Self.loadLocalAsrModels(from: modelDirectory, version: asrVersion, encoderComputeUnits: Self.encoderComputeUnits(for: model))
         progress?(1.0, "Preparing model for this iPhone...")
         let manager = AsrManager(config: .default)
         let loadHeartbeat = Self.modelLoadHeartbeatTask(
@@ -290,6 +370,13 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             loadHeartbeat?.cancel()
         }
         try await manager.loadModels(models)
+        // Match macOS's readiness contract: complete the first inference before recording.
+        if model == .phonon25 {
+            var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+            _ = try await manager.transcribe([Float](repeating: 0, count: 16_000), decoderState: &state)
+        }
+        try Task.checkCancellation()
+        guard generation == modelGeneration else { throw CancellationError() }
         self.manager = manager
         progress?(1.0, "\(model.shortName) ready")
         return manager
@@ -378,7 +465,8 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
 
     private static func loadLocalAsrModels(
         from directory: URL,
-        version: AsrModelVersion
+        version: AsrModelVersion,
+        encoderComputeUnits: MLComputeUnits? = nil
     ) async throws -> AsrModels {
         let preprocessorFile: String
         let encoderFile: String?
@@ -390,7 +478,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             encoderFile = nil
             decoderFile = ModelNames.ASR.decoderFile
             jointFile = ModelNames.ASR.jointFile
-        case .v3:
+        case .v3, .redux:
             preprocessorFile = ModelNames.ASR.preprocessorFile
             encoderFile = ModelNames.ASR.encoderFile
             decoderFile = ModelNames.ASR.decoderFile
@@ -407,11 +495,13 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             contentsOf: directory.appendingPathComponent(preprocessorFile),
             configuration: preprocessorConfiguration
         )
+        let encoderConfiguration = MLModelConfiguration()
+        encoderConfiguration.computeUnits = encoderComputeUnits ?? defaultConfiguration.computeUnits
         let encoder: MLModel?
         if let encoderFile {
             encoder = try await MLModel.load(
                 contentsOf: directory.appendingPathComponent(encoderFile),
-                configuration: defaultConfiguration
+                configuration: encoderConfiguration
             )
         } else {
             encoder = nil

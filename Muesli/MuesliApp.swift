@@ -34,6 +34,14 @@ struct MuesliApp: App {
                 RootView(coordinator: coordinator)
                 #endif
             }
+                #if DEBUG
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if Bundle.main.bundleIdentifier == "com.phequals7.muesli.ios.dev",
+                       ProcessInfo.processInfo.arguments.contains("--muesli-validate-models") {
+                        ModelValidationProgressView()
+                    }
+                }
+                #endif
                 .task {
                     #if DEBUG
                     await ModelDownloadDeviceValidation.runIfRequested()

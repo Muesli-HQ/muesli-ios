@@ -7,6 +7,9 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
     case parakeetTdtCtc110m = "parakeet-tdt-ctc-110m"
     case parakeetRealtimeEou120m = "parakeet-realtime-eou-120m"
     case parakeetV3 = "parakeet-v3"
+    case parakeetRedux = "parakeet-redux"
+    case phonon25 = "phonon-2.5"
+    case nemotron35 = "nemotron-3.5"
     case parakeetUnified = "parakeet-unified"
     case whisperTinyEnglish = "whisper-tiny-en"
     case whisperSmallEnglish = "whisper-small-en"
@@ -17,6 +20,9 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var displayName: String {
         switch self {
+        case .parakeetRedux: "Parakeet Redux"
+        case .phonon25: "Phonon-2.5"
+        case .nemotron35: "Nemotron 3.5"
         case .appleSpeech: "Apple Speech"
         case .parakeetUnified:
             "Parakeet Unified"
@@ -39,6 +45,9 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var shortName: String {
         switch self {
+        case .parakeetRedux: "Parakeet Redux"
+        case .phonon25: "Phonon-2.5"
+        case .nemotron35: "Nemotron 3.5"
         case .appleSpeech: "Apple Speech"
         case .parakeetUnified:
             "Parakeet Unified"
@@ -71,6 +80,9 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var detail: String {
         switch self {
+        case .parakeetRedux: "Compact multilingual transcription in 25 languages."
+        case .phonon25: "Multilingual transcription with a smaller download."
+        case .nemotron35: "Live multilingual transcription with automatic language detection."
         case .appleSpeech: "Private, on-device transcription in your iPhone’s language. Language assets are managed by iOS."
         case .parakeetUnified:
             "English transcription with punctuation and capitalization. Results appear after recording."
@@ -93,6 +105,8 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var capabilityLabel: String {
         switch self {
+        case .parakeetRedux, .phonon25: "Multilingual"
+        case .nemotron35: "Multilingual realtime"
         case .appleSpeech: Locale.current.localizedString(forIdentifier: Locale.current.identifier) ?? Locale.current.identifier
         case .parakeetUnified:
             "English only"
@@ -111,6 +125,9 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var estimatedSizeLabel: String {
         switch self {
+        case .parakeetRedux: "~220 MB"
+        case .phonon25: "~290 MB"
+        case .nemotron35: "~665 MB"
         case .appleSpeech: "Managed by iOS"
         case .parakeetUnified:
             "~614 MB"
@@ -133,6 +150,9 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var engineIdentifier: String {
         switch self {
+        case .parakeetRedux: "parakeet-redux"
+        case .phonon25: "phonon-2.5"
+        case .nemotron35: "nemotron-3.5"
         case .appleSpeech: "apple-speech"
         case .parakeetUnified:
             "parakeet-unified"
@@ -155,6 +175,9 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var asrVersion: AsrModelVersion? {
         switch self {
+        case .parakeetRedux: .redux
+        case .phonon25: .v3
+        case .nemotron35: nil
         case .appleSpeech: nil
         case .parakeetUnified:
             nil
@@ -171,6 +194,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var streamingVariant: StreamingModelVariant? {
         switch self {
+        case .parakeetRedux, .phonon25, .nemotron35: nil
         case .appleSpeech: nil
         case .parakeetRealtimeEou120m:
             .parakeetEou320ms
@@ -181,11 +205,14 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
     }
 
     var supportsRealtimeStreaming: Bool {
-        streamingVariant != nil
+        self == .nemotron35 || streamingVariant != nil
     }
 
     var family: LocalTranscriptionModelFamily {
         switch self {
+        case .parakeetRedux: .parakeet
+        case .phonon25: .phonon
+        case .nemotron35: .nemotron
         case .appleSpeech: .apple
         case .parakeetUnified, .parakeetTdtCtc110m, .parakeetRealtimeEou120m, .parakeetV3:
             .parakeet
@@ -196,6 +223,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
     var whisperVariant: String? {
         switch self {
+        case .parakeetRedux, .phonon25, .nemotron35: nil
         case .appleSpeech: nil
         case .whisperTinyEnglish:
             "tiny.en"
@@ -216,6 +244,10 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
     }
 
     var isAvailable: Bool {
+        if self == .parakeetRedux || self == .phonon25 || self == .nemotron35 {
+            if #available(iOS 18, *) { return true }
+            return false
+        }
         if self != .appleSpeech { return true }
         if #available(iOS 26, *) { return SpeechTranscriber.isAvailable }
         return false
@@ -230,6 +262,8 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Codable, Senda
 
 enum LocalTranscriptionModelFamily: String, CaseIterable, Identifiable {
     case parakeet
+    case phonon
+    case nemotron
     case whisper
     case apple
 
@@ -237,6 +271,8 @@ enum LocalTranscriptionModelFamily: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .phonon: "Phonon"
+        case .nemotron: "Nemotron"
         case .parakeet:
             "Parakeet"
         case .apple: "Apple"
@@ -248,7 +284,9 @@ enum LocalTranscriptionModelFamily: String, CaseIterable, Identifiable {
     var models: [LocalTranscriptionModel] {
         switch self {
         case .parakeet:
-            LocalTranscriptionModel.parakeetModels
+            LocalTranscriptionModel.parakeetModels.filter(\.isAvailable)
+        case .phonon: LocalTranscriptionModel.availableModels.filter { $0.family == .phonon }
+        case .nemotron: LocalTranscriptionModel.availableModels.filter { $0.family == .nemotron }
         case .apple: LocalTranscriptionModel.availableModels.filter { $0.family == .apple }
         case .whisper:
             LocalTranscriptionModel.whisperModels

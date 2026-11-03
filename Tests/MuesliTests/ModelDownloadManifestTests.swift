@@ -7,6 +7,64 @@ import XCTest
 #endif
 
 final class ModelDownloadManifestTests: XCTestCase {
+    func testNewModelsUseIsolatedVerifiedDownloadPlans() throws {
+        let redux = try XCTUnwrap(ModelDownloadSpec(model: .parakeetRedux))
+        let phonon = try XCTUnwrap(ModelDownloadSpec(model: .phonon25))
+        let nemotron = try XCTUnwrap(ModelDownloadSpec(model: .nemotron35))
+        XCTAssertEqual(redux.remotePath, "FluidInference/parakeet-redux-coreml")
+        XCTAssertEqual(phonon.remotePath, "Muesli-HQ/phonon-2.5-coreml")
+        XCTAssertEqual(phonon.revision, "a042ef89966d289df295709b58ffdabb50bd2510")
+        XCTAssertEqual(nemotron.subPath, "multilingual/2240ms")
+        XCTAssertEqual(Set([redux.repoRoot, phonon.repoRoot, nemotron.repoRoot]).count, 3)
+        XCTAssertTrue(redux.requiredModels.contains("Encoder.mlmodelc"))
+        XCTAssertTrue(phonon.requiredModels.contains("JointDecisionv3.mlmodelc"))
+        XCTAssertEqual(nemotron.requiredSupportingFiles, ["metadata.json", "tokenizer.json"])
+        XCTAssertTrue(nemotron.shouldDownloadFile("multilingual/2240ms/encoder.mlmodelc/weights/weight.bin"))
+        XCTAssertFalse(nemotron.shouldDownloadFile("multilingual/2240ms/decoder_joint.mlmodelc/weights/weight.bin"))
+        XCTAssertFalse(nemotron.shouldDownloadFile("latin/2240ms/encoder.mlmodelc/weights/weight.bin"))
+        XCTAssertEqual(nemotron.localPath(forRemotePath: "multilingual/2240ms/tokenizer.json"), "tokenizer.json")
+        // A partial model must never pass manifest validation / become selectable as ready.
+        for plan in [redux, phonon, nemotron] {
+            XCTAssertThrowsError(try ModelDownloadManifest.validateCoverage([], spec: plan))
+        }
+    }
+
+    func testTransferETAExcludesResumedBytesAndResetsAcrossRetries() {
+        var tracker = ModelDownloadRateTracker()
+        let id = UUID()
+        let start = Date(timeIntervalSince1970: 100)
+        let initial = tracker.snapshot(id: id, bytes: 500, total: 1000, now: start)
+        XCTAssertNil(initial.estimatedSecondsRemaining)
+        let active = tracker.snapshot(id: id, bytes: 700, total: 1000, now: start.addingTimeInterval(2))
+        XCTAssertEqual(active.bytesPerSecond, 100)
+        XCTAssertEqual(active.estimatedSecondsRemaining, 3)
+        let retry = tracker.snapshot(id: id, bytes: 600, total: 1000, now: start.addingTimeInterval(3))
+        XCTAssertNil(retry.estimatedSecondsRemaining)
+        let fallback = tracker.snapshot(id: UUID(), bytes: 100, total: 2000, now: start.addingTimeInterval(4))
+        XCTAssertNil(fallback.estimatedSecondsRemaining)
+    }
+
+    func testTransferRateResetsAfterSuspensionAndClampsProgress() {
+        var tracker = ModelDownloadRateTracker()
+        let id = UUID(), start = Date(timeIntervalSince1970: 100)
+        _ = tracker.snapshot(id: id, bytes: 0, total: 1000, now: start)
+        _ = tracker.snapshot(id: id, bytes: 100, total: 1000, now: start.addingTimeInterval(2))
+        let resumed = tracker.snapshot(id: id, bytes: 500, total: 1000, now: start.addingTimeInterval(20))
+        XCTAssertNil(resumed.estimatedSecondsRemaining)
+        let finished = tracker.snapshot(id: id, bytes: 1200, total: 1000, now: start.addingTimeInterval(22))
+        XCTAssertEqual(finished.completedBytes, 1000)
+        XCTAssertEqual(finished.estimatedSecondsRemaining, 0)
+    }
+
+    func testDownloadFormattingRejectsInvalidETAAndHandlesSlowTransfers() {
+        XCTAssertNil(ModelDownloadDisplayFormatting.eta(.infinity))
+        XCTAssertNil(ModelDownloadDisplayFormatting.eta(-1))
+        XCTAssertNil(ModelDownloadDisplayFormatting.eta(Double.greatestFiniteMagnitude))
+        XCTAssertEqual(ModelDownloadDisplayFormatting.eta(65), "1m 05s")
+        XCTAssertEqual(ModelDownloadDisplayFormatting.rate(50_000), "50 KB/s")
+        XCTAssertEqual(ModelDownloadDisplayFormatting.bytes(250_000_000), "250.0 MB")
+    }
+
     private let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
     private func payload() -> [String: Any] {

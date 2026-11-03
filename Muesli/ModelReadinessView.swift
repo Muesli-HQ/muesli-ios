@@ -4,7 +4,8 @@ import SwiftUI
 struct ModelReadinessView: View {
     let state: ModelPreparationState
     let modelName: String
-    let retry: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let retry: (() -> Void)?
 
     var body: some View {
         if !state.isReady {
@@ -24,12 +25,39 @@ struct ModelReadinessView: View {
                         Text(progress, format: .percent.precision(.fractionLength(0)))
                             .font(MuesliTheme.captionMedium())
                     }
-                    if state.phase == .failed {
+                    if state.phase == .failed, let retry {
                         Button("Retry", action: retry).font(MuesliTheme.captionMedium())
                     }
                 }
                 if state.phase == .downloading, let progress = state.progress {
                     ProgressView(value: progress).tint(MuesliTheme.accent)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: progress)
+                    if let transfer = state.transfer {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack {
+                                    Text("\(ModelDownloadDisplayFormatting.bytes(transfer.completedBytes)) / \(ModelDownloadDisplayFormatting.bytes(transfer.totalBytes))")
+                                    Spacer(minLength: 8)
+                                    if context.date.timeIntervalSince(transfer.updatedAt) < 10 {
+                                        Text(ModelDownloadDisplayFormatting.rate(transfer.bytesPerSecond))
+                                    }
+                                }
+                                if transfer.completedBytes >= transfer.totalBytes {
+                                    Text("Checking download…")
+                                } else if context.date.timeIntervalSince(transfer.updatedAt) >= 10 {
+                                    Text("Waiting for download…")
+                                } else if let seconds = transfer.estimatedSecondsRemaining,
+                                          let eta = ModelDownloadDisplayFormatting.eta(seconds) {
+                                    Text("About \(eta) remaining")
+                                } else {
+                                    Text("Estimating time remaining…")
+                                }
+                            }
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .monospacedDigit()
+                        }
+                    }
                 }
                 if state.phase == .failed {
                     Text(state.detail).font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textSecondary)

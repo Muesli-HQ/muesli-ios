@@ -3,7 +3,7 @@ import Foundation
 
 @MainActor
 protocol ModelBackgroundDownloadServiceDelegate: AnyObject {
-    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String)
+    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String, transfer: ModelDownloadProgressSnapshot?)
     func modelBackgroundDownloadDidFinish(model: LocalTranscriptionModel)
     func modelBackgroundDownloadDidFail(model: LocalTranscriptionModel, message: String)
 }
@@ -14,6 +14,7 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
     @MainActor weak var delegate: ModelBackgroundDownloadServiceDelegate?
     private let stateQueue = DispatchQueue(label: "com.phequals7.muesli.model-background-download")
     private var transaction: ModelDownloadTransaction?
+    private var rateTracker = ModelDownloadRateTracker()
     private var discoveryID: UUID?
     private var discoveryModel: LocalTranscriptionModel?
     private var running: [String: Int] = [:]
@@ -299,11 +300,12 @@ final class ModelBackgroundDownloadService: NSObject, @unchecked Sendable {
         guard let tx = transaction, let model = tx.model else { return }
         let total = tx.manifest.files.reduce(Int64(0)) { $0 + $1.size }
         let bytes = tx.manifest.files.reduce(Int64(0)) { $0 + (tx.completed.contains($1.localPath) ? $1.size : min($1.size, taskBytes[$1.localPath] ?? 0)) }
-        let fraction = min(0.98, Double(bytes) / Double(max(1, total)))
+        let fraction = min(1, Double(bytes) / Double(max(1, total)))
+        let transfer = rateTracker.snapshot(id: tx.id, bytes: bytes, total: total)
         let source = tx.manifest.source == .mirror ? "Muesli mirror" : "Hugging Face"
         Task { @MainActor in
             self.delegate?.modelBackgroundDownloadDidUpdate(model: model, progress: fraction,
-                detail: "\(Int(fraction * 100))% downloaded · \(source)")
+                detail: "\(Int(fraction * 100))% downloaded · \(source)", transfer: transfer)
         }
     }
 
@@ -654,6 +656,18 @@ struct ModelDownloadSpec: Sendable {
                 "parakeet-tdt-ctc-110m",
                 isDirectory: true
             )
+        case .parakeetRedux, .phonon25:
+            remotePath = model == .parakeetRedux ? "FluidInference/parakeet-redux-coreml" : "Muesli-HQ/phonon-2.5-coreml"
+            subPath = nil
+            requiredModels = ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc"]
+            requiredSupportingFiles = ["parakeet_vocab.json"]
+            repoRoot = fluidAudioModelsRoot.appendingPathComponent(model.rawValue, isDirectory: true)
+        case .nemotron35:
+            remotePath = "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML"
+            subPath = "multilingual/2240ms"
+            requiredModels = ["encoder.mlmodelc", "decoder.mlmodelc", "joint.mlmodelc", "preprocessor.mlmodelc"]
+            requiredSupportingFiles = ["metadata.json", "tokenizer.json"]
+            repoRoot = fluidAudioModelsRoot.appendingPathComponent("nemotron35-multilingual-2240ms", isDirectory: true)
         case .parakeetV3:
             remotePath = "FluidInference/parakeet-tdt-0.6b-v3-coreml"
             subPath = nil
@@ -692,6 +706,9 @@ struct ModelDownloadSpec: Sendable {
             repoRoot = WhisperKitTranscriptionRuntime.modelDirectory(for: whisperVariant)
         }
     }
+
+    // Match the macOS validated dense GPU artifact rather than a moving Phonon main.
+    var revision: String { model == .phonon25 ? "a042ef89966d289df295709b58ffdabb50bd2510" : "main" }
 
     func destinationURL(for localPath: String) -> URL {
         repoRoot.appendingPathComponent(localPath)
@@ -773,7 +790,7 @@ extension ModelBackgroundDownloadService {
 
     private static func resolveHuggingFace(spec: ModelDownloadSpec) async throws -> ModelDownloadManifest {
         // Pin discovery and file downloads to the same immutable HF revision.
-        let infoURL = URL(string: "https://huggingface.co/api/models/\(spec.remotePath)/revision/main")!
+        let infoURL = URL(string: "https://huggingface.co/api/models/\(spec.remotePath)/revision/\(spec.revision)")!
         let (infoData, infoResponse) = try await URLSession.shared.data(from: infoURL)
         try Task.checkCancellation()
         guard let http = infoResponse as? HTTPURLResponse, (200..<300).contains(http.statusCode),

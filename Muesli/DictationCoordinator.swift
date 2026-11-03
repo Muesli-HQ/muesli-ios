@@ -8100,13 +8100,14 @@ final class OfflineTranscriptionJobControl<Output: Sendable>: @unchecked Sendabl
 }
 
 extension DictationCoordinator: ModelBackgroundDownloadServiceDelegate {
-    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String) {
+    func modelBackgroundDownloadDidUpdate(model: LocalTranscriptionModel, progress: Double, detail: String, transfer: ModelDownloadProgressSnapshot?) {
         guard selectedTranscriptionModel == model else { return }
         modelPreparation = ModelPreparationState(
             phase: .downloading,
             progress: progress,
             status: "Downloading \(model.shortName)",
-            detail: detail
+            detail: detail,
+            transfer: transfer
         )
     }
 

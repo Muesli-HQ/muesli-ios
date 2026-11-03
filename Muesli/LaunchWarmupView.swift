@@ -123,9 +123,12 @@ private struct LaunchWarmupView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .shadow(color: MuesliTheme.brandBlue.opacity(0.48), radius: 24, x: 0, y: 0)
 
-            Text("muesli")
-                .font(.system(.largeTitle, design: .rounded, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.94))
+            Image("MuesliWordmarkWhite")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 150, height: 150 * 180 / 489)
+                .opacity(0.94)
+                .accessibilityHidden(true)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("muesli")

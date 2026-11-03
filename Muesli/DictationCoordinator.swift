@@ -48,6 +48,7 @@ final class DictationCoordinator {
     private var meetingRecorder: StreamingMeetingRecorder?
     private var realtimeDictationRecorder: StreamingMeetingRecorder?
     private var realtimeDictationBufferPipe: RealtimeAudioBufferPipe?
+    private var realtimeEngineSessionID: UUID?
     private var realtimeDictationProcessingTask: Task<Void, Never>?
     private var realtimeDictationChunksDirectory: URL?
     private var isRealtimeDictationSessionActive = false
@@ -4653,7 +4654,7 @@ final class DictationCoordinator {
         clearKeyboardLiveTranscript()
         if enablesRealtimeTranscription {
             await engine.selectModel(selectedTranscriptionModel)
-            try await engine.startRealtimeSession(
+            realtimeEngineSessionID = try await engine.startRealtimeSession(
                 partialTranscript: { [weak self] partial in
                     Task { @MainActor in
                         self?.updateRealtimeDictationPartial(partial)
@@ -5700,6 +5701,7 @@ final class DictationCoordinator {
                 resumeKeyboardSessionKeeperIfNeeded()
                 publishKeyboardSessionReadyIfAvailable()
                 clearPersistentKeyboardSessionRoute(for: request.id)
+                releaseRealtimeEngineSession()
                 realtimeDictationRecorder?.cancel()
                 realtimeDictationRecorder = nil
                 realtimeDictationBufferPipe?.finish()
@@ -7896,7 +7898,15 @@ final class DictationCoordinator {
         }
     }
 
+    private func releaseRealtimeEngineSession() {
+        if let token = realtimeEngineSessionID {
+            realtimeEngineSessionID = nil
+            Task { [engine] in await engine.cancelRealtimeSession(token) }
+        }
+    }
+
     private func cleanupRealtimeDictationRecorder() {
+        releaseRealtimeEngineSession()
         realtimeDictationRecorder?.cancel()
         realtimeDictationRecorder = nil
         realtimeDictationBufferPipe?.finish()

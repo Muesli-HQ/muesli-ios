@@ -234,6 +234,7 @@ targets:
     sources:
       - path: Tests/MuesliTests/AudioImportTests.swift
       - path: Tests/MuesliTests/ModelDownloadManifestTests.swift
+      - path: Tests/MuesliTests/NemotronSessionGateTests.swift
       - path: Tests/MuesliTests/ModelSetupFailureTests.swift
       - path: Tests/MuesliTests/ActionButtonDictationTests.swift
       - path: Tests/MuesliTests/SettingsModelCatalogTests.swift

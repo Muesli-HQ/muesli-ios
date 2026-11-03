@@ -20,6 +20,8 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
 
     private var appleRuntime: Any?
     private var nemotronManager: StreamingNemotronMultilingualAsrManager?
+    private let nemotronSessions = NemotronSessionGate()
+    private var realtimeNemotronSessionID: UUID?
     private var isLoadingNemotron = false
     private var unifiedManager: UnifiedAsrManager?
     private var isLoadingUnified = false
@@ -39,6 +41,8 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         let runtimeToUnload = whisperRuntime
         selectedModel = model
         modelGeneration = UUID()
+        let sessionToRelease = realtimeNemotronSessionID
+        realtimeNemotronSessionID = nil
         appleRuntime = nil
         nemotronManager = nil
         isLoadingNemotron = false
@@ -51,6 +55,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         isLoadingManager = false
         isLoadingStreamingManager = false
         isLoadingWhisperRuntime = false
+        if let sessionToRelease { await nemotronSessions.release(sessionToRelease) }
         await runtimeToUnload?.unload()
     }
 
@@ -74,6 +79,8 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
             await whisperRuntime.unload()
         }
         modelGeneration = UUID()
+        let sessionToRelease = realtimeNemotronSessionID
+        realtimeNemotronSessionID = nil
         appleRuntime = nil
         nemotronManager = nil
         isLoadingNemotron = false
@@ -86,6 +93,7 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         isLoadingManager = false
         isLoadingStreamingManager = false
         isLoadingWhisperRuntime = false
+        if let sessionToRelease { await nemotronSessions.release(sessionToRelease) }
     }
 
     func prepare(progress: (@Sendable (Double, String?) -> Void)? = nil) async throws {
@@ -202,16 +210,33 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         )
     }
 
+    @discardableResult
     func startRealtimeSession(
         partialTranscript: (@Sendable (String) -> Void)? = nil,
         endOfUtterance: (@Sendable (String) -> Void)? = nil,
         progress: (@Sendable (Double, String?) -> Void)? = nil
-    ) async throws {
+    ) async throws -> UUID? {
         if selectedModel == .nemotron35 {
-            let manager = try await loadedNemotronManager(progress: progress)
-            await manager.reset()
-            await manager.setPartialCallback(partialTranscript ?? { _ in })
-            return
+            let generation = modelGeneration
+            let token = try await nemotronSessions.acquire()
+            var beganOperation = false
+            do {
+                try await nemotronSessions.beginOperation(token)
+                beganOperation = true
+                guard generation == modelGeneration else { throw CancellationError() }
+                let manager = try await loadedNemotronManager(progress: progress)
+                await manager.reset()
+                await manager.setPartialCallback(partialTranscript ?? { _ in })
+                try Task.checkCancellation()
+                guard generation == modelGeneration else { throw CancellationError() }
+                realtimeNemotronSessionID = token
+                await nemotronSessions.endOperation(token)
+                return token
+            } catch {
+                if beganOperation { await nemotronSessions.endOperation(token) }
+                await nemotronSessions.release(token)
+                throw error
+            }
         }
         let manager = try await loadedStreamingManager(progress: progress)
         await manager.reset()
@@ -221,13 +246,25 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         if let endOfUtterance {
             await manager.setEouCallback(endOfUtterance)
         }
+        return nil
     }
 
     func processRealtimeAudioBuffer(_ buffer: AVAudioPCMBuffer) async throws {
         guard selectedModel.supportsRealtimeStreaming else { return }
         if selectedModel == .nemotron35 {
-            let manager = try await loadedNemotronManager(progress: nil)
-            _ = try await manager.process(audioBuffer: buffer)
+            guard let token = realtimeNemotronSessionID else { throw CancellationError() }
+            var beganOperation = false
+            do {
+                try await nemotronSessions.beginOperation(token)
+                beganOperation = true
+                let manager = try await loadedNemotronManager(progress: nil)
+                _ = try await manager.process(audioBuffer: buffer)
+                await nemotronSessions.endOperation(token)
+            } catch {
+                if beganOperation { await nemotronSessions.endOperation(token) }
+                await cancelRealtimeSession(token)
+                throw error
+            }
             return
         }
         let manager = try await loadedStreamingManager(progress: nil)
@@ -236,14 +273,33 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
 
     func finishRealtimeSession() async throws -> String {
         if selectedModel == .nemotron35 {
-            let manager = try await loadedNemotronManager(progress: nil)
-            return try await manager.finish().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let token = realtimeNemotronSessionID else { throw CancellationError() }
+            var beganOperation = false
+            do {
+                try await nemotronSessions.beginOperation(token)
+                beganOperation = true
+                let manager = try await loadedNemotronManager(progress: nil)
+                let text = try await manager.finish().trimmingCharacters(in: .whitespacesAndNewlines)
+                await nemotronSessions.endOperation(token)
+                await cancelRealtimeSession(token)
+                return text
+            } catch {
+                if beganOperation { await nemotronSessions.endOperation(token) }
+                await cancelRealtimeSession(token)
+                throw error
+            }
         }
         guard selectedModel.supportsRealtimeStreaming else {
             throw TranscriptionEngineError.unsupportedStreamingModel(selectedModel.shortName)
         }
         let manager = try await loadedStreamingManager(progress: nil)
         return try await manager.finish().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Token-scoped cleanup cannot release a newer recording's ownership.
+    func cancelRealtimeSession(_ token: UUID) async {
+        if realtimeNemotronSessionID == token { realtimeNemotronSessionID = nil }
+        await nemotronSessions.release(token)
     }
 
     func diarize(audioURL: URL) async throws -> [SpeakerDiarizationSegment] {
@@ -284,6 +340,21 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
     }
 
     private func transcribeWithNemotron(audioURL: URL,
+        progress: (@Sendable (TranscriptionProgressUpdate) -> Void)?) async throws -> DetailedTranscriptionResult {
+        let generation = modelGeneration
+        let token = try await nemotronSessions.acquire()
+        do {
+            guard generation == modelGeneration else { throw CancellationError() }
+            let result = try await transcribeExclusiveNemotron(audioURL: audioURL, progress: progress)
+            await nemotronSessions.release(token)
+            return result
+        } catch {
+            await nemotronSessions.release(token)
+            throw error
+        }
+    }
+
+    private func transcribeExclusiveNemotron(audioURL: URL,
         progress: (@Sendable (TranscriptionProgressUpdate) -> Void)?) async throws -> DetailedTranscriptionResult {
         let manager = try await loadedNemotronManager { fraction, message in
             progress?(.init(fractionCompleted: fraction, message: message))

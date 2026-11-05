@@ -7,9 +7,10 @@ struct InsightsSharePayload: Identifiable {
     let rangeLabel: String
 
     var message: String {
-        let notes = "\(snapshot.notes.formatted()) \(snapshot.notes == 1 ? "voice note" : "voice notes")"
-        let meetings = "\(snapshot.meetings.formatted()) \(snapshot.meetings == 1 ? "meeting" : "meetings")"
-        return "Here’s my Muesli activity (\(rangeLabel)): \(snapshot.words.formatted()) words dictated, \(notes), and \(meetings).\n\nhttps://muesli.works"
+        let introduction = snapshot.words > 0
+            ? "I’ve been turning thoughts into notes with Muesli—\(snapshot.words.formatted()) words dictated and counting."
+            : "I’m turning thoughts into notes with Muesli. Here’s my activity so far."
+        return "\(introduction)\n\n\(rangeLabel)\n\nTry thinking out loud: https://muesli.works"
     }
 }
 

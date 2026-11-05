@@ -5,6 +5,12 @@ struct InsightsSharePayload: Identifiable {
     let id = UUID()
     let snapshot: InsightsSnapshot
     let rangeLabel: String
+
+    var message: String {
+        let notes = "\(snapshot.notes.formatted()) \(snapshot.notes == 1 ? "voice note" : "voice notes")"
+        let meetings = "\(snapshot.meetings.formatted()) \(snapshot.meetings == 1 ? "meeting" : "meetings")"
+        return "Here’s my Muesli activity (\(rangeLabel)): \(snapshot.words.formatted()) words dictated, \(notes), and \(meetings).\n\nhttps://muesli.works"
+    }
 }
 
 struct InsightsShareImage: Transferable {
@@ -32,7 +38,10 @@ struct InsightsShareSheet: View {
                             .scaledToFit()
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                             .accessibilityLabel("\(payload.rangeLabel): \(payload.snapshot.words) words dictated, \(payload.snapshot.notes) voice notes, \(payload.snapshot.meetings) meetings. Current streak \(payload.snapshot.currentStreak) days; longest streak \(payload.snapshot.longestStreak) days.")
-                        ShareLink(item: export, preview: SharePreview("My Muesli activity", image: Image(uiImage: image))) {
+                        ShareLink(item: export,
+                                  subject: Text("My Muesli activity"),
+                                  message: Text(payload.message),
+                                  preview: SharePreview("My Muesli activity", image: Image(uiImage: image))) {
                             Label("Share Card", systemImage: "square.and.arrow.up")
                                 .frame(maxWidth: .infinity)
                         }

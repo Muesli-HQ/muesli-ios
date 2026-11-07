@@ -8,7 +8,7 @@ struct InsightsSharePayload: Identifiable {
 
     var message: String {
         let introduction = snapshot.words > 0
-            ? "I’ve been turning thoughts into notes with Muesli—\(snapshot.words.formatted()) words dictated and counting."
+            ? "I’ve been turning thoughts into notes with Muesli. \(snapshot.words.formatted()) words dictated and counting."
             : "I’m turning thoughts into notes with Muesli. Here’s my activity so far."
         return "\(introduction)\n\n\(rangeLabel)\n\nTry thinking out loud: https://muesli.works"
     }

@@ -38,7 +38,7 @@ struct InsightsShareSheet: View {
                             .resizable()
                             .scaledToFit()
                             .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .accessibilityLabel("\(payload.rangeLabel): \(payload.snapshot.words) words dictated, \(payload.snapshot.notes) voice notes, \(payload.snapshot.meetings) meetings. Current streak \(payload.snapshot.currentStreak) days; longest streak \(payload.snapshot.longestStreak) days.")
+                            .accessibilityLabel("\(payload.rangeLabel): \(payload.snapshot.words) words dictated, \(payload.snapshot.notes) voice notes, \(payload.snapshot.meetings) meetings. Streaks reflect all-time activity from the selected devices: current streak \(payload.snapshot.currentStreak) days; longest streak \(payload.snapshot.longestStreak) days.")
                         ShareLink(item: export,
                                   subject: Text("My Muesli activity"),
                                   message: Text(payload.message),
@@ -76,6 +76,8 @@ struct InsightsShareSheet: View {
     @MainActor
     private func render() {
         failed = false
+        image = nil
+        export = nil
         guard let rendered = InsightsShareRenderer.render(snapshot: payload.snapshot, rangeLabel: payload.rangeLabel),
               let png = rendered.pngData() else {
             failed = true
@@ -135,10 +137,15 @@ private struct InsightsShareCard: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top) {
-                    Text(rangeLabel.uppercased())
-                        .font(MuesliTheme.font(size: 14, weight: .semibold))
-                        .tracking(1.9)
-                        .foregroundStyle(pale.opacity(0.82))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(rangeLabel.uppercased())
+                            .font(MuesliTheme.font(size: 14, weight: .semibold))
+                            .tracking(1.9)
+                            .foregroundStyle(pale.opacity(0.82))
+                        Text("Streaks reflect all-time activity from selected devices.")
+                            .font(MuesliTheme.font(size: 14))
+                            .foregroundStyle(pale.opacity(0.82))
+                    }
                     Spacer()
                     MuesliShareMark(color: pale)
                         .padding(.horizontal, 14)

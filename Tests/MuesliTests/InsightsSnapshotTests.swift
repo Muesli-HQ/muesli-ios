@@ -1,7 +1,29 @@
 import XCTest
+import UIKit
 @testable import Muesli
 
 final class InsightsSnapshotTests: XCTestCase {
+    @MainActor
+    func testShareCardExportsPNGWithMacOSCardDimensions() throws {
+        let snapshot = InsightsSnapshot(history: [result(at: now, text: "one two three four")],
+                                        sessions: [], range: .thirtyDays, now: now, calendar: calendar)
+        let image = try XCTUnwrap(InsightsShareRenderer.render(snapshot: snapshot, rangeLabel: "30 days · This iPhone"))
+        let png = try XCTUnwrap(image.pngData())
+        let decoded = try XCTUnwrap(UIImage(data: png))
+        XCTAssertEqual(decoded.size.width, 1200)
+        XCTAssertEqual(decoded.size.height, 630)
+        XCTAssertEqual(Array(png.prefix(8)), [137, 80, 78, 71, 13, 10, 26, 10])
+        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+        attachment.name = "Muesli activity share card"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        #if targetEnvironment(simulator)
+        let preview = FileManager.default.temporaryDirectory.appendingPathComponent("muesli-share-card-preview.png")
+        try png.write(to: preview)
+        print("SHARE_CARD_PREVIEW: \(preview.path)")
+        #endif
+    }
+
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

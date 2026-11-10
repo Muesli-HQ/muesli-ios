@@ -6,6 +6,7 @@ struct InsightsView: View {
     let sessions: [RecordingSession]
     @State var source: DictationSourceFilter = .all
     @State private var range: InsightsRange = .ninetyDays
+    @State private var sharePayload: InsightsSharePayload?
     @State private var metric = "Words"
     @Environment(\.dismiss) private var dismiss
 
@@ -83,10 +84,13 @@ struct InsightsView: View {
             .background(MuesliTheme.backgroundBase)
             .navigationTitle("Insights")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $sharePayload) { InsightsShareSheet(payload: $0) }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .topBarLeading) {
-                    ShareLink(item: "My Muesli activity (\(range.rawValue), \(source.title)): \(data.words) words dictated, \(data.notes) voice notes, \(data.meetings) meetings, \(data.activeDays) active days.") {
+                    Button {
+                        sharePayload = InsightsSharePayload(snapshot: data, rangeLabel: "\(range.rawValue) · \(source.title)")
+                    } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .accessibilityLabel("Share activity summary")

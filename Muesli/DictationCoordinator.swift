@@ -276,7 +276,7 @@ final class DictationCoordinator {
     var recordingSessions: [RecordingSession] = [] {
         didSet { publishVoiceNoteHistoryPresentationIfNeeded() }
     }
-    private var transcriptCache: [UUID: Transcript] = [:]
+    private(set) var transcriptCache: [UUID: Transcript] = [:]
     var isMeetingRecording: Bool {
         meetingPresentationState.isCapturing
             && meetingLifecycleState.isRecording

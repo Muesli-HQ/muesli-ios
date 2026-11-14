@@ -557,6 +557,23 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(rawTranscript.waitForNonExistence(timeout: 5))
     }
 
+    func testDashboardSearchOpensMeetingFromTranscript() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-live-meeting-transcript"]
+        app.launch()
+        let search = app.buttons["dashboard.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.tap()
+        let field = app.textFields["Search notes, dictations, and meetings"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("appeared")
+        let match = app.buttons.containing(.staticText, identifier: "Live Transcript Meeting").firstMatch
+        XCTAssertTrue(match.waitForExistence(timeout: 8))
+        match.tap()
+        XCTAssertTrue(app.scrollViews["meeting.detail"].waitForExistence(timeout: 8))
+    }
+
     func testLiveMeetingDisplaysCompletedTranscriptChunksWithoutLeavingRecording() {
         let app = XCUIApplication()
         app.launchArguments = [

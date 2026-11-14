@@ -121,48 +121,8 @@ struct MeetingsView: View {
                 refreshVisibleStateIfNeeded()
             }
             .navigationDestination(for: UUID.self) { sessionID in
-                if let session = coordinator.meetingSession(id: sessionID) {
-                    MeetingSessionDetailView(
-                        session: session,
-                        transcript: coordinator.transcript(for: session),
-                        audioURL: coordinator.audioFileURL(for: session),
-                        isActiveRecording: coordinator.isActivelyRecordingMeeting(sessionID: session.id),
-                        canStopRecording: coordinator.canStopMeetingCapture(sessionID: session.id),
-                        isRecoveryNeeded: coordinator.meetingNeedsRecovery(sessionID: session.id),
-                        isProcessingCurrentMeeting: session.phase == .transcribing,
-                        liveState: coordinator.voiceNoteLiveState,
-                        statusText: coordinator.activeMeetingSessionID == session.id ? coordinator.effectiveMeetingStatusText : session.phase.title,
-                        actionStatusText: coordinator.clipboardStatusText,
-                        modelPreparation: coordinator.modelPreparation,
-                        modelName: coordinator.selectedTranscriptionModel.shortName,
-                        onPrepareModel: coordinator.prepareModel,
-                        onTranscribe: { coordinator.transcribeSession(session) },
-                        onStopRecording: { coordinator.stopCurrentMeetingRecording() },
-                        onDiscardRecording: {
-                            coordinator.cancelCurrentMeetingRecording()
-                            navigationPath.removeAll { $0 == session.id }
-                        },
-                        onCopy: { text, tab in
-                            coordinator.copyText(
-                                text,
-                                telemetryName: "meeting_\(tab.telemetryName)_copied"
-                            )
-                        },
-                        onDelete: {
-                            coordinator.deleteMeeting(session)
-                        },
-                        onDeleteAudio: {
-                            coordinator.deleteMeetingAudio(for: session)
-                        },
-                        onRename: { title in
-                            coordinator.updateMeetingTitle(sessionID: session.id, title: title)
-                        },
-                        onManualNotesChange: { notes in
-                            coordinator.updateMeetingManualNotes(sessionID: session.id, notes: notes)
-                        }
-                    )
-                } else {
-                    MeetingMissingDetailView()
+                MeetingHistoryDestination(coordinator: coordinator, sessionID: sessionID) {
+                    navigationPath.removeAll { $0 == sessionID }
                 }
             }
             .confirmationDialog(
@@ -558,6 +518,58 @@ struct MeetingsView: View {
         navigationPath.append(sessionID)
     }
 
+}
+
+struct MeetingHistoryDestination: View {
+    let coordinator: DictationCoordinator
+    let sessionID: UUID
+    let onDiscard: () -> Void
+
+    var body: some View {
+        if let session = coordinator.meetingSession(id: sessionID) {
+            MeetingSessionDetailView(
+                session: session,
+                transcript: coordinator.transcript(for: session),
+                audioURL: coordinator.audioFileURL(for: session),
+                isActiveRecording: coordinator.isActivelyRecordingMeeting(sessionID: session.id),
+                canStopRecording: coordinator.canStopMeetingCapture(sessionID: session.id),
+                isRecoveryNeeded: coordinator.meetingNeedsRecovery(sessionID: session.id),
+                isProcessingCurrentMeeting: session.phase == .transcribing,
+                liveState: coordinator.voiceNoteLiveState,
+                statusText: coordinator.activeMeetingSessionID == session.id ? coordinator.effectiveMeetingStatusText : session.phase.title,
+                actionStatusText: coordinator.clipboardStatusText,
+                modelPreparation: coordinator.modelPreparation,
+                modelName: coordinator.selectedTranscriptionModel.shortName,
+                onPrepareModel: coordinator.prepareModel,
+                onTranscribe: { coordinator.transcribeSession(session) },
+                onStopRecording: { coordinator.stopCurrentMeetingRecording() },
+                onDiscardRecording: {
+                    coordinator.cancelCurrentMeetingRecording()
+                    onDiscard()
+                },
+                onCopy: { text, tab in
+                    coordinator.copyText(
+                        text,
+                        telemetryName: "meeting_\(tab.telemetryName)_copied"
+                    )
+                },
+                onDelete: {
+                    coordinator.deleteMeeting(session)
+                },
+                onDeleteAudio: {
+                    coordinator.deleteMeetingAudio(for: session)
+                },
+                onRename: { title in
+                    coordinator.updateMeetingTitle(sessionID: session.id, title: title)
+                },
+                onManualNotesChange: { notes in
+                    coordinator.updateMeetingManualNotes(sessionID: session.id, notes: notes)
+                }
+            )
+        } else {
+            MeetingMissingDetailView()
+        }
+    }
 }
 
 private struct MeetingBrowserItem: Identifiable {

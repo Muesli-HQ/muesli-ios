@@ -1586,7 +1586,7 @@ private extension ContentSizeCategory {
     }
 }
 
-private struct DictationAudioDetailView: View {
+struct DictationAudioDetailView: View {
     let result: DictationResult
     let session: RecordingSession
     let audioURL: URL

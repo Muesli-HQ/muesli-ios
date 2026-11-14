@@ -1590,6 +1590,7 @@ struct DictationAudioDetailView: View {
     let result: DictationResult
     let session: RecordingSession
     let audioURL: URL
+    var additionalText: [String] = []
     let onCopy: () -> Void
     let onDeleteAudio: () -> Bool
 
@@ -1598,6 +1599,11 @@ struct DictationAudioDetailView: View {
     @State private var isFilesExporterPresented = false
     @State private var isDeleteAudioConfirmationPresented = false
     @State private var audioDocument: AudioFileDocument?
+
+    private var uniqueAdditionalText: [String] {
+        var seen: Set<String> = [result.text]
+        return additionalText.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
 
     var body: some View {
         ScrollView {
@@ -1695,6 +1701,11 @@ struct DictationAudioDetailView: View {
                             .foregroundStyle(result.text.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
+                        ForEach(uniqueAdditionalText, id: \.self) { text in
+                            Text(text)
+                                .font(MuesliTheme.body())
+                                .textSelection(.enabled)
+                        }
                     }
                     .padding(MuesliTheme.spacing16)
                 }

@@ -28,11 +28,13 @@ struct HistorySearchInput: Equatable, Sendable {
     let sessions: [RecordingSession]
     let transcripts: [UUID: Transcript]
 
+    var deletedResultSessionIDs = Set<UUID>()
+
     func matches() async throws -> [HistorySearchMatch] {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return [] }
         let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
-        var represented = Set<UUID>()
+        var represented = deletedResultSessionIDs
         var matches: [HistorySearchMatch] = []
 
         func append(_ id: HistoryRecordID, kind: String, title: String?, date: Date, fields: [String?]) {
@@ -51,7 +53,7 @@ struct HistorySearchInput: Equatable, Sendable {
             let session = result.sessionID.flatMap { sessionsByID[$0] }
             if let session { represented.insert(session.id) }
             append(.result(result.id), kind: result.searchKind(session: session), title: session?.title,
-                   date: result.createdAt, fields: [result.text, session?.scratchpadText, session?.manualNotes])
+                   date: result.createdAt, fields: [result.text, session?.scratchpadText, session?.manualNotes, session.flatMap { transcripts[$0.id]?.text }])
         }
         for session in sessions where session.kind == .meeting || !represented.contains(session.id) {
             try Task.checkCancellation()
@@ -75,7 +77,8 @@ struct DashboardSearchView: View {
 
     var body: some View {
         let input = HistorySearchInput(query: query, history: coordinator.dictationHistory,
-                                       sessions: coordinator.recordingSessions, transcripts: coordinator.transcriptCache)
+                                       sessions: coordinator.recordingSessions, transcripts: coordinator.transcriptCache,
+                                       deletedResultSessionIDs: coordinator.deletedResultSessionIDs)
         NavigationStack(path: $path) {
             VStack {
                 TextField("Search notes, dictations, and meetings", text: $query)
@@ -141,14 +144,15 @@ struct DashboardSearchView: View {
         case .result(let key):
             if let result = coordinator.dictationHistory.first(where: { $0.id == key }) {
                 let session = coordinator.recordingSession(for: result)
-                if let session, session.scratchpadText == nil, session.manualNotes == nil,
-                   let url = coordinator.audioFileURL(for: result) {
-                    DictationAudioDetailView(result: result, session: session, audioURL: url) {
+                let linkedText = session.flatMap { coordinator.transcript(for: $0)?.text }
+                let extraText = [session?.scratchpadText, session?.manualNotes, linkedText].compactMap { $0 }
+                if let session, session.keepsAudioRecording, let url = coordinator.audioFileURL(for: session) {
+                    DictationAudioDetailView(result: result, session: session, audioURL: url, additionalText: extraText) {
                         coordinator.copyToClipboard(result)
                     } onDeleteAudio: { coordinator.deleteDictationAudio(for: result) }
                 } else {
                     textDetail(title: session?.title ?? result.searchKind(session: session),
-                               fields: [result.text, session?.scratchpadText, session?.manualNotes])
+                               fields: [result.text] + extraText)
                 }
             } else { missing }
         }

@@ -16,6 +16,7 @@ enum SharedStoreError: Error, LocalizedError {
 }
 
 struct SharedStoreHistorySnapshot: Sendable, Equatable {
+    let deletedResultSessionIDs: Set<UUID>
     let history: [DictationResult]
     let sessions: [RecordingSession]
     let transcripts: [Transcript]
@@ -978,12 +979,28 @@ private struct SharedStoreDatabase {
         try withDatabase { db in
             try readTransaction(db: db) {
                 SharedStoreHistorySnapshot(
+                    deletedResultSessionIDs: try deletedResultSessionIDs(db: db),
                     history: try resultsHistory(db: db),
                     sessions: try recordingSessions(db: db),
                     transcripts: try transcripts(db: db)
                 )
             }
         }
+    }
+
+    private func deletedResultSessionIDs(db: OpaquePointer) throws -> Set<UUID> {
+        // Older results may identify their session only through the original request.
+        let ids = try queryRows(
+            """
+            SELECT COALESCE(r.session_id, s.id)
+            FROM result_history r
+            LEFT JOIN recording_sessions s ON r.session_id IS NULL AND r.request_id = s.request_id
+            WHERE r.deleted_at IS NOT NULL
+            """, db: db
+        ) { _ in } read: { statement in
+            sqliteColumnString(statement, 0).flatMap(UUID.init(uuidString:))
+        }
+        return Set(ids.compactMap { $0 })
     }
 
     private func resultsHistory(db: OpaquePointer) throws -> [DictationResult] {

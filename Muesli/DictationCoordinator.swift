@@ -276,6 +276,7 @@ final class DictationCoordinator {
     var recordingSessions: [RecordingSession] = [] {
         didSet { publishVoiceNoteHistoryPresentationIfNeeded() }
     }
+    private(set) var deletedResultSessionIDs = Set<UUID>()
     private(set) var transcriptCache: [UUID: Transcript] = [:]
     var isMeetingRecording: Bool {
         meetingPresentationState.isCapturing
@@ -388,7 +389,7 @@ final class DictationCoordinator {
         #if DEBUG && targetEnvironment(simulator)
         if fixtureStore == nil,
            ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing"),
-           ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform") {
+           !Set(ProcessInfo.processInfo.arguments).isDisjoint(with: ["--muesli-ui-testing-island-waveform", "--muesli-ui-testing-search-audio"]) {
             // Unsigned simulator UI tests have no app-group entitlement. The
             // Island fixture and its in-app intent dispatcher share this store.
             let directory = FileManager.default.temporaryDirectory
@@ -1776,7 +1777,21 @@ final class DictationCoordinator {
             detail: "UI testing"
         )
 
-        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
+        if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-search-audio") {
+            let request = UUID()
+            let session = RecordingSession(requestID: request, kind: .quickDictation, title: "Field recording",
+                                           phase: .completed, audioFileName: "fixture.wav", keepsAudioRecording: true,
+                                           scratchpadText: "scratchpad keyword")
+            guard let url = try? store.audioFileURL(fileName: "fixture.wav"),
+                  let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1),
+                  let audio = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600),
+                  let file = try? AVAudioFile(forWriting: url, settings: format.settings) else { return }
+            audio.frameLength = 1600
+            try? file.write(from: audio)
+            recordingSessions = [session]
+            dictationHistory = [DictationResult(requestID: request, sessionID: session.id, text: "Original words",
+                                               engineIdentifier: "local")]
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
             configureProcessingMeetingSummaryUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.liveMeetingTranscriptUITestLaunchArgument) {
             configureLiveMeetingTranscriptUITestFixture()
@@ -2744,6 +2759,7 @@ final class DictationCoordinator {
                 publishVoiceNoteHistoryPresentationIfNeeded()
             }
             reconcileMeetingRuntime(with: persistedSessions, reason: "history_refresh")
+            deletedResultSessionIDs = snapshot.deletedResultSessionIDs
             dictationHistory = snapshot.history
             recordingSessions = repairedSessions
             transcriptCache = transcriptsBySessionID(snapshot.transcripts)

@@ -14,6 +14,14 @@ private extension DictationResult {
     }
 }
 
+private func noteText(result: DictationResult?, session: RecordingSession?, transcript: Transcript?) -> [String] {
+    if let session, session.startedAsNotepad {
+        // An empty scratchpad is also an edit. The original dictation may still exist.
+        return [session.scratchpadText ?? ""]
+    }
+    return [result?.text, session?.scratchpadText, session?.manualNotes, transcript?.text].compactMap { $0 }
+}
+
 struct HistorySearchMatch: Identifiable, Sendable {
     let id: HistoryRecordID
     let kind: String
@@ -34,6 +42,9 @@ struct HistorySearchInput: Equatable, Sendable {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return [] }
         let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let sessionsByRequest = Dictionary(uniqueKeysWithValues: sessions.compactMap { session in
+            session.requestID.map { ($0, session) }
+        })
         var represented = deletedResultSessionIDs
         var matches: [HistorySearchMatch] = []
 
@@ -50,17 +61,19 @@ struct HistorySearchInput: Equatable, Sendable {
 
         for result in history {
             try Task.checkCancellation()
-            let session = result.sessionID.flatMap { sessionsByID[$0] }
+            let session = result.sessionID.flatMap { sessionsByID[$0] } ?? sessionsByRequest[result.requestID]
             if let session { represented.insert(session.id) }
             append(.result(result.id), kind: result.searchKind(session: session), title: session?.title,
-                   date: result.createdAt, fields: [result.text, session?.scratchpadText, session?.manualNotes, session.flatMap { transcripts[$0.id]?.text }])
+                   date: result.createdAt, fields: noteText(result: result, session: session, transcript: session.flatMap { transcripts[$0.id] }))
         }
         for session in sessions where session.kind == .meeting || !represented.contains(session.id) {
             try Task.checkCancellation()
             let transcript = transcripts[session.id]
             let kind = session.kind == .meeting ? "Meeting" : session.kind == .keyboardDictation ? "Dictation" : "Voice Note"
             append(.session(session.id), kind: kind, title: session.title, date: session.createdAt,
-                   fields: [session.manualNotes, session.scratchpadText, transcript?.summaryText, transcript?.text, transcript?.speakerTranscript])
+                   fields: session.kind == .meeting
+                       ? [session.manualNotes, session.scratchpadText, transcript?.summaryText, transcript?.text, transcript?.speakerTranscript]
+                       : noteText(result: nil, session: session, transcript: transcript))
         }
         return matches.sorted { $0.date > $1.date }
     }
@@ -138,21 +151,22 @@ struct DashboardSearchView: View {
                     MeetingHistoryDestination(coordinator: coordinator, sessionID: key) { path.removeAll() }
                 } else {
                     textDetail(title: session.title ?? session.kind.title,
-                               fields: [session.scratchpadText, session.manualNotes, coordinator.transcript(for: session)?.text])
+                               fields: noteText(result: nil, session: session, transcript: coordinator.transcript(for: session)))
                 }
             } else { missing }
         case .result(let key):
             if let result = coordinator.dictationHistory.first(where: { $0.id == key }) {
                 let session = coordinator.recordingSession(for: result)
-                let linkedText = session.flatMap { coordinator.transcript(for: $0)?.text }
-                let extraText = [session?.scratchpadText, session?.manualNotes, linkedText].compactMap { $0 }
+                let fields = noteText(result: result, session: session, transcript: session.flatMap { coordinator.transcript(for: $0) })
                 if let session, session.keepsAudioRecording, let url = coordinator.audioFileURL(for: session) {
-                    DictationAudioDetailView(result: result, session: session, audioURL: url, additionalText: extraText) {
-                        coordinator.copyToClipboard(result)
+                    let primaryText = fields.first ?? ""
+                    DictationAudioDetailView(text: primaryText, createdAt: result.createdAt, session: session,
+                                             audioURL: url, additionalText: Array(fields.dropFirst())) {
+                        coordinator.copyText(primaryText, telemetryName: "dictation_copied")
                     } onDeleteAudio: { coordinator.deleteDictationAudio(for: result) }
                 } else {
                     textDetail(title: session?.title ?? result.searchKind(session: session),
-                               fields: [result.text] + extraText)
+                               fields: fields)
                 }
             } else { missing }
         }

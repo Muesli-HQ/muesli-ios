@@ -992,9 +992,10 @@ private struct SharedStoreDatabase {
         // Older results may identify their session only through the original request.
         let ids = try queryRows(
             """
-            SELECT COALESCE(r.session_id, s.id)
+            SELECT COALESCE(linked.id, s.id)
             FROM result_history r
-            LEFT JOIN recording_sessions s ON r.session_id IS NULL AND r.request_id = s.request_id
+            LEFT JOIN recording_sessions linked ON linked.id = r.session_id AND linked.deleted_at IS NULL
+            LEFT JOIN recording_sessions s ON linked.id IS NULL AND r.request_id = s.request_id
             WHERE r.deleted_at IS NOT NULL
             """, db: db
         ) { _ in } read: { statement in

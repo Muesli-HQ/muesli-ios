@@ -114,7 +114,7 @@ struct DictationView: View {
                 ),
                    let session = coordinator.recordingSession(for: result),
                    let audioURL = coordinator.audioFileURL(for: result) {
-                    DictationAudioDetailView(result: result, session: session, audioURL: audioURL) {
+                    DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL) {
                         coordinator.copyToClipboard(result)
                     } onDeleteAudio: {
                         coordinator.deleteDictationAudio(for: result)
@@ -1587,7 +1587,8 @@ private extension ContentSizeCategory {
 }
 
 struct DictationAudioDetailView: View {
-    let result: DictationResult
+    let text: String
+    let createdAt: Date
     let session: RecordingSession
     let audioURL: URL
     var additionalText: [String] = []
@@ -1601,7 +1602,7 @@ struct DictationAudioDetailView: View {
     @State private var audioDocument: AudioFileDocument?
 
     private var uniqueAdditionalText: [String] {
-        var seen: Set<String> = [result.text]
+        var seen: Set<String> = [text]
         return additionalText.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
@@ -1613,7 +1614,7 @@ struct DictationAudioDetailView: View {
                         .font(MuesliTheme.title1())
                         .foregroundStyle(MuesliTheme.textPrimary)
 
-                    Text(result.createdAt, formatter: Self.dateFormatter)
+                    Text(createdAt, formatter: Self.dateFormatter)
                         .font(MuesliTheme.callout())
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
@@ -1696,9 +1697,9 @@ struct DictationAudioDetailView: View {
                             .foregroundStyle(MuesliTheme.accent)
                         }
 
-                        Text(result.text.isEmpty ? "No speech detected." : result.text)
+                        Text(text.isEmpty ? "No speech detected." : text)
                             .font(MuesliTheme.body())
-                            .foregroundStyle(result.text.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                            .foregroundStyle(text.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                         ForEach(uniqueAdditionalText, id: \.self) { text in

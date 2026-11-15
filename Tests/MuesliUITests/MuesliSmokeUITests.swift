@@ -557,7 +557,7 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(rawTranscript.waitForNonExistence(timeout: 5))
     }
 
-    func testDashboardSearchShowsSavedAudioAlongsideScratchpad() {
+    func testDashboardSearchOpensLegacyRecordingWithAudioAndScratchpad() {
         let app = XCUIApplication()
         app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-search-audio"]
         app.launch()

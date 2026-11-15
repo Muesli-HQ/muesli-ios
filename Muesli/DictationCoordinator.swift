@@ -1789,7 +1789,7 @@ final class DictationCoordinator {
             audio.frameLength = 1600
             try? file.write(from: audio)
             recordingSessions = [session]
-            dictationHistory = [DictationResult(requestID: request, sessionID: session.id, text: "Original words",
+            dictationHistory = [DictationResult(requestID: request, text: "Original words",
                                                engineIdentifier: "local")]
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
             configureProcessingMeetingSummaryUITestFixture()
@@ -3131,7 +3131,7 @@ final class DictationCoordinator {
     @discardableResult
     func deleteDictationAudio(for result: DictationResult) -> Bool {
         do {
-            guard let sessionID = result.sessionID,
+            guard let sessionID = recordingSession(for: result)?.id,
                   var session = try store.activeRecordingSession(id: sessionID),
                   let audioFileName = session.audioFileName
             else {
@@ -3758,11 +3758,15 @@ final class DictationCoordinator {
             if let cachedSession = recordingSessions.first(where: { $0.id == sessionID }) {
                 return cachedSession
             }
-            if let storedSession = try? store.activeRecordingSession(id: sessionID) {
-                return storedSession
+            if let session = try? store.activeRecordingSession(id: sessionID) {
+                return session
             }
         }
-        return nil
+        if let cachedSession = recordingSessions.first(where: { $0.requestID == result.requestID }) {
+            return cachedSession
+        }
+        guard let stored = try? store.recordingSession(requestID: result.requestID) else { return nil }
+        return try? store.activeRecordingSession(id: stored.id)
     }
 
     func meetingSession(id: UUID) -> RecordingSession? {

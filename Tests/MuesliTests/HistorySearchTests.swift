@@ -2,6 +2,39 @@ import XCTest
 @testable import Muesli
 
 final class HistorySearchTests: XCTestCase {
+    func testEditedAndClearedNotepadsNeverMatchOriginalDictation() async throws {
+        let start = Date()
+        var note = Muesli.RecordingSession(kind: .quickDictation, startedAt: start, phase: .completed,
+                                           isLongForm: true, longFormActivatedAt: start,
+                                           longFormThresholdSeconds: 60, scratchpadText: "edited document")
+        let original = Muesli.Transcript(sessionID: note.id, text: "removed phrase", engineIdentifier: "local")
+        let result = Muesli.DictationResult(requestID: UUID(), sessionID: note.id, text: original.text, engineIdentifier: "local")
+        for document in ["edited document", ""] {
+            note.scratchpadText = document
+            for history in [[result], []] {
+                let removed = HistorySearchInput(query: "removed", history: history, sessions: [note], transcripts: [note.id: original])
+                let oldHits = try await removed.matches()
+                XCTAssertTrue(oldHits.isEmpty)
+                let edited = HistorySearchInput(query: "edited", history: history, sessions: [note], transcripts: [note.id: original])
+                let hits = try await edited.matches()
+                XCTAssertEqual(hits.map(\.excerpt), document.isEmpty ? [] : [document])
+            }
+        }
+    }
+
+    func testLegacyResultLinksToRecordingByRequestAndAppearsOnce() async throws {
+        let request = UUID()
+        let session = Muesli.RecordingSession(requestID: request, kind: .keyboardDictation, title: "Project call")
+        for previousID: UUID? in [nil, UUID()] {
+            let result = Muesli.DictationResult(requestID: request, sessionID: previousID, text: "Project discussion", engineIdentifier: "local")
+            let input = HistorySearchInput(query: "project", history: [result], sessions: [session], transcripts: [:])
+            let hits = try await input.matches()
+            XCTAssertEqual(hits.map(\.id), [.result(result.id)])
+            XCTAssertEqual(hits.first?.title, session.title)
+            XCTAssertEqual(hits.first?.kind, "Dictation")
+        }
+    }
+
     func testSyncedDeletionHidesRetainedTranscriptButKeepsUnfinishedNoteSearchable() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

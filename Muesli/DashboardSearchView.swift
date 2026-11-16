@@ -150,25 +150,28 @@ struct DashboardSearchView: View {
                 if session.kind == .meeting {
                     MeetingHistoryDestination(coordinator: coordinator, sessionID: key) { path.removeAll() }
                 } else {
-                    textDetail(title: session.title ?? session.kind.title,
-                               fields: noteText(result: nil, session: session, transcript: coordinator.transcript(for: session)))
+                    noteDetail(result: nil, session: session)
                 }
             } else { missing }
         case .result(let key):
             if let result = coordinator.dictationHistory.first(where: { $0.id == key }) {
-                let session = coordinator.recordingSession(for: result)
-                let fields = noteText(result: result, session: session, transcript: session.flatMap { coordinator.transcript(for: $0) })
-                if let session, session.keepsAudioRecording, let url = coordinator.audioFileURL(for: session) {
-                    let primaryText = fields.first ?? ""
-                    DictationAudioDetailView(text: primaryText, createdAt: result.createdAt, session: session,
-                                             audioURL: url, additionalText: Array(fields.dropFirst())) {
-                        coordinator.copyText(primaryText, telemetryName: "dictation_copied")
-                    } onDeleteAudio: { coordinator.deleteDictationAudio(for: result) }
-                } else {
-                    textDetail(title: session?.title ?? result.searchKind(session: session),
-                               fields: fields)
-                }
+                noteDetail(result: result, session: coordinator.recordingSession(for: result))
             } else { missing }
+        }
+    }
+
+    @ViewBuilder
+    private func noteDetail(result: DictationResult?, session: RecordingSession?) -> some View {
+        let fields = noteText(result: result, session: session, transcript: session.flatMap { coordinator.transcript(for: $0) })
+        if let session, session.keepsAudioRecording, let url = coordinator.audioFileURL(for: session) {
+            let primaryText = fields.first(where: { !$0.isEmpty }) ?? ""
+            DictationAudioDetailView(text: primaryText, createdAt: result?.createdAt ?? session.createdAt,
+                                     session: session, audioURL: url, additionalText: fields) {
+                coordinator.copyText(primaryText, telemetryName: "dictation_copied")
+            } onDeleteAudio: { coordinator.deleteDictationAudio(sessionID: session.id) }
+        } else {
+            textDetail(title: session?.title ?? result?.searchKind(session: session) ?? session?.kind.title ?? "Voice Note",
+                       fields: fields)
         }
     }
 

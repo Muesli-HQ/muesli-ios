@@ -117,7 +117,7 @@ struct DictationView: View {
                     DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL) {
                         coordinator.copyToClipboard(result)
                     } onDeleteAudio: {
-                        coordinator.deleteDictationAudio(for: result)
+                        coordinator.deleteDictationAudio(sessionID: session.id)
                     }
                 } else {
                     DictationAudioMissingView()

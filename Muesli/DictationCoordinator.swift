@@ -1789,8 +1789,11 @@ final class DictationCoordinator {
             audio.frameLength = 1600
             try? file.write(from: audio)
             recordingSessions = [session]
-            dictationHistory = [DictationResult(requestID: request, text: "Original words",
-                                               engineIdentifier: "local")]
+            if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-session-only") {
+                cacheTranscript(Transcript(sessionID: session.id, text: "Session-only transcript", engineIdentifier: "local"))
+            } else {
+                dictationHistory = [DictationResult(requestID: request, text: "Original words", engineIdentifier: "local")]
+            }
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
             configureProcessingMeetingSummaryUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.liveMeetingTranscriptUITestLaunchArgument) {
@@ -3129,10 +3132,9 @@ final class DictationCoordinator {
     }
 
     @discardableResult
-    func deleteDictationAudio(for result: DictationResult) -> Bool {
+    func deleteDictationAudio(sessionID: UUID) -> Bool {
         do {
-            guard let sessionID = recordingSession(for: result)?.id,
-                  var session = try store.activeRecordingSession(id: sessionID),
+            guard var session = try store.activeRecordingSession(id: sessionID),
                   let audioFileName = session.audioFileName
             else {
                 clipboardStatusText = "Audio already removed"

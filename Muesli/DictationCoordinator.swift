@@ -3133,6 +3133,11 @@ final class DictationCoordinator {
 
     @discardableResult
     func deleteDictationAudio(sessionID: UUID) -> Bool {
+        guard !isCapturingVoiceNote(sessionID: sessionID) else {
+            clipboardStatusText = "Audio is in use"
+            clearClipboardStatusSoon()
+            return false
+        }
         do {
             guard var session = try store.activeRecordingSession(id: sessionID),
                   let audioFileName = session.audioFileName

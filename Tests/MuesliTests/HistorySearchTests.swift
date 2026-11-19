@@ -2,6 +2,25 @@ import XCTest
 @testable import Muesli
 
 final class HistorySearchTests: XCTestCase {
+    func testDiscardedRecordingsStayOutOfSearchWhileFailedNotesRemainRecoverable() async throws {
+        for kind: Muesli.RecordingSessionKind in [.quickDictation, .keyboardDictation, .meeting] {
+            let discarded = Muesli.RecordingSession(requestID: UUID(), kind: kind, title: "Discarded project",
+                                                    phase: .cancelled, scratchpadText: "project draft")
+            let transcript = Muesli.Transcript(sessionID: discarded.id, text: "project transcript", engineIdentifier: "local")
+            let failed = Muesli.RecordingSession(kind: kind, phase: .failed, scratchpadText: "project recovery")
+            for linkedID: UUID? in [nil, discarded.id] {
+                let result = Muesli.DictationResult(requestID: discarded.requestID!, sessionID: linkedID,
+                                                    text: "project result", engineIdentifier: "local")
+                for history in [[result], []] {
+                    let input = HistorySearchInput(query: "project", history: history, sessions: [discarded, failed],
+                                                   transcripts: [discarded.id: transcript])
+                    let hits = try await input.matches()
+                    XCTAssertEqual(hits.map(\.id), [.session(failed.id)])
+                }
+            }
+        }
+    }
+
     func testEditedAndClearedNotepadsNeverMatchOriginalDictation() async throws {
         let start = Date()
         var note = Muesli.RecordingSession(kind: .quickDictation, startedAt: start, phase: .completed,

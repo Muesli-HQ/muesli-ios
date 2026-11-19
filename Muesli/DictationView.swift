@@ -114,7 +114,7 @@ struct DictationView: View {
                 ),
                    let session = coordinator.recordingSession(for: result),
                    let audioURL = coordinator.audioFileURL(for: result) {
-                    DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL) {
+                    DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL, canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id)) {
                         coordinator.copyToClipboard(result)
                     } onDeleteAudio: {
                         coordinator.deleteDictationAudio(sessionID: session.id)
@@ -1592,6 +1592,7 @@ struct DictationAudioDetailView: View {
     let session: RecordingSession
     let audioURL: URL
     var additionalText: [String] = []
+    var canDeleteAudio = true
     let onCopy: () -> Void
     let onDeleteAudio: () -> Bool
 
@@ -1661,6 +1662,7 @@ struct DictationAudioDetailView: View {
                                     .font(MuesliTheme.captionMedium())
                             }
                             .buttonStyle(.plain)
+                            .disabled(!canDeleteAudio)
                         }
 
                         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -1729,6 +1731,7 @@ struct DictationAudioDetailView: View {
                     filesExportStatus = "Audio delete failed"
                 }
             }
+            .disabled(!canDeleteAudio)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes only the local WAV recording. The transcript and voice note stay in history.")

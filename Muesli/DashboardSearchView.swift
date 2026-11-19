@@ -62,11 +62,12 @@ struct HistorySearchInput: Equatable, Sendable {
         for result in history {
             try Task.checkCancellation()
             let session = result.sessionID.flatMap { sessionsByID[$0] } ?? sessionsByRequest[result.requestID]
+            guard session?.phase != .cancelled else { continue }
             if let session { represented.insert(session.id) }
             append(.result(result.id), kind: result.searchKind(session: session), title: session?.title,
                    date: result.createdAt, fields: noteText(result: result, session: session, transcript: session.flatMap { transcripts[$0.id] }))
         }
-        for session in sessions where session.kind == .meeting || !represented.contains(session.id) {
+        for session in sessions where session.phase != .cancelled && (session.kind == .meeting || !represented.contains(session.id)) {
             try Task.checkCancellation()
             let transcript = transcripts[session.id]
             let kind = session.kind == .meeting ? "Meeting" : session.kind == .keyboardDictation ? "Dictation" : "Voice Note"
@@ -166,7 +167,8 @@ struct DashboardSearchView: View {
         if let session, session.keepsAudioRecording, let url = coordinator.audioFileURL(for: session) {
             let primaryText = fields.first(where: { !$0.isEmpty }) ?? ""
             DictationAudioDetailView(text: primaryText, createdAt: result?.createdAt ?? session.createdAt,
-                                     session: session, audioURL: url, additionalText: fields) {
+                                     session: session, audioURL: url, additionalText: fields,
+                                     canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id)) {
                 coordinator.copyText(primaryText, telemetryName: "dictation_copied")
             } onDeleteAudio: { coordinator.deleteDictationAudio(sessionID: session.id) }
         } else {

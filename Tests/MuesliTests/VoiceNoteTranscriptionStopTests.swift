@@ -78,6 +78,41 @@ final class VoiceNoteTranscriptionStopTests: XCTestCase {
         XCTAssertFalse(calledBackend)
     }
 
+    func testAudioDeletionPreservesInFlightRetryAndAllowsDeletionAfterStop() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = StopStore(containerURL: directory)
+        let audioURL = try store.audioFileURL(fileName: "protected.wav")
+        try FileManager.default.createDirectory(at: audioURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let audio = Data("retained audio".utf8)
+        try audio.write(to: audioURL)
+        let session = StopSession(requestID: UUID(), kind: .quickDictation, phase: .failed,
+                                  audioFileName: "protected.wav", keepsAudioRecording: true, source: "app",
+                                  hasDurableAudioCheckpoint: true, protectedAudioUntilTranscriptCompletes: true)
+        try store.saveSession(session)
+        let coordinator = DictationCoordinator(store: store)
+        coordinator.modelPreparation = .init(phase: .ready, status: "Ready")
+        coordinator.retryVoiceNoteTranscription(sessionID: session.id)
+        defer { coordinator.stopVoiceNoteTranscription() }
+        XCTAssertTrue(coordinator.isCapturingVoiceNote(sessionID: session.id))
+        let before = try XCTUnwrap(store.activeRecordingSession(id: session.id))
+        XCTAssertFalse(coordinator.deleteDictationAudio(sessionID: session.id))
+        XCTAssertEqual(try Data(contentsOf: audioURL), audio)
+        let after = try XCTUnwrap(store.activeRecordingSession(id: session.id))
+        XCTAssertEqual(after.audioFileName, before.audioFileName)
+        XCTAssertEqual(after.keepsAudioRecording, before.keepsAudioRecording)
+        XCTAssertEqual(after.protectedAudioUntilTranscriptCompletes, before.protectedAudioUntilTranscriptCompletes)
+        XCTAssertEqual(after.hasDurableAudioCheckpoint, before.hasDurableAudioCheckpoint)
+        XCTAssertEqual(after.phase, before.phase)
+        coordinator.stopVoiceNoteTranscription()
+        XCTAssertFalse(coordinator.isCapturingVoiceNote(sessionID: session.id))
+        XCTAssertTrue(coordinator.deleteDictationAudio(sessionID: session.id))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL.path))
+        XCTAssertNil(try store.activeRecordingSession(id: session.id)?.audioFileName)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertNil(try store.activeRecordingSession(id: session.id)?.audioFileName)
+    }
+
     func testStopReleasesJobPreservesQuickNoteAndIgnoresLateWork() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

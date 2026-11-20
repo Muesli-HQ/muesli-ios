@@ -562,6 +562,22 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(rawTranscript.waitForNonExistence(timeout: 5))
     }
 
+    func testSearchAudioPlaybackIsDisabledDuringAnotherRecording() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-search-audio",
+                               "--muesli-ui-testing-search-during-recording"]
+        app.launch()
+        app.buttons["dashboard.search"].tap()
+        let field = app.textFields["Search notes, dictations, and meetings"]
+        field.tap()
+        field.typeText("scratchpad")
+        app.buttons.containing(.staticText, identifier: "Field recording").firstMatch.tap()
+        let play = app.buttons["Play"]
+        XCTAssertTrue(play.waitForExistence(timeout: 8))
+        XCTAssertFalse(play.isEnabled)
+        XCTAssertTrue(app.staticTexts["scratchpad keyword"].exists)
+    }
+
     func testDashboardSearchOpensRetainedAudioWithoutDictationResult() {
         let app = XCUIApplication()
         app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-search-audio", "--muesli-ui-testing-session-only"]
@@ -573,6 +589,8 @@ final class MuesliSmokeUITests: XCTestCase {
         app.buttons.containing(.staticText, identifier: "Field recording").firstMatch.tap()
         XCTAssertTrue(app.buttons["Save to Files"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["Share"].exists)
+        XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Play"].isEnabled)
         XCTAssertTrue(app.staticTexts["Session-only transcript"].exists)
     }
 

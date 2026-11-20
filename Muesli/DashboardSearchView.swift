@@ -168,7 +168,8 @@ struct DashboardSearchView: View {
             let primaryText = fields.first(where: { !$0.isEmpty }) ?? ""
             DictationAudioDetailView(text: primaryText, createdAt: result?.createdAt ?? session.createdAt,
                                      session: session, audioURL: url, additionalText: fields,
-                                     canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id)) {
+                                     canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id),
+                                     isRecording: coordinator.isRecording) {
                 coordinator.copyText(primaryText, telemetryName: "dictation_copied")
             } onDeleteAudio: { coordinator.deleteDictationAudio(sessionID: session.id) }
         } else {

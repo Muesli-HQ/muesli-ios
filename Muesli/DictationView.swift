@@ -114,7 +114,7 @@ struct DictationView: View {
                 ),
                    let session = coordinator.recordingSession(for: result),
                    let audioURL = coordinator.audioFileURL(for: result) {
-                    DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL, canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id)) {
+                    DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL, canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id), isRecording: coordinator.isRecording) {
                         coordinator.copyToClipboard(result)
                     } onDeleteAudio: {
                         coordinator.deleteDictationAudio(sessionID: session.id)
@@ -1593,6 +1593,7 @@ struct DictationAudioDetailView: View {
     let audioURL: URL
     var additionalText: [String] = []
     var canDeleteAudio = true
+    let isRecording: Bool
     let onCopy: () -> Void
     let onDeleteAudio: () -> Bool
 
@@ -1637,7 +1638,7 @@ struct DictationAudioDetailView: View {
                             }
                         }
 
-                        SavedAudioPlayerView(audioURL: audioURL)
+                        SavedAudioPlayerView(audioURL: audioURL, isRecording: isRecording)
 
                         HStack(spacing: MuesliTheme.spacing12) {
                             ShareLink(item: audioURL) {

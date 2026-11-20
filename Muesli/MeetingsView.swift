@@ -532,6 +532,7 @@ struct MeetingHistoryDestination: View {
                 transcript: coordinator.transcript(for: session),
                 audioURL: coordinator.audioFileURL(for: session),
                 isActiveRecording: coordinator.isActivelyRecordingMeeting(sessionID: session.id),
+                isRecording: coordinator.isRecording,
                 canStopRecording: coordinator.canStopMeetingCapture(sessionID: session.id),
                 isRecoveryNeeded: coordinator.meetingNeedsRecovery(sessionID: session.id),
                 isProcessingCurrentMeeting: session.phase == .transcribing,
@@ -956,6 +957,7 @@ private struct MeetingSessionDetailView: View {
     let transcript: Transcript?
     let audioURL: URL?
     let isActiveRecording: Bool
+    let isRecording: Bool
     let canStopRecording: Bool
     let isRecoveryNeeded: Bool
     let isProcessingCurrentMeeting: Bool
@@ -1378,7 +1380,7 @@ private struct MeetingSessionDetailView: View {
                         Spacer()
                     }
 
-                    SavedAudioPlayerView(audioURL: audioURL)
+                    SavedAudioPlayerView(audioURL: audioURL, isRecording: isRecording)
 
                     HStack(spacing: MuesliTheme.spacing8) {
                         Button {
@@ -2010,6 +2012,7 @@ private struct MeetingTranscriptContent: View {
 
 struct SavedAudioPlayerView: View {
     let audioURL: URL
+    let isRecording: Bool
 
     @State private var player: AVAudioPlayer?
     @State private var isPlaying = false
@@ -2043,6 +2046,7 @@ struct SavedAudioPlayerView: View {
                         .contentShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 }
                 .buttonStyle(.plain)
+                .disabled(isRecording)
 
                 Button(action: stopPlayback) {
                     Label("Stop", systemImage: "stop.fill")
@@ -2078,10 +2082,8 @@ struct SavedAudioPlayerView: View {
             samples = await AudioWaveformSampler.samples(from: audioURL, count: Self.waveformSampleCount)
             preparePlayer()
         }
-        .onAppear {
-            if player == nil {
-                preparePlayer()
-            }
+        .onChange(of: isRecording) { _, recording in
+            if recording { stopPlayback() }
         }
         .onReceive(timer) { _ in
             guard let player else { return }
@@ -2131,9 +2133,7 @@ struct SavedAudioPlayerView: View {
 
     private func preparePlayer() {
         do {
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
             let player = try AVAudioPlayer(contentsOf: audioURL)
-            player.prepareToPlay()
             self.player = player
             duration = player.duration
             currentTime = 0
@@ -2149,6 +2149,7 @@ struct SavedAudioPlayerView: View {
     }
 
     private func togglePlayback() {
+        guard !isRecording else { return }
         if player == nil {
             preparePlayer()
         }
@@ -2162,8 +2163,17 @@ struct SavedAudioPlayerView: View {
                 player.currentTime = 0
                 currentTime = 0
             }
-            player.play()
-            isPlaying = true
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
+                guard player.play() else {
+                    playbackError = "Audio playback could not start."
+                    return
+                }
+                playbackError = nil
+                isPlaying = true
+            } catch {
+                playbackError = "Audio playback could not start."
+            }
         }
     }
 

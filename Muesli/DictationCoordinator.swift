@@ -1789,6 +1789,9 @@ final class DictationCoordinator {
             audio.frameLength = 1600
             try? file.write(from: audio)
             recordingSessions = [session]
+            if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-search-during-recording") {
+                isRecording = true
+            }
             if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-session-only") {
                 cacheTranscript(Transcript(sessionID: session.id, text: "Session-only transcript", engineIdentifier: "local"))
             } else {

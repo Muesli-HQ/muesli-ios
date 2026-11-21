@@ -532,7 +532,7 @@ struct MeetingHistoryDestination: View {
                 transcript: coordinator.transcript(for: session),
                 audioURL: coordinator.audioFileURL(for: session),
                 isActiveRecording: coordinator.isActivelyRecordingMeeting(sessionID: session.id),
-                isRecording: coordinator.isRecording,
+                isRecording: coordinator.isAudioCaptureActive,
                 canStopRecording: coordinator.canStopMeetingCapture(sessionID: session.id),
                 isRecoveryNeeded: coordinator.meetingNeedsRecovery(sessionID: session.id),
                 isProcessingCurrentMeeting: session.phase == .transcribing,

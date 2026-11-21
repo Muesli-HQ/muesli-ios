@@ -805,7 +805,7 @@ struct LongVoiceNoteView: View {
                 Text("Saved Audio")
                     .font(MuesliTheme.headline())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                SavedAudioPlayerView(audioURL: audioURL, isRecording: coordinator.isRecording)
+                SavedAudioPlayerView(audioURL: audioURL, isRecording: coordinator.isAudioCaptureActive)
             }
             .padding(MuesliTheme.spacing16)
             .background(MuesliTheme.surfacePrimary)

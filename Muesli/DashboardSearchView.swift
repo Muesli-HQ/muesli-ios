@@ -169,7 +169,7 @@ struct DashboardSearchView: View {
             DictationAudioDetailView(text: primaryText, createdAt: result?.createdAt ?? session.createdAt,
                                      session: session, audioURL: url, additionalText: fields,
                                      canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id),
-                                     isRecording: coordinator.isRecording) {
+                                     isRecording: coordinator.isAudioCaptureActive) {
                 coordinator.copyText(primaryText, telemetryName: "dictation_copied")
             } onDeleteAudio: { coordinator.deleteDictationAudio(sessionID: session.id) }
         } else {

@@ -78,8 +78,20 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Transcription model"].exists)
         XCTAssertFalse(app.staticTexts["Listening"].exists)
 
-        app.buttons["Notepad"].tap()
-        XCTAssertTrue(app.staticTexts["Start Notepad"].waitForExistence(timeout: 3))
+        let notepad = app.segmentedControls["dictation.captureMode"].buttons["Notepad"]
+        XCTAssertTrue(notepad.isEnabled)
+        XCTAssertTrue(notepad.isHittable)
+        notepad.tap()
+        XCTAssertTrue(notepad.isSelected)
+        // The record control exposes its title as the button's accessibility
+        // label and intentionally hides its child text from accessibility.
+        let startNotepad = app.buttons["dictation.primaryButton"]
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND label == %@", "Start Notepad"),
+            object: startNotepad
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 3), .completed)
+        XCTAssertTrue(startNotepad.isEnabled)
     }
 
     func testSavedKeyboardVerificationSurvivesRelaunchAndCanBeReset() {
@@ -573,9 +585,16 @@ final class MuesliSmokeUITests: XCTestCase {
     }
 
     func testSearchAudioPlaybackIsDisabledDuringAnotherRecording() {
+        assertSearchAudioPlaybackDisabled(during: "--muesli-ui-testing-search-during-recording")
+    }
+
+    func testSearchAudioPlaybackIsDisabledDuringMeetingRecording() {
+        assertSearchAudioPlaybackDisabled(during: "--muesli-ui-testing-search-during-meeting")
+    }
+
+    private func assertSearchAudioPlaybackDisabled(during recordingArgument: String) {
         let app = XCUIApplication()
-        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-search-audio",
-                               "--muesli-ui-testing-search-during-recording"]
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-search-audio", recordingArgument]
         app.launch()
         app.buttons["dashboard.search"].tap()
         let field = app.textFields["Search notes, dictations, and meetings"]

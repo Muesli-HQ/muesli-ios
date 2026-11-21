@@ -114,7 +114,7 @@ struct DictationView: View {
                 ),
                    let session = coordinator.recordingSession(for: result),
                    let audioURL = coordinator.audioFileURL(for: result) {
-                    DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL, canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id), isRecording: coordinator.isRecording) {
+                    DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL, canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id), isRecording: coordinator.isAudioCaptureActive) {
                         coordinator.copyToClipboard(result)
                     } onDeleteAudio: {
                         coordinator.deleteDictationAudio(sessionID: session.id)
@@ -268,6 +268,7 @@ struct DictationView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .accessibilityIdentifier("dictation.captureMode")
                 .frame(maxWidth: 240)
                 .disabled(coordinator.isRecording || isTranscribing)
 
@@ -427,6 +428,7 @@ struct DictationView: View {
             }
             .padding(MuesliTheme.spacing16)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("dictation.recorderPanel")
     }
 

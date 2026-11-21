@@ -283,6 +283,7 @@ final class DictationCoordinator {
             && meetingLifecycleState.isRecording
             && meetingRecorder != nil
     }
+    var isAudioCaptureActive: Bool { isRecording || isMeetingRecording }
     var isMeetingTranscribing: Bool { meetingPresentationState.isProcessing }
     var activeMeetingTitle = "Untitled Meeting"
     var clipboardStatusText: String?
@@ -1791,6 +1792,9 @@ final class DictationCoordinator {
             recordingSessions = [session]
             if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-search-during-recording") {
                 isRecording = true
+            } else if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-search-during-meeting") {
+                configureLiveMeetingTranscriptUITestFixture()
+                recordingSessions.append(session)
             }
             if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-session-only") {
                 cacheTranscript(Transcript(sessionID: session.id, text: "Session-only transcript", engineIdentifier: "local"))

@@ -114,10 +114,10 @@ struct DictationView: View {
                 ),
                    let session = coordinator.recordingSession(for: result),
                    let audioURL = coordinator.audioFileURL(for: result) {
-                    DictationAudioDetailView(result: result, session: session, audioURL: audioURL) {
+                    DictationAudioDetailView(text: result.text, createdAt: result.createdAt, session: session, audioURL: audioURL, canDeleteAudio: !coordinator.isCapturingVoiceNote(sessionID: session.id), isRecording: coordinator.isRecording) {
                         coordinator.copyToClipboard(result)
                     } onDeleteAudio: {
-                        coordinator.deleteDictationAudio(for: result)
+                        coordinator.deleteDictationAudio(sessionID: session.id)
                     }
                 } else {
                     DictationAudioMissingView()
@@ -1586,10 +1586,14 @@ private extension ContentSizeCategory {
     }
 }
 
-private struct DictationAudioDetailView: View {
-    let result: DictationResult
+struct DictationAudioDetailView: View {
+    let text: String
+    let createdAt: Date
     let session: RecordingSession
     let audioURL: URL
+    var additionalText: [String] = []
+    var canDeleteAudio = true
+    let isRecording: Bool
     let onCopy: () -> Void
     let onDeleteAudio: () -> Bool
 
@@ -1599,6 +1603,11 @@ private struct DictationAudioDetailView: View {
     @State private var isDeleteAudioConfirmationPresented = false
     @State private var audioDocument: AudioFileDocument?
 
+    private var uniqueAdditionalText: [String] {
+        var seen: Set<String> = [text]
+        return additionalText.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
@@ -1607,7 +1616,7 @@ private struct DictationAudioDetailView: View {
                         .font(MuesliTheme.title1())
                         .foregroundStyle(MuesliTheme.textPrimary)
 
-                    Text(result.createdAt, formatter: Self.dateFormatter)
+                    Text(createdAt, formatter: Self.dateFormatter)
                         .font(MuesliTheme.callout())
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
@@ -1629,7 +1638,7 @@ private struct DictationAudioDetailView: View {
                             }
                         }
 
-                        SavedAudioPlayerView(audioURL: audioURL)
+                        SavedAudioPlayerView(audioURL: audioURL, isRecording: isRecording)
 
                         HStack(spacing: MuesliTheme.spacing12) {
                             ShareLink(item: audioURL) {
@@ -1654,6 +1663,7 @@ private struct DictationAudioDetailView: View {
                                     .font(MuesliTheme.captionMedium())
                             }
                             .buttonStyle(.plain)
+                            .disabled(!canDeleteAudio)
                         }
 
                         VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -1690,11 +1700,16 @@ private struct DictationAudioDetailView: View {
                             .foregroundStyle(MuesliTheme.accent)
                         }
 
-                        Text(result.text.isEmpty ? "No speech detected." : result.text)
+                        Text(text.isEmpty ? "No speech detected." : text)
                             .font(MuesliTheme.body())
-                            .foregroundStyle(result.text.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                            .foregroundStyle(text.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
+                        ForEach(uniqueAdditionalText, id: \.self) { text in
+                            Text(text)
+                                .font(MuesliTheme.body())
+                                .textSelection(.enabled)
+                        }
                     }
                     .padding(MuesliTheme.spacing16)
                 }
@@ -1717,6 +1732,7 @@ private struct DictationAudioDetailView: View {
                     filesExportStatus = "Audio delete failed"
                 }
             }
+            .disabled(!canDeleteAudio)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes only the local WAV recording. The transcript and voice note stay in history.")

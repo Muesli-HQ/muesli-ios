@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @Bindable var coordinator: DictationCoordinator
     @State private var selectedSection: AppSection = .dictations
+    @State private var showsHistorySearch = false
     @State private var isDrawerOpen = false
     @AppStorage(MuesliPreferences.appearanceModeKey) private var appearanceMode = MuesliAppearanceMode.system.rawValue
     @AppStorage(MuesliPreferences.accentThemeKey) private var accentTheme = MuesliAccentTheme.blue.rawValue
@@ -21,6 +22,7 @@ struct RootView: View {
                 KeyboardHandoffOverlay(coordinator: coordinator)
             }
         }
+        .sheet(isPresented: $showsHistorySearch) { DashboardSearchView(coordinator: coordinator) }
         .sheet(isPresented: $coordinator.isAudioImportPresented) { AudioImportView(coordinator: coordinator) }
         .onChange(of: coordinator.pendingAudioImports.map(\.id)) { _, ids in
             if !ids.isEmpty && coordinator.hasCompletedOnboarding { coordinator.isAudioImportPresented = true }
@@ -102,7 +104,10 @@ struct RootView: View {
                     Divider()
                         .background(MuesliTheme.surfaceBorder)
 
-                    sectionContent
+                    VStack(alignment: .trailing, spacing: 0) {
+                        searchButton.padding(.horizontal, MuesliTheme.spacing20)
+                        sectionContent
+                    }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .background(MuesliTheme.backgroundBase)
@@ -166,11 +171,24 @@ struct RootView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Open sidebar")
                 Spacer(minLength: 0)
+                searchButton
             }
         }
         .padding(.horizontal, MuesliTheme.spacing20)
         .padding(.vertical, MuesliTheme.spacing8)
         .background(MuesliTheme.backgroundBase)
+    }
+
+    private var searchButton: some View {
+        Button { showsHistorySearch = true } label: {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .muesliGlassButton(cornerRadius: 22, tint: currentAccent)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Search history")
+        .accessibilityIdentifier("dashboard.search")
     }
 
     private var pinnedSections: [AppSection] {

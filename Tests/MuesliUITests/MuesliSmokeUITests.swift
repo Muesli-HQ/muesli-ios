@@ -273,9 +273,19 @@ final class MuesliSmokeUITests: XCTestCase {
         ])
         let settings = app.buttons["actionButton.openSettings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8))
-        for _ in 0..<10 where !settings.isHittable { app.swipeUp() }
+        let scrollView = app.scrollViews.firstMatch
+        XCTAssertTrue(scrollView.exists)
+        // A partially clipped button can already be hittable. Scroll until its
+        // entire frame is inside the viewport before asserting accessibility.
+        for _ in 0..<10 {
+            let viewport = scrollView.frame.intersection(app.frame)
+            if settings.isHittable && viewport.contains(settings.frame) { break }
+            scrollView.swipeUp()
+        }
         XCTAssertTrue(settings.isHittable)
         XCTAssertTrue(app.buttons["Close setup"].isHittable)
+        XCTAssertTrue(scrollView.frame.intersection(app.frame).contains(settings.frame),
+                      "Open Settings must be fully visible after scrolling")
         XCTAssertLessThanOrEqual(settings.frame.maxY, app.frame.maxY)
         captureActionButton(app, name: "Muesli assignment accessibility text size")
     }

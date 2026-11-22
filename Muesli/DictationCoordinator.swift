@@ -276,12 +276,14 @@ final class DictationCoordinator {
     var recordingSessions: [RecordingSession] = [] {
         didSet { publishVoiceNoteHistoryPresentationIfNeeded() }
     }
-    private var transcriptCache: [UUID: Transcript] = [:]
+    private(set) var deletedResultSessionIDs = Set<UUID>()
+    private(set) var transcriptCache: [UUID: Transcript] = [:]
     var isMeetingRecording: Bool {
         meetingPresentationState.isCapturing
             && meetingLifecycleState.isRecording
             && meetingRecorder != nil
     }
+    var isAudioCaptureActive: Bool { isRecording || isMeetingRecording }
     var isMeetingTranscribing: Bool { meetingPresentationState.isProcessing }
     var activeMeetingTitle = "Untitled Meeting"
     var clipboardStatusText: String?
@@ -388,7 +390,7 @@ final class DictationCoordinator {
         #if DEBUG && targetEnvironment(simulator)
         if fixtureStore == nil,
            ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing"),
-           ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-island-waveform") {
+           !Set(ProcessInfo.processInfo.arguments).isDisjoint(with: ["--muesli-ui-testing-island-waveform", "--muesli-ui-testing-search-audio"]) {
             // Unsigned simulator UI tests have no app-group entitlement. The
             // Island fixture and its in-app intent dispatcher share this store.
             let directory = FileManager.default.temporaryDirectory
@@ -1776,7 +1778,30 @@ final class DictationCoordinator {
             detail: "UI testing"
         )
 
-        if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
+        if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-search-audio") {
+            let request = UUID()
+            let session = RecordingSession(requestID: request, kind: .quickDictation, title: "Field recording",
+                                           phase: .completed, audioFileName: "fixture.wav", keepsAudioRecording: true,
+                                           scratchpadText: "scratchpad keyword")
+            guard let url = try? store.audioFileURL(fileName: "fixture.wav"),
+                  let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1),
+                  let audio = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600),
+                  let file = try? AVAudioFile(forWriting: url, settings: format.settings) else { return }
+            audio.frameLength = 1600
+            try? file.write(from: audio)
+            recordingSessions = [session]
+            if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-search-during-recording") {
+                isRecording = true
+            } else if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-search-during-meeting") {
+                configureLiveMeetingTranscriptUITestFixture()
+                recordingSessions.append(session)
+            }
+            if ProcessInfo.processInfo.arguments.contains("--muesli-ui-testing-session-only") {
+                cacheTranscript(Transcript(sessionID: session.id, text: "Session-only transcript", engineIdentifier: "local"))
+            } else {
+                dictationHistory = [DictationResult(requestID: request, text: "Original words", engineIdentifier: "local")]
+            }
+        } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.processingMeetingSummaryUITestLaunchArgument) {
             configureProcessingMeetingSummaryUITestFixture()
         } else if ProcessInfo.processInfo.arguments.contains(MuesliAppConstants.liveMeetingTranscriptUITestLaunchArgument) {
             configureLiveMeetingTranscriptUITestFixture()
@@ -2744,6 +2769,7 @@ final class DictationCoordinator {
                 publishVoiceNoteHistoryPresentationIfNeeded()
             }
             reconcileMeetingRuntime(with: persistedSessions, reason: "history_refresh")
+            deletedResultSessionIDs = snapshot.deletedResultSessionIDs
             dictationHistory = snapshot.history
             recordingSessions = repairedSessions
             transcriptCache = transcriptsBySessionID(snapshot.transcripts)
@@ -3113,10 +3139,14 @@ final class DictationCoordinator {
     }
 
     @discardableResult
-    func deleteDictationAudio(for result: DictationResult) -> Bool {
+    func deleteDictationAudio(sessionID: UUID) -> Bool {
+        guard !isCapturingVoiceNote(sessionID: sessionID) else {
+            clipboardStatusText = "Audio is in use"
+            clearClipboardStatusSoon()
+            return false
+        }
         do {
-            guard let sessionID = result.sessionID,
-                  var session = try store.activeRecordingSession(id: sessionID),
+            guard var session = try store.activeRecordingSession(id: sessionID),
                   let audioFileName = session.audioFileName
             else {
                 clipboardStatusText = "Audio already removed"
@@ -3742,11 +3772,15 @@ final class DictationCoordinator {
             if let cachedSession = recordingSessions.first(where: { $0.id == sessionID }) {
                 return cachedSession
             }
-            if let storedSession = try? store.activeRecordingSession(id: sessionID) {
-                return storedSession
+            if let session = try? store.activeRecordingSession(id: sessionID) {
+                return session
             }
         }
-        return nil
+        if let cachedSession = recordingSessions.first(where: { $0.requestID == result.requestID }) {
+            return cachedSession
+        }
+        guard let stored = try? store.recordingSession(requestID: result.requestID) else { return nil }
+        return try? store.activeRecordingSession(id: stored.id)
     }
 
     func meetingSession(id: UUID) -> RecordingSession? {

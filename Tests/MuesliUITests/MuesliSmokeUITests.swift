@@ -78,8 +78,20 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Transcription model"].exists)
         XCTAssertFalse(app.staticTexts["Listening"].exists)
 
-        app.buttons["Notepad"].tap()
-        XCTAssertTrue(app.staticTexts["Start Notepad"].waitForExistence(timeout: 3))
+        let notepad = app.segmentedControls["dictation.captureMode"].buttons["Notepad"]
+        XCTAssertTrue(notepad.isEnabled)
+        XCTAssertTrue(notepad.isHittable)
+        notepad.tap()
+        XCTAssertTrue(notepad.isSelected)
+        // The record control exposes its title as the button's accessibility
+        // label and intentionally hides its child text from accessibility.
+        let startNotepad = app.buttons["dictation.primaryButton"]
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND label == %@", "Start Notepad"),
+            object: startNotepad
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 3), .completed)
+        XCTAssertTrue(startNotepad.isEnabled)
     }
 
     func testSavedKeyboardVerificationSurvivesRelaunchAndCanBeReset() {
@@ -127,13 +139,20 @@ final class MuesliSmokeUITests: XCTestCase {
                         ? app.staticTexts["islandPreview.failure"].label : "Island preview did not become ready")
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        // Activity.request succeeding does not mean SpringBoard has rendered the
-        // widget yet. CI can still show an empty island after a fixed delay.
-        let microphone = springboard.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Muesli microphone")).firstMatch
-        XCTAssertTrue(microphone.waitForExistence(timeout: 30), "Dynamic Island content did not render")
-        captureActionButton(springboard, name: "Dynamic Island speech input")
-        microphone.press(forDuration: 1)
+        // SpringBoard can expose the compact Live Activity before its widget
+        // children acquire labels. Long-press the center of the activity itself.
+        let island = springboard.otherElements.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@ AND identifier CONTAINS %@",
+                        "jindo-container-view:", "WidgetRenderer-Activities")
+        ).firstMatch
+        func expandIsland() {
+            guard island.waitForExistence(timeout: 30) else {
+                XCTFail("SpringBoard did not present the Live Activity")
+                return
+            }
+            island.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
+        }
+        expandIsland()
         XCTAssertTrue(springboard.staticTexts["Listening"].waitForExistence(timeout: 30),
                       "Dynamic Island did not expand to show Listening")
         captureActionButton(springboard, name: "Dynamic Island expanded dictation")
@@ -145,8 +164,7 @@ final class MuesliSmokeUITests: XCTestCase {
         if !transcribing.waitForExistence(timeout: 5) {
             // SpringBoard may collapse the expanded presentation after an intent.
             // Reopen it rather than waiting for expanded-only text in compact UI.
-            XCTAssertTrue(microphone.waitForExistence(timeout: 30))
-            microphone.press(forDuration: 1)
+            expandIsland()
         }
         XCTAssertTrue(transcribing.waitForExistence(timeout: 30), "Stop intent did not produce the processing state")
         XCTAssertFalse(springboard.staticTexts["Listening"].exists)
@@ -164,8 +182,7 @@ final class MuesliSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["islandPreview.copyPublished"].waitForExistence(timeout: 30),
                       "Fixture did not publish copy state before backgrounding")
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(microphone.waitForExistence(timeout: 30))
-        microphone.press(forDuration: 1)
+        expandIsland()
         let copy = springboard.buttons["Open to copy"].firstMatch
         XCTAssertTrue(copy.waitForExistence(timeout: 30), "Completed preview did not expose the copy link")
         captureActionButton(springboard, name: "Dynamic Island transcript ready to copy")
@@ -268,9 +285,19 @@ final class MuesliSmokeUITests: XCTestCase {
         ])
         let settings = app.buttons["actionButton.openSettings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8))
-        for _ in 0..<10 where !settings.isHittable { app.swipeUp() }
+        let scrollView = app.scrollViews.firstMatch
+        XCTAssertTrue(scrollView.exists)
+        // A partially clipped button can already be hittable. Scroll until its
+        // entire frame is inside the viewport before asserting accessibility.
+        for _ in 0..<10 {
+            let viewport = scrollView.frame.intersection(app.frame)
+            if settings.isHittable && viewport.contains(settings.frame) { break }
+            scrollView.swipeUp()
+        }
         XCTAssertTrue(settings.isHittable)
         XCTAssertTrue(app.buttons["Close setup"].isHittable)
+        XCTAssertTrue(scrollView.frame.intersection(app.frame).contains(settings.frame),
+                      "Open Settings must be fully visible after scrolling")
         XCTAssertLessThanOrEqual(settings.frame.maxY, app.frame.maxY)
         captureActionButton(app, name: "Muesli assignment accessibility text size")
     }
@@ -555,6 +582,76 @@ final class MuesliSmokeUITests: XCTestCase {
         finish.tap()
         XCTAssertTrue(app.staticTexts["The generated meeting summary is selected by default."].waitForExistence(timeout: 25))
         XCTAssertTrue(rawTranscript.waitForNonExistence(timeout: 5))
+    }
+
+    func testSearchAudioPlaybackIsDisabledDuringAnotherRecording() {
+        assertSearchAudioPlaybackDisabled(during: "--muesli-ui-testing-search-during-recording")
+    }
+
+    func testSearchAudioPlaybackIsDisabledDuringMeetingRecording() {
+        assertSearchAudioPlaybackDisabled(during: "--muesli-ui-testing-search-during-meeting")
+    }
+
+    private func assertSearchAudioPlaybackDisabled(during recordingArgument: String) {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-search-audio", recordingArgument]
+        app.launch()
+        app.buttons["dashboard.search"].tap()
+        let field = app.textFields["Search notes, dictations, and meetings"]
+        field.tap()
+        field.typeText("scratchpad")
+        app.buttons.containing(.staticText, identifier: "Field recording").firstMatch.tap()
+        let play = app.buttons["Play"]
+        XCTAssertTrue(play.waitForExistence(timeout: 8))
+        XCTAssertFalse(play.isEnabled)
+        XCTAssertTrue(app.staticTexts["scratchpad keyword"].exists)
+    }
+
+    func testDashboardSearchOpensRetainedAudioWithoutDictationResult() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-search-audio", "--muesli-ui-testing-session-only"]
+        app.launch()
+        app.buttons["dashboard.search"].tap()
+        let field = app.textFields["Search notes, dictations, and meetings"]
+        field.tap()
+        field.typeText("Session-only")
+        app.buttons.containing(.staticText, identifier: "Field recording").firstMatch.tap()
+        XCTAssertTrue(app.buttons["Save to Files"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Share"].exists)
+        XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Play"].isEnabled)
+        XCTAssertTrue(app.staticTexts["Session-only transcript"].exists)
+    }
+
+    func testDashboardSearchOpensLegacyRecordingWithAudioAndScratchpad() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-search-audio"]
+        app.launch()
+        app.buttons["dashboard.search"].tap()
+        let field = app.textFields["Search notes, dictations, and meetings"]
+        field.tap()
+        field.typeText("keyword")
+        app.buttons.containing(.staticText, identifier: "Field recording").firstMatch.tap()
+        XCTAssertTrue(app.buttons["Delete Audio"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["scratchpad keyword"].exists)
+        XCTAssertTrue(app.staticTexts["Original words"].exists)
+    }
+
+    func testDashboardSearchOpensMeetingFromTranscript() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--muesli-ui-testing", "--muesli-ui-testing-live-meeting-transcript"]
+        app.launch()
+        let search = app.buttons["dashboard.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.tap()
+        let field = app.textFields["Search notes, dictations, and meetings"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("appeared")
+        let match = app.buttons.containing(.staticText, identifier: "Live Transcript Meeting").firstMatch
+        XCTAssertTrue(match.waitForExistence(timeout: 8))
+        match.tap()
+        XCTAssertTrue(app.scrollViews["meeting.detail"].waitForExistence(timeout: 8))
     }
 
     func testLiveMeetingDisplaysCompletedTranscriptChunksWithoutLeavingRecording() {

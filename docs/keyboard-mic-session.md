@@ -161,3 +161,50 @@ Startup uses the normal recorder path; saved experimental preferences are no lon
 Failed recorder startup discards only that attempt's audio files. The session
 checkpoint manifest must survive retries so Stop can finalize the successful
 attempt. Full recording cancellation still removes the checkpoint directory.
+
+## In-keyboard dictation (opt-in)
+
+Settings → Input → **Dictate inside the keyboard** lets the keyboard record and
+transcribe without opening Muesli. It is off by default and stored in the App
+Group defaults (`muesli.keyboard.inKeyboardDictation.enabled`) so the keyboard
+process can read it. Enabling it requests microphone and Speech Recognition
+permission in the app after checking on-device language support. The keyboard creates its capture session only when the setting and keyboard Full Access are both enabled.
+
+Capture technique adapted from
+[stephancill/ios-keyboard-dictation](https://github.com/stephancill/ios-keyboard-dictation)
+([MIT license](../MuesliKeyboard/ios-keyboard-dictation-LICENSE.txt)). `AVAudioEngine` input inside a keyboard process tends to be invalidated
+by the host app, so `WebAudioCapture` runs `getUserMedia` in a hidden 1 pt
+`WKWebView` that stays in the keyboard's window. WebKit captures in its own
+processes and posts 16 kHz mono Int16 PCM back via a script message handler. A
+1 s native heartbeat runs during startup and recording. If the keyboard stops
+pinging for 3 s, the page releases the microphone. If startup takes more than
+5 s, the keyboard ends the attempt and offers the Muesli handoff on the next
+tap. The keyboard ignores messages from previous capture attempts.
+
+Transcription uses `SFSpeechRecognizer` with `requiresOnDeviceRecognition`, so
+audio never leaves the iPhone. Parakeet/Whisper stay in the app: they do not fit
+a keyboard extension's memory budget. Partials appear in the keyboard's live
+transcript; only the final text is inserted, after the mirrored filler-word and
+custom-dictionary settings are applied. The transcript is saved to history with
+engine `apple-speech-keyboard` and never queued for automatic delivery. The app
+refreshes that history when a new result arrives and when it returns to the
+foreground.
+
+Routing on Record:
+
+- Muesli's own mic session is running → existing runtime handoff (no app switch,
+  Muesli's local models).
+- Otherwise, in-keyboard dictation when enabled and available (Full Access,
+  both permissions, on-device support for the current locale, capture page ready).
+- Anything else → existing open-Muesli handoff. Fallback reasons are logged as
+  `inline.fallback` in the keyboard diagnostics log.
+
+During in-keyboard capture the keyboard ignores the app's shared dictation
+status, so a stale app request cannot be adopted. Dismissing the keyboard
+mid-capture releases the microphone and keeps the partial transcript in history
+instead of inserting it into a field that is gone.
+
+Device checks before release: first capture after enabling, AirPods route,
+phone call interruption, dismissal mid-capture (mic indicator must clear within
+~3 s), a locale without on-device support (must fall back), and coexistence with
+an active Muesli mic session.

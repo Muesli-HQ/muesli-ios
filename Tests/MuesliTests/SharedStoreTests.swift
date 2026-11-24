@@ -614,6 +614,45 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(command?.action, .start)
     }
 
+    @MainActor
+    func testWarmAppObservesInlineKeyboardHistoryWithoutTakingOverHandoff() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bus = Muesli.DarwinCrossProcessEventBus.shared
+        let store = Muesli.SharedStore(containerURL: directory, eventPoster: bus)
+        let writer = Muesli.SharedStore(containerURL: directory, eventPoster: bus)
+        let appResult = Muesli.DictationResult(
+            requestID: UUID(),
+            text: "App result",
+            createdAt: .distantPast,
+            engineIdentifier: "test"
+        )
+        try store.saveResult(appResult)
+        let handoff = Muesli.KeyboardHandoffState(requestID: UUID(), phase: .startRequested)
+        try store.saveKeyboardHandoffState(handoff)
+        let coordinator = DictationCoordinator(store: store, eventBus: bus)
+        XCTAssertEqual(coordinator.dictationHistory, [appResult])
+
+        await Task.yield()
+        let inlineResult = Muesli.DictationResult(
+            requestID: UUID(),
+            text: "Keyboard result",
+            engineIdentifier: "apple-speech-keyboard",
+            source: "keyboard_inline"
+        )
+        try writer.saveKeyboardInlineResult(inlineResult)
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while coordinator.dictationHistory.first != inlineResult, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(coordinator.dictationHistory, [inlineResult, appResult])
+        XCTAssertEqual(coordinator.lastTranscript, inlineResult.text)
+        XCTAssertEqual(try store.keyboardHandoffState(), handoff)
+        XCTAssertNil(try store.result(for: inlineResult.requestID))
+    }
+
     func testSharedStoreDoesNotPostWhenDatabaseMutationFails() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

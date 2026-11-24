@@ -30,6 +30,17 @@ struct DictionarySettingsContent: View {
             dictionaryPanel
         }
         .onAppear(perform: loadCustomWords)
+        .onChange(of: fillerWordRemoval) { _, _ in mirrorForKeyboard() }
+        .onChange(of: customDictionary) { _, _ in mirrorForKeyboard() }
+    }
+
+    /// In-keyboard dictation post-processes in the keyboard process, which
+    /// can only read App Group defaults.
+    private func mirrorForKeyboard() {
+        InKeyboardDictationPreferences.mirrorPostProcessing(
+            fillerWordRemoval: fillerWordRemoval,
+            customDictionary: customDictionary
+        )
     }
 
     private var header: some View {

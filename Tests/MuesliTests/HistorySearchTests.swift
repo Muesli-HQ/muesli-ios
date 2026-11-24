@@ -2,6 +2,15 @@ import XCTest
 @testable import Muesli
 
 final class HistorySearchTests: XCTestCase {
+    func testInlineKeyboardResultIsADictationWithoutARecordingSession() async throws {
+        let result = Muesli.DictationResult(requestID: UUID(), text: "Project follow-up",
+                                            engineIdentifier: "apple-speech-keyboard", source: "keyboard_inline")
+        let input = HistorySearchInput(query: "project", history: [result], sessions: [], transcripts: [:])
+        let hits = try await input.matches()
+        XCTAssertEqual(hits.map(\.id), [.result(result.id)])
+        XCTAssertEqual(hits.first?.kind, "Dictation")
+    }
+
     func testDiscardedRecordingsStayOutOfSearchWhileFailedNotesRemainRecoverable() async throws {
         for kind: Muesli.RecordingSessionKind in [.quickDictation, .keyboardDictation, .meeting] {
             let discarded = Muesli.RecordingSession(requestID: UUID(), kind: kind, title: "Discarded project",

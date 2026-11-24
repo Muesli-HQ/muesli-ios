@@ -180,23 +180,31 @@ struct KeyboardRootView: View {
                 VStack(spacing: MuesliTheme.spacing8) {
                     primaryActionButton(isProminent: true)
 
-                    if controller.canInsertLatest {
-                        Button {
-                            controller.insertLatestDictation()
-                        } label: {
-                            Label("Insert latest", systemImage: "text.insert")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(MuesliTheme.recording)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 32)
-                                .background(MuesliTheme.recording.opacity(0.14), in: Capsule())
-                                .contentShape(Capsule())
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        if controller.dictationPhase == .failed {
+                            Text(controller.statusText)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                                .lineLimit(2)
                         }
-                        .buttonStyle(.plain)
-                    } else {
-                        Color.clear
-                            .frame(height: 32)
+
+                        if controller.canInsertLatest {
+                            Button {
+                                controller.insertLatestDictation()
+                            } label: {
+                                Label("Insert latest", systemImage: "text.insert")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(MuesliTheme.recording)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 32)
+                                    .background(MuesliTheme.recording.opacity(0.14), in: Capsule())
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
+                    .frame(height: 32)
                 }
             }
         }
@@ -244,19 +252,29 @@ struct KeyboardRootView: View {
             }
             .frame(width: Self.activeStatusWidth, alignment: .leading)
 
-            ZStack {
-                MuesliInlineWaveformView(
-                    mode: controller.waveformMode,
-                    color: activeStatusColor,
-                    level: controller.waveformLevel,
-                    style: .monochrome,
-                    barCount: Self.activeWaveformBarCount,
-                    spacing: 2.2,
-                    framesPerSecond: 30,
-                    refreshDriver: .inputLevel
-                )
-                .frame(height: 24)
-                .shadow(color: activeStatusColor.opacity(0.28), radius: 8)
+            HStack(spacing: MuesliTheme.spacing4) {
+                if controller.isInKeyboardCaptureActive && controller.showsLiveTranscript {
+                    Text(controller.liveTranscript)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("keyboard.liveTranscript")
+                } else {
+                    MuesliInlineWaveformView(
+                        mode: controller.waveformMode,
+                        color: activeStatusColor,
+                        level: controller.waveformLevel,
+                        style: .monochrome,
+                        barCount: Self.activeWaveformBarCount,
+                        spacing: 2.2,
+                        framesPerSecond: 30,
+                        refreshDriver: .inputLevel
+                    )
+                    .frame(height: 24)
+                    .shadow(color: activeStatusColor.opacity(0.28), radius: 8)
+                }
 
                 if controller.dictationPhase == .transcribing {
                     ProgressView()
@@ -366,6 +384,8 @@ struct KeyboardRootView: View {
             "Transcribing"
         case .requested:
             "Starting"
+        case .recording where controller.statusText == "Starting mic":
+            "Starting"
         default:
             controller.statusText == "Stopping" ? "Stopping" : "Listening"
         }
@@ -378,7 +398,7 @@ struct KeyboardRootView: View {
     private var primaryActionTitle: String {
         switch controller.primaryButtonRole {
         case .record:
-            "Start"
+            controller.needsForegroundStart ? "Open Muesli" : "Start"
         case .stop:
             controller.statusText == "Stopping" ? "Stopping" : "Stop"
         case .openMuesliRequested:

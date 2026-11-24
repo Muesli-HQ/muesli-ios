@@ -109,6 +109,15 @@ struct SharedStore: Sendable {
         eventPoster.post(.resultChanged)
     }
 
+    /// Records a transcript produced inside the keyboard (in-keyboard
+    /// dictation) in history only. It deliberately writes no dictation status,
+    /// result pickup, or keyboard delivery: the keyboard already inserted the
+    /// text, and the app's capture state machine never owned this request.
+    func saveKeyboardInlineResult(_ result: DictationResult) throws {
+        try database().saveHistoryOnlyResult(result)
+        eventPoster.post(.resultChanged)
+    }
+
     func pendingKeyboardDeliveries() throws -> [DictationResult] {
         try database().pendingKeyboardDeliveries()
     }
@@ -879,6 +888,14 @@ private struct SharedStoreDatabase {
         try withDatabase { db in
             try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
                 try bind(key.rawValue, to: statement, at: 1)
+            }
+        }
+    }
+
+    func saveHistoryOnlyResult(_ result: DictationResult) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                try upsertResultHistory(result, db: db)
             }
         }
     }

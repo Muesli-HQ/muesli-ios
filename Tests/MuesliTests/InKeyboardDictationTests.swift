@@ -1,0 +1,320 @@
+import XCTest
+@testable import Muesli
+
+/// Drives `KeyboardController`'s in-keyboard dictation path with a fake engine,
+/// so WebKit capture and Apple Speech are out of the loop.
+@MainActor
+final class InKeyboardDictationTests: XCTestCase {
+    private var directory: URL!
+    private var store: SharedStore!
+    private var controller: KeyboardController!
+    private var engine: FakeInKeyboardDictation!
+    private var insertedText: [String] = []
+
+    override func setUp() async throws {
+        try await super.setUp()
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("in-keyboard-dictation-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let bus = BufferedEventBus()
+        store = SharedStore(containerURL: directory, eventPoster: bus)
+        controller = KeyboardController(store: store, eventBus: bus)
+        engine = FakeInKeyboardDictation()
+        controller.inKeyboardDictation = engine
+        controller.currentFullAccess = { true }
+        insertedText = []
+        controller.textInserter = { [weak self] text in self?.insertedText.append(text) }
+        controller.prepareInitialPresentationState()
+    }
+
+    override func tearDown() async throws {
+        controller = nil
+        engine = nil
+        store = nil
+        if let directory { try? FileManager.default.removeItem(at: directory) }
+        try await super.tearDown()
+    }
+
+    func testUnavailableEngineFallsBackToMuesliHandoff() throws {
+        engine.availability = .needsSpeechPermission
+        controller.refreshInKeyboardAvailability()
+        XCTAssertTrue(controller.opensMuesliFromPrimaryButton)
+
+        controller.startDictation()
+
+        XCTAssertEqual(engine.startCount, 0)
+        XCTAssertFalse(controller.isInKeyboardCaptureActive)
+        XCTAssertEqual(controller.dictationPhase, .requested)
+        XCTAssertNotNil(try store.keyboardHandoffState().requestID, "handoff claimed a request")
+    }
+
+    func testAvailableEngineRecordsInKeyboardWithoutOpeningMuesli() throws {
+        controller.refreshInKeyboardAvailability()
+        XCTAssertFalse(controller.opensMuesliFromPrimaryButton, "Record must not be a Link to Muesli")
+
+        controller.startDictation()
+
+        XCTAssertEqual(engine.startCount, 1)
+        XCTAssertTrue(controller.isInKeyboardCaptureActive)
+        XCTAssertEqual(controller.dictationPhase, .recording)
+        XCTAssertEqual(controller.primaryButtonRole, .stop)
+        XCTAssertNil(try store.keyboardHandoffState().requestID, "no handoff request is claimed")
+    }
+
+    func testMountedLaunchLinkUsesHandoffEvenWhenInlineCaptureBecomesAvailable() throws {
+        engine.availability = .captureNotReady
+        controller.refreshInKeyboardAvailability()
+        XCTAssertTrue(controller.opensMuesliFromPrimaryButton)
+
+        engine.availability = .available
+        controller.primaryLaunchAction()
+
+        XCTAssertEqual(engine.startCount, 0)
+        XCTAssertFalse(controller.isInKeyboardCaptureActive)
+        XCTAssertNotNil(try store.keyboardHandoffState().requestID)
+        XCTAssertNil(try store.pendingCommand())
+    }
+
+    func testRejectedInlineButtonOffersLaunchLinkBeforeClaimingHandoff() throws {
+        engine.acceptsStart = false
+        XCTAssertFalse(controller.opensMuesliFromPrimaryButton)
+
+        controller.primaryAction()
+
+        XCTAssertEqual(engine.startCount, 1)
+        XCTAssertTrue(controller.opensMuesliFromPrimaryButton)
+        XCTAssertFalse(controller.isInKeyboardCaptureActive)
+        XCTAssertNil(try store.keyboardHandoffState().requestID)
+        controller.prepareInitialPresentationState()
+        XCTAssertTrue(controller.opensMuesliFromPrimaryButton, "An availability refresh must preserve the offered link")
+
+        controller.primaryLaunchAction()
+
+        XCTAssertEqual(engine.startCount, 1)
+        XCTAssertNotNil(try store.keyboardHandoffState().requestID)
+    }
+
+    func testMountedInlineButtonDoesNotClaimForegroundHandoffWhenAvailabilityChanges() throws {
+        XCTAssertFalse(controller.opensMuesliFromPrimaryButton)
+        engine.availability = .recognizerUnavailable
+
+        controller.primaryAction()
+
+        XCTAssertEqual(engine.startCount, 0)
+        XCTAssertTrue(controller.opensMuesliFromPrimaryButton)
+        XCTAssertNil(try store.keyboardHandoffState().requestID)
+    }
+
+    func testPartialThenFinalInsertsTranscriptAndSavesHistoryOnly() throws {
+        controller.startDictation()
+        engine.handlers?.onListening()
+        engine.handlers?.onPartial("Hello")
+        XCTAssertEqual(controller.liveTranscript, "Hello")
+        XCTAssertTrue(controller.showsLiveTranscript)
+        XCTAssertTrue(insertedText.isEmpty, "partials are shown, not typed")
+
+        controller.primaryAction()
+        XCTAssertEqual(engine.finishCount, 1)
+        XCTAssertEqual(controller.dictationPhase, .transcribing)
+
+        engine.handlers?.onCompleted("  Hello world  ")
+
+        XCTAssertEqual(insertedText, ["Hello world"])
+        XCTAssertEqual(controller.dictationPhase, .idle)
+        XCTAssertFalse(controller.isInKeyboardCaptureActive)
+        XCTAssertEqual(controller.statusText, "Inserted")
+        let saved = try XCTUnwrap(store.resultsHistory().first)
+        XCTAssertEqual(saved.text, "Hello world")
+        XCTAssertEqual(saved.engineIdentifier, InKeyboardDictationSession.engineIdentifier)
+        XCTAssertTrue(try store.pendingKeyboardDeliveries().isEmpty)
+        XCTAssertNil(try store.status().requestID, "app dictation status is untouched")
+
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(insertedText, ["Hello world"], "a refresh never re-inserts")
+    }
+
+    func testEmptyFinalInsertsNothing() throws {
+        controller.startDictation()
+        controller.primaryAction()
+        engine.handlers?.onCompleted("   ")
+
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertEqual(controller.statusText, "No speech heard")
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+    }
+
+    func testCancelDiscardsWithoutInserting() throws {
+        controller.startDictation()
+        engine.handlers?.onPartial("Never mind")
+
+        controller.cancelActiveDictation()
+
+        XCTAssertEqual(engine.cancelCount, 1)
+        XCTAssertFalse(controller.isInKeyboardCaptureActive)
+        XCTAssertEqual(controller.dictationPhase, .idle)
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+    }
+
+    func testFailureSettlesToFailedAndAllowsRetry() throws {
+        controller.startDictation()
+        engine.handlers?.onFailed("Speech unavailable")
+
+        XCTAssertEqual(controller.dictationPhase, .failed)
+        XCTAssertFalse(controller.isInKeyboardCaptureActive)
+
+        controller.primaryAction()
+        XCTAssertEqual(engine.startCount, 2)
+        XCTAssertTrue(controller.isInKeyboardCaptureActive)
+    }
+
+    func testDismissingKeyboardReleasesMicAndKeepsSpeechInHistory() throws {
+        controller.startDictation()
+        engine.handlers?.onPartial("Half a thought")
+
+        controller.stopObservingSharedState()
+
+        XCTAssertEqual(engine.cancelCount, 1)
+        XCTAssertFalse(controller.isInKeyboardCaptureActive)
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertEqual(try store.resultsHistory().first?.text, "Half a thought")
+    }
+
+    func testRefreshDuringCaptureDoesNotAdoptAnAppRequest() throws {
+        controller.startDictation()
+        XCTAssertTrue(controller.isInKeyboardCaptureActive)
+
+        // A recent finished status for an unrelated request would otherwise be
+        // adopted by apply(status:) and flip the keyboard to .finished.
+        try store.saveResult(.init(requestID: UUID(), text: "Elsewhere", engineIdentifier: "test"))
+        controller.prepareInitialPresentationState()
+
+        XCTAssertEqual(controller.dictationPhase, .recording)
+        XCTAssertTrue(controller.isInKeyboardCaptureActive)
+        XCTAssertTrue(insertedText.isEmpty)
+    }
+
+    func testAppRuntimeAndTranscriptEventsDoNotReplaceInlineCaptureState() async throws {
+        controller.startObservingSharedState()
+        defer { controller.stopObservingSharedState() }
+        controller.startDictation()
+        engine.handlers?.onListening()
+        engine.handlers?.onPartial("Inline speech")
+        engine.handlers?.onLevel(0.25)
+
+        let unrelatedRequest = UUID()
+        try store.saveKeyboardRuntimeStatus(.init(
+            isActive: true,
+            activeRequestID: unrelatedRequest,
+            phase: .recording,
+            canAcceptStartCommand: true,
+            inputLevel: 0.75
+        ))
+        try store.saveKeyboardLiveTranscript(.init(requestID: unrelatedRequest, text: "App speech"))
+        // The catalog event arrives after the two events above on the same stream.
+        try store.saveKeyboardModelCatalog(.init(selectedRawValue: "test", models: [], canSelectModels: true))
+        try await waitForModelCatalog(selectedRawValue: "test")
+
+        XCTAssertEqual(controller.inputLevel, 0.25)
+        XCTAssertEqual(controller.liveTranscript, "Inline speech")
+        XCTAssertEqual(controller.dictationPhase, .recording)
+    }
+
+    func testModelSelectionAcknowledgmentPreservesInlineCaptureStatus() async throws {
+        let model = KeyboardTranscriptionModelOption(
+            rawValue: "new", displayName: "New model", shortName: "New", capabilityLabel: "Ready", isReady: true
+        )
+        try store.saveKeyboardModelCatalog(.init(selectedRawValue: "old", models: [model], canSelectModels: true))
+        controller.startObservingSharedState()
+        defer { controller.stopObservingSharedState() }
+        controller.selectTranscriptionModel(model)
+        XCTAssertTrue(controller.isModelSelectionPending)
+        controller.startDictation()
+        engine.handlers?.onListening()
+
+        try store.saveKeyboardModelCatalog(.init(selectedRawValue: "new", models: [model], canSelectModels: true))
+        try await waitForModelCatalog(selectedRawValue: "new")
+
+        XCTAssertFalse(controller.isModelSelectionPending)
+        XCTAssertEqual(controller.statusText, "Listening on device")
+    }
+
+    private func waitForModelCatalog(selectedRawValue: String) async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while controller.modelCatalog?.selectedRawValue != selectedRawValue, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(controller.modelCatalog?.selectedRawValue, selectedRawValue, "The catalog event was not observed")
+    }
+
+    func testLateCallbacksFromAnEndedCaptureAreIgnored() throws {
+        controller.startDictation()
+        let staleHandlers = engine.handlers
+        controller.cancelActiveDictation()
+
+        staleHandlers?.onCompleted("Late text")
+
+        XCTAssertTrue(insertedText.isEmpty)
+        XCTAssertEqual(controller.dictationPhase, .idle)
+    }
+
+    func testPostProcessingRespectsMirroredFlagsAndTrims() throws {
+        let suite = "in-keyboard-dictation-tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let word = CustomWord(word: "Muesli")
+
+        InKeyboardDictationPreferences.mirrorPostProcessing(
+            fillerWordRemoval: false,
+            customDictionary: false,
+            in: defaults
+        )
+        XCTAssertEqual(
+            InKeyboardDictationPreferences.postProcess(" museli rocks ", customWords: [word], defaults: defaults),
+            "museli rocks"
+        )
+        XCTAssertFalse(InKeyboardDictationPreferences.isEnabled(in: defaults), "opt-in defaults to off")
+    }
+}
+
+@MainActor
+private final class FakeInKeyboardDictation: InKeyboardDictating {
+    var availability: InKeyboardDictationAvailability = .available
+    var acceptsStart = true
+    var handlers: InKeyboardDictationHandlers?
+    var startCount = 0
+    var finishCount = 0
+    var cancelCount = 0
+
+    func availability(hasFullAccess: Bool) -> InKeyboardDictationAvailability {
+        hasFullAccess ? availability : .needsFullAccess
+    }
+
+    func start(handlers: InKeyboardDictationHandlers) -> Bool {
+        startCount += 1
+        guard acceptsStart else { return false }
+        self.handlers = handlers
+        return true
+    }
+
+    func finish() {
+        finishCount += 1
+    }
+
+    func cancel() {
+        cancelCount += 1
+        handlers = nil
+    }
+}
+
+private final class BufferedEventBus: CrossProcessEventStreaming, Sendable {
+    private let channel = AsyncStream<CrossProcessEvent>.makeStream()
+
+    func post(_ event: CrossProcessEvent) {
+        channel.continuation.yield(event)
+    }
+
+    func events() -> AsyncStream<CrossProcessEvent> {
+        channel.stream
+    }
+}

@@ -3,6 +3,7 @@ import UIKit
 
 final class KeyboardViewController: UIInputViewController {
     private let controller = KeyboardController()
+    private var inKeyboardDictation: InKeyboardDictationSession?
     private var hostingController: UIHostingController<KeyboardRootView>?
     private let launchSnapshotView = UIImageView()
     private var keyboardHeightConstraint: NSLayoutConstraint?
@@ -52,6 +53,7 @@ final class KeyboardViewController: UIInputViewController {
         controller.keyboardDismisser = { [weak self] in
             self?.dismissKeyboard()
         }
+        controller.currentFullAccess = { [weak self] in self?.hasFullAccess ?? false }
         controller.prepareInitialPresentationState()
 
         let hostingController = UIHostingController(
@@ -89,7 +91,29 @@ final class KeyboardViewController: UIInputViewController {
         refreshLaunchSnapshot()
     }
 
+    private func configureInlineDictationIfEnabled() {
+        guard hasFullAccess, InKeyboardDictationPreferences.isEnabled() else {
+            inKeyboardDictation?.tearDown()
+            controller.inKeyboardDictation = nil
+            inKeyboardDictation = nil
+            return
+        }
+        guard inKeyboardDictation == nil else { return }
+        let session = InKeyboardDictationSession()
+        session.onReady = { [weak self] in
+            self?.controller.refreshInKeyboardAvailability()
+        }
+        inKeyboardDictation = session
+        controller.inKeyboardDictation = session
+        session.attach(to: view)
+    }
+
+    deinit {
+        MainActor.assumeIsolated { inKeyboardDictation?.tearDown() }
+    }
+
     override func viewWillAppear(_ animated: Bool) {
+        configureInlineDictationIfEnabled()
         appearanceGuard.beginAppearance()
         controller.isLaunchSettled = false
         controller.prepareInitialPresentationState()

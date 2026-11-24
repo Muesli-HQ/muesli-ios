@@ -2779,6 +2779,19 @@ final class DictationCoordinator {
         }
     }
 
+    /// Inline keyboard results have no app recording session or handoff to reconcile.
+    func refreshInlineKeyboardHistory() {
+        #if DEBUG
+        guard !Self.shouldConfigureForUITestingFromLaunchArguments() else { return }
+        #endif
+        guard let persistedHistory = try? store.resultsHistory() else { return }
+        let inlineResults = persistedHistory.filter { $0.source == "keyboard_inline" }
+        guard inlineResults != dictationHistory.filter({ $0.source == "keyboard_inline" }) else { return }
+        let appResults = dictationHistory.filter { $0.source != "keyboard_inline" }
+        dictationHistory = (appResults + inlineResults).sorted { $0.createdAt > $1.createdAt }
+        lastTranscript = dictationHistory.first?.text ?? ""
+    }
+
     private func publishVoiceNoteHistoryPresentationIfNeeded() {
         guard !historyPresentationPublicationIsSuspended,
               !voiceNoteHistoryPresentation.matches(
@@ -7382,16 +7395,19 @@ final class DictationCoordinator {
 
     private func startSharedEventObservation() {
         sharedEventObservationTask?.cancel()
-        sharedEventObservationTask = Task { @MainActor [weak self, eventBus] in
-            for await event in eventBus.events() {
+        let events = eventBus.events()
+        sharedEventObservationTask = Task { @MainActor [weak self] in
+            for await event in events {
                 guard !Task.isCancelled, let self else { return }
                 switch event {
                 case .commandChanged:
                     await self.processPendingKeyboardCommand()
                 case .modelSelectionRequested:
                     self.processPendingKeyboardModelSelection()
+                case .resultChanged:
+                    self.refreshInlineKeyboardHistory()
                 case .handoffStatusChanged, .runtimeStatusChanged, .liveTranscriptChanged,
-                     .modelCatalogChanged, .resultChanged, .ownershipChanged:
+                     .modelCatalogChanged, .ownershipChanged:
                     continue
                 }
             }

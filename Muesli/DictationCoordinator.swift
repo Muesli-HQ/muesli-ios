@@ -179,6 +179,9 @@ final class DictationCoordinator {
                 selectedTranscriptionModel.rawValue,
                 forKey: MuesliPreferences.transcriptionModelKey
             )
+            if !Self.shouldConfigureForUITestingFromLaunchArguments() {
+                KeyboardSpeechModelSync.sync(selectedModel: selectedTranscriptionModel)
+            }
             let preparationTask = modelPreparationTask
             modelPreparationTask = nil
             preparationTask?.cancel()

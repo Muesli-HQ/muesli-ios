@@ -297,6 +297,13 @@ struct SettingsView: View {
                             .foregroundStyle(MuesliTheme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if inKeyboardDictationEnabled, let keyboardModelStatusText {
+                        Label(keyboardModelStatusText, systemImage: "cpu")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("settings.keyboardModelStatus")
+                    }
                     if inKeyboardDictationEnabled {
                         Divider().overlay(MuesliTheme.surfaceBorder)
                         SettingsToggleRow(
@@ -353,7 +360,26 @@ struct SettingsView: View {
     }
 
     private var inKeyboardDictationDetail: String {
-        "Record and transcribe on this iPhone with Apple Speech, without switching to Muesli. Uses Muesli’s mic instead when it is already on. Requires keyboard Full Access."
+        "Record and transcribe on this iPhone without switching to Muesli. Uses your Muesli model when the keyboard can hold it, otherwise Apple Speech. Requires keyboard Full Access."
+    }
+
+    private var keyboardModelStatusText: String? {
+        switch KeyboardSpeechModelSync.status(selectedModel: coordinator.selectedTranscriptionModel) {
+        case .off:
+            nil
+        case .appleSpeechOnly(let reason):
+            "Keyboard uses Apple Speech. \(reason)"
+        case .waitingForKeyboard(let name):
+            "Keyboard uses \(name). It prepares the model the first time you dictate, which takes a little longer once."
+        case .loading(let name):
+            "Keyboard is preparing \(name). This happens once, and again after app updates."
+        case .ready(let name):
+            "Keyboard transcribes with \(name)."
+        case .keyboardTooSmall(let name):
+            "This iPhone gives keyboards too little memory for \(name), so the keyboard uses Apple Speech."
+        case .failed(let name):
+            "\(name) couldn’t load in the keyboard, so it uses Apple Speech."
+        }
     }
 
     private var inKeyboardDictationBinding: Binding<Bool> {
@@ -361,6 +387,7 @@ struct SettingsView: View {
             guard enabled else {
                 inKeyboardDictationEnabled = false
                 inKeyboardDictationStatusText = nil
+                KeyboardSpeechModelSync.sync(selectedModel: coordinator.selectedTranscriptionModel)
                 return
             }
             mirrorDictionaryPreferencesForKeyboard()
@@ -374,22 +401,22 @@ struct SettingsView: View {
         guard !requestingKeyboardPermissions else { return }
         requestingKeyboardPermissions = true
         defer { requestingKeyboardPermissions = false }
-        guard SFSpeechRecognizer()?.supportsOnDeviceRecognition == true else {
-            inKeyboardDictationStatusText = "On-device Apple Speech is unavailable for this iPhone’s language."
-            return
-        }
         guard await AVAudioApplication.requestRecordPermission() else {
             inKeyboardDictationEnabled = false
             inKeyboardDictationStatusText = "Allow microphone access for Muesli in iOS Settings to use this."
             return
         }
-        guard await requestSpeechRecognitionAuthorization() == .authorized else {
-            inKeyboardDictationEnabled = false
-            inKeyboardDictationStatusText = "Allow Speech Recognition for Muesli in iOS Settings to use this."
-            return
+        // Apple Speech gives live words and the fallback. The keyboard's
+        // Parakeet model works without it.
+        var speechAuthorized = false
+        if SFSpeechRecognizer()?.supportsOnDeviceRecognition == true {
+            speechAuthorized = await requestSpeechRecognitionAuthorization() == .authorized
         }
         inKeyboardDictationEnabled = true
-        inKeyboardDictationStatusText = nil
+        inKeyboardDictationStatusText = speechAuthorized
+            ? nil
+            : "Without Speech Recognition, the keyboard shows no live words and can only use your Muesli model."
+        KeyboardSpeechModelSync.sync(selectedModel: coordinator.selectedTranscriptionModel)
         AppTelemetry.signal("keyboard_inline_dictation_enabled")
     }
 

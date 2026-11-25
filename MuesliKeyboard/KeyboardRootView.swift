@@ -253,7 +253,15 @@ struct KeyboardRootView: View {
             .frame(width: Self.activeStatusWidth, alignment: .leading)
 
             HStack(spacing: MuesliTheme.spacing4) {
-                if controller.isInKeyboardCaptureActive
+                if controller.isPreparingInKeyboardModel {
+                    Text(controller.statusText)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("keyboard.preparingModel")
+                } else if controller.isInKeyboardCaptureActive
                     && controller.showsInKeyboardLiveTranscript
                     && controller.showsLiveTranscript {
                     Text(controller.liveTranscript)
@@ -382,6 +390,8 @@ struct KeyboardRootView: View {
 
     private var activeStatusText: String {
         switch controller.dictationPhase {
+        case .transcribing where controller.isPreparingInKeyboardModel:
+            "Preparing"
         case .transcribing:
             "Transcribing"
         case .requested:

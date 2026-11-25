@@ -58,6 +58,11 @@ final class KeyboardController {
     private var inKeyboardRequestID: UUID?
     /// Reads the "live transcript instead of waveform" setting when capture starts.
     var inKeyboardLiveTranscriptPreference: () -> Bool = { InKeyboardDictationPreferences.showsLiveTranscript() }
+    /// The recording ended and its transcript is waiting for the keyboard
+    /// model to finish loading.
+    var isPreparingInKeyboardModel: Bool {
+        isInKeyboardCaptureActive && dictationPhase == .transcribing && statusText.hasPrefix("Preparing ")
+    }
     /// Whether this capture shows its live transcript in place of the waveform.
     private(set) var showsInKeyboardLiveTranscript = false
     private var inKeyboardPartialTranscript = ""
@@ -1361,8 +1366,12 @@ extension KeyboardController {
                 guard let self, self.inKeyboardRequestID == requestID else { return }
                 self.inputLevel = level
             },
-            onCompleted: { [weak self] text in
-                self?.completeInKeyboardDictation(requestID: requestID, rawText: text)
+            onPreparingModel: { [weak self] name in
+                guard let self, self.inKeyboardRequestID == requestID else { return }
+                self.statusText = "Preparing \(name)…"
+            },
+            onCompleted: { [weak self] text, engine in
+                self?.completeInKeyboardDictation(requestID: requestID, rawText: text, engine: engine)
             },
             onFailed: { [weak self] message in
                 self?.failInKeyboardDictation(requestID: requestID, message: message)
@@ -1403,17 +1412,17 @@ extension KeyboardController {
         resetInKeyboardState(status: "Cancelled")
     }
 
-    private func completeInKeyboardDictation(requestID: UUID, rawText: String) {
+    private func completeInKeyboardDictation(requestID: UUID, rawText: String, engine: String) {
         guard inKeyboardRequestID == requestID else { return }
         let customWords = (try? store.customWords()) ?? []
         let text = InKeyboardDictationPreferences.postProcess(rawText, customWords: customWords)
-        KeyboardDiagnosticsLog.record("inline.completed", ["characters": String(text.count)])
+        KeyboardDiagnosticsLog.record("inline.completed", ["characters": String(text.count), "engine": engine])
         guard !text.isEmpty else {
             resetInKeyboardState(status: "No speech heard")
             return
         }
         insertText(text)
-        saveInKeyboardResult(text: text, requestID: requestID)
+        saveInKeyboardResult(text: text, requestID: requestID, engine: engine)
         resetInKeyboardState(status: "Inserted")
     }
 
@@ -1424,13 +1433,17 @@ extension KeyboardController {
         dictationPhase = .failed
     }
 
-    private func saveInKeyboardResult(text: String, requestID: UUID) {
+    private func saveInKeyboardResult(
+        text: String,
+        requestID: UUID,
+        engine: String = InKeyboardDictationSession.engineIdentifier
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let result = DictationResult(
             requestID: requestID,
             text: trimmed,
-            engineIdentifier: InKeyboardDictationSession.engineIdentifier,
+            engineIdentifier: engine,
             source: "keyboard_inline"
         )
         // Never auto-delivered later: this keyboard already inserted it.

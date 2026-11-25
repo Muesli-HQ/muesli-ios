@@ -96,16 +96,32 @@ final class KeyboardViewController: UIInputViewController {
             inKeyboardDictation?.tearDown()
             controller.inKeyboardDictation = nil
             inKeyboardDictation = nil
+            KeyboardParakeetEngine.shared.unload()
             return
         }
+        let parakeet = KeyboardParakeetEngine.shared
+        parakeet.onReady = { [weak self] in
+            self?.controller.refreshInKeyboardAvailability()
+        }
+        parakeet.prepareIfPossible()
         guard inKeyboardDictation == nil else { return }
-        let session = InKeyboardDictationSession()
+        let session = InKeyboardDictationSession(model: parakeet)
         session.onReady = { [weak self] in
             self?.controller.refreshInKeyboardAvailability()
         }
         inKeyboardDictation = session
         controller.inKeyboardDictation = session
         session.attach(to: view)
+    }
+
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        guard controller.isInKeyboardCaptureActive == false else { return }
+        KeyboardDiagnosticsLog.record("parakeet.memoryWarning", [
+            "footprintMB": String(KeyboardParakeetEngine.footprint() / 1_048_576)
+        ])
+        KeyboardParakeetEngine.shared.unload()
+        controller.refreshInKeyboardAvailability()
     }
 
     deinit {

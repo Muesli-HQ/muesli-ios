@@ -119,7 +119,7 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(engine.finishCount, 1)
         XCTAssertEqual(controller.dictationPhase, .transcribing)
 
-        engine.handlers?.onCompleted("  Hello world  ")
+        engine.handlers?.onCompleted("  Hello world  ", InKeyboardDictationSession.engineIdentifier)
 
         XCTAssertEqual(insertedText, ["Hello world"])
         XCTAssertEqual(controller.dictationPhase, .idle)
@@ -135,10 +135,26 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(insertedText, ["Hello world"], "a refresh never re-inserts")
     }
 
+    func testStopWaitsForKeyboardModelThenSavesItsEngine() throws {
+        controller.startDictation()
+        controller.primaryAction()
+        engine.handlers?.onPreparingModel("Parakeet Redux")
+
+        XCTAssertTrue(controller.isPreparingInKeyboardModel)
+        XCTAssertEqual(controller.statusText, "Preparing Parakeet Redux…")
+        XCTAssertTrue(insertedText.isEmpty)
+
+        engine.handlers?.onCompleted("Hello from Parakeet", "parakeet-redux-keyboard")
+
+        XCTAssertFalse(controller.isPreparingInKeyboardModel)
+        XCTAssertEqual(insertedText, ["Hello from Parakeet"])
+        XCTAssertEqual(try XCTUnwrap(store.resultsHistory().first).engineIdentifier, "parakeet-redux-keyboard")
+    }
+
     func testEmptyFinalInsertsNothing() throws {
         controller.startDictation()
         controller.primaryAction()
-        engine.handlers?.onCompleted("   ")
+        engine.handlers?.onCompleted("   ", InKeyboardDictationSession.engineIdentifier)
 
         XCTAssertTrue(insertedText.isEmpty)
         XCTAssertEqual(controller.statusText, "No speech heard")
@@ -254,7 +270,7 @@ final class InKeyboardDictationTests: XCTestCase {
         let staleHandlers = engine.handlers
         controller.cancelActiveDictation()
 
-        staleHandlers?.onCompleted("Late text")
+        staleHandlers?.onCompleted("Late text", InKeyboardDictationSession.engineIdentifier)
 
         XCTAssertTrue(insertedText.isEmpty)
         XCTAssertEqual(controller.dictationPhase, .idle)
@@ -286,7 +302,7 @@ final class InKeyboardDictationTests: XCTestCase {
         controller.startDictation()
         engine.handlers?.onPartial("Hello there")
         XCTAssertFalse(controller.showsInKeyboardLiveTranscript)
-        engine.handlers?.onCompleted("Hello there")
+        engine.handlers?.onCompleted("Hello there", InKeyboardDictationSession.engineIdentifier)
         XCTAssertFalse(controller.showsInKeyboardLiveTranscript)
 
         controller.inKeyboardLiveTranscriptPreference = { true }

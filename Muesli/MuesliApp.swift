@@ -47,6 +47,10 @@ struct MuesliApp: App {
                 }
                 #endif
                 .task {
+                    if !isUITesting {
+                        // A cold launch may not report a scene-phase change.
+                        KeyboardSpeechModelSync.sync(selectedModel: coordinator.selectedTranscriptionModel)
+                    }
                     #if DEBUG
                     await ModelDownloadDeviceValidation.runIfRequested()
                     #endif
@@ -98,6 +102,7 @@ struct MuesliApp: App {
                         coordinator.prewarmModelIfNeeded(reason: "foreground")
                         coordinator.syncICloudTextIfEnabled(reason: "foreground")
                         coordinator.recoverLongVoiceNotesIfNeeded()
+                        KeyboardSpeechModelSync.sync(selectedModel: coordinator.selectedTranscriptionModel)
                         if coordinator.hasCompletedOnboarding {
                             InKeyboardDictationPermissionPrompt.requestIfNeeded { coordinator.isRecording }
                         }

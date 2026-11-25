@@ -539,80 +539,25 @@ actor FluidAudioTranscriptionEngine: TranscriptionEngine {
         version: AsrModelVersion,
         encoderComputeUnits: MLComputeUnits? = nil
     ) async throws -> AsrModels {
-        let preprocessorFile: String
-        let encoderFile: String?
-        let decoderFile: String
-        let jointFile: String
-        switch version {
-        case .tdtCtc110m:
-            preprocessorFile = ModelNames.ASR.preprocessorFile
-            encoderFile = nil
-            decoderFile = ModelNames.ASR.decoderFile
-            jointFile = ModelNames.ASR.jointFile
-        case .v3, .redux:
-            preprocessorFile = ModelNames.ASR.preprocessorFile
-            encoderFile = ModelNames.ASR.encoderFile
-            decoderFile = ModelNames.ASR.decoderFile
-            jointFile = ModelNames.ASR.jointV3File
-        default:
-            throw TranscriptionEngineError.unsupportedOfflineModel("Parakeet")
-        }
-
-        let defaultConfiguration = AsrModels.defaultConfiguration()
-        let preprocessorConfiguration = MLModelConfiguration()
-        preprocessorConfiguration.computeUnits = .cpuOnly
-
-        let preprocessor = try await MLModel.load(
-            contentsOf: directory.appendingPathComponent(preprocessorFile),
-            configuration: preprocessorConfiguration
-        )
-        let encoderConfiguration = MLModelConfiguration()
-        encoderConfiguration.computeUnits = encoderComputeUnits ?? defaultConfiguration.computeUnits
-        let encoder: MLModel?
-        if let encoderFile {
-            encoder = try await MLModel.load(
-                contentsOf: directory.appendingPathComponent(encoderFile),
-                configuration: encoderConfiguration
+        do {
+            return try await ParakeetModelLoading.loadAsrModels(
+                from: directory,
+                version: version,
+                encoderComputeUnits: encoderComputeUnits
             )
-        } else {
-            encoder = nil
+        } catch ParakeetModelLoading.LoadError.unsupportedVersion {
+            throw TranscriptionEngineError.unsupportedOfflineModel("Parakeet")
+        } catch ParakeetModelLoading.LoadError.invalidVocabulary {
+            throw TranscriptionEngineError.invalidLocalVocabulary
         }
-        let decoder = try await MLModel.load(
-            contentsOf: directory.appendingPathComponent(decoderFile),
-            configuration: defaultConfiguration
-        )
-        let joint = try await MLModel.load(
-            contentsOf: directory.appendingPathComponent(jointFile),
-            configuration: defaultConfiguration
-        )
-        let vocabularyData = try Data(
-            contentsOf: directory.appendingPathComponent(ModelNames.ASR.vocabularyFile)
-        )
-
-        return AsrModels(
-            encoder: encoder,
-            preprocessor: preprocessor,
-            decoder: decoder,
-            joint: joint,
-            configuration: defaultConfiguration,
-            vocabulary: try decodeParakeetVocabulary(vocabularyData),
-            version: version
-        )
     }
 
     static func decodeParakeetVocabulary(_ data: Data) throws -> [Int: String] {
-        let object = try JSONSerialization.jsonObject(with: data)
-        if let array = object as? [String] {
-            return Dictionary(uniqueKeysWithValues: array.enumerated().map { ($0.offset, $0.element) })
+        do {
+            return try ParakeetModelLoading.decodeVocabulary(data)
+        } catch ParakeetModelLoading.LoadError.invalidVocabulary {
+            throw TranscriptionEngineError.invalidLocalVocabulary
         }
-        if let dictionary = object as? [String: String] {
-            return dictionary.reduce(into: [:]) { vocabulary, entry in
-                if let tokenID = Int(entry.key) {
-                    vocabulary[tokenID] = entry.value
-                }
-            }
-        }
-        throw TranscriptionEngineError.invalidLocalVocabulary
     }
 
     private func transcribeWithWhisperKit(

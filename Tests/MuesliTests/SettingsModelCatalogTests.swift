@@ -115,6 +115,7 @@ final class SettingsModelCatalogTests: XCTestCase {
         XCTAssertEqual(
             SettingsSection.allCases.map(\.title),
             [
+                "Keyboard",
                 "Voice Notes",
                 "Meetings",
                 "Dictionary",

@@ -63,11 +63,7 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
         }
     }
 
-    func testStatusExplainsWhichEngineTheKeyboardUses() {
-        if case .appleSpeechOnly = KeyboardSpeechModelSync.status(selectedModel: .whisperLargeTurbo) {
-        } else {
-            XCTFail("Whisper cannot run in the keyboard")
-        }
+    func testKeyboardMemoryLimitGate() {
         let small: UInt64 = 80 * 1_048_576
         let large: UInt64 = 177 * 1_048_576
         XCTAssertTrue(Muesli.KeyboardSpeechModel.canHoldModel(memoryLimit: large))

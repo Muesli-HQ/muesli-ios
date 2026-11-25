@@ -225,8 +225,10 @@ struct SettingsView: View {
             AboutSettingsContent()
         case .appearance:
             appearanceSettings
-        case .input:
-            inputSettings
+        case .keyboard:
+            keyboardSettings
+        case .voiceNotes:
+            voiceNoteSettings
         case .dictionary:
             DictionarySettingsContent()
         case .meetings:
@@ -244,48 +246,30 @@ struct SettingsView: View {
         AppearanceSettingsContent()
     }
 
-    private var inputSettings: some View {
+    private var keyboardSettings: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-            MuesliSurface {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                    SettingsRow(icon: "keyboard", title: "Keyboard Extension", value: keyboardStatusText)
-                    if #available(iOS 18.0, *), ActionButtonHardware.isSupported {
+            if keyboardStatusText != "Enabled" {
+                MuesliSurface {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                        SettingsRow(icon: "keyboard", title: "Keyboard Extension", value: keyboardStatusText)
                         Divider().overlay(MuesliTheme.surfaceBorder)
-                        SettingsNavigationRow(
-                            icon: "button.programmable",
-                            title: "Action Button",
-                            detail: "Set up or reconfigure dictation and meeting-note shortcuts."
-                        ) {
-                            isActionButtonOnboardingPresented = true
-                            AppTelemetry.signal("action_button_settings_opened")
+                        Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
+                            HStack {
+                                Text("Open Muesli Settings")
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                            }
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.accent)
+                            .padding(.top, MuesliTheme.spacing4)
                         }
                     }
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
-                        HStack {
-                            Text("Open Muesli Settings")
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                        }
-                        .font(MuesliTheme.headline())
-                        .foregroundStyle(MuesliTheme.accent)
-                        .padding(.top, MuesliTheme.spacing4)
-                    }
+                    .padding(MuesliTheme.spacing16)
                 }
-                .padding(MuesliTheme.spacing16)
             }
 
             MuesliSurface {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                    SettingsRow(icon: "cpu", title: "Keyboard Model", value: keyboardModelStatus.value)
-                        .accessibilityIdentifier("settings.keyboardModelStatus")
-                    if let note = keyboardModelStatus.note {
-                        Text(note)
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsToggleRow(
                         icon: "text.bubble",
                         title: "Show live transcript",
@@ -305,30 +289,37 @@ struct SettingsView: View {
                         }
                         .frame(minHeight: 44)
                     }
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsMicrophonePicker(selection: $microphonePreference)
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsToggleRow(
-                        icon: "waveform.badge.mic",
-                        title: "Voice Note Live Activities",
-                        detail: "Show keyboard and in-app voice note progress on the Dynamic Island and Lock Screen.",
-                        isOn: $liveActivitiesForDictations
-                    )
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    SettingsToggleRow(
-                        icon: "waveform.circle",
-                        title: "Save Voice Note Audio",
-                        detail: "Keep original voice note audio locally on this iPhone for playback and troubleshooting. Audio does not sync.",
-                        isOn: $keepDictationAudioRecordings
-                    )
-                    Divider().overlay(MuesliTheme.surfaceBorder)
-                    LongVoiceNoteSettingsRow(
-                        isEnabled: $longVoiceNoteModeEnabled,
-                        thresholdSeconds: $longVoiceNoteThresholdSeconds
-                    )
                 }
                 .padding(MuesliTheme.spacing16)
             }
+        }
+    }
+
+    private var voiceNoteSettings: some View {
+        MuesliSurface {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                SettingsMicrophonePicker(selection: $microphonePreference)
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                SettingsToggleRow(
+                    icon: "waveform.badge.mic",
+                    title: "Voice Note Live Activities",
+                    detail: "Show voice note progress on the Dynamic Island and Lock Screen.",
+                    isOn: $liveActivitiesForDictations
+                )
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                SettingsToggleRow(
+                    icon: "waveform.circle",
+                    title: "Save Voice Note Audio",
+                    detail: "Keep the original audio on this iPhone. Audio does not sync.",
+                    isOn: $keepDictationAudioRecordings
+                )
+                Divider().overlay(MuesliTheme.surfaceBorder)
+                LongVoiceNoteSettingsRow(
+                    isEnabled: $longVoiceNoteModeEnabled,
+                    thresholdSeconds: $longVoiceNoteThresholdSeconds
+                )
+            }
+            .padding(MuesliTheme.spacing16)
         }
     }
 
@@ -337,26 +328,6 @@ struct SettingsView: View {
             coordinator.setKeyboardSessionModeEnabled(!stopAfterEach)
         })
     }
-
-    /// Which engine the keyboard transcribes with, and a note only when
-    /// something needs attention.
-    private var keyboardModelStatus: (value: String, note: String?) {
-        switch KeyboardSpeechModelSync.status(selectedModel: coordinator.selectedTranscriptionModel) {
-        case .ready(let name):
-            (name, nil)
-        case .waitingForKeyboard(let name):
-            (name, "Prepares on your first keyboard dictation.")
-        case .loading(let name):
-            (name, "Preparing for the keyboard…")
-        case .appleSpeechOnly(let reason):
-            ("Apple Speech", reason)
-        case .keyboardTooSmall(let name):
-            ("Apple Speech", "Not enough keyboard memory for \(name).")
-        case .failed(let name):
-            ("Apple Speech", "\(name) couldn’t load in the keyboard.")
-        }
-    }
-
 
     private var keyboardSessionModeDetail: String {
         "Only applies when the keyboard records through the Muesli app."
@@ -759,14 +730,15 @@ struct SettingsView: View {
 
     private func openRequestedInputSection() {
         guard openInputRequest != nil else { return }
-        selectedSettingsSection = .input
+        selectedSettingsSection = .voiceNotes
         coordinator.inputSettingsNavigationRequestID = nil
     }
 
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case input
+    case keyboard
+    case voiceNotes
     case meetings
     case dictionary
     case models
@@ -779,7 +751,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .input:
+        case .keyboard:
+            "Keyboard"
+        case .voiceNotes:
             "Voice Notes"
         case .meetings:
             "Meetings"
@@ -800,8 +774,10 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var detail: String {
         switch self {
-        case .input:
-            "Recording retention, live activities, keyboard setup, and voice note sessions."
+        case .keyboard:
+            "Dictation from the Muesli keyboard in any app."
+        case .voiceNotes:
+            "Voice notes recorded in Muesli."
         case .meetings:
             "Recording, audio retention, live activities, and note templates."
         case .dictionary:
@@ -821,8 +797,10 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .input:
+        case .keyboard:
             "keyboard"
+        case .voiceNotes:
+            "waveform"
         case .meetings:
             "person.2.wave.2"
         case .dictionary:

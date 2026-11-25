@@ -120,41 +120,4 @@ enum KeyboardSpeechModelSync {
             }
         }
     }
-
-    // MARK: - Settings status
-
-    enum Status: Equatable {
-        case appleSpeechOnly(reason: String)
-        case waitingForKeyboard(modelName: String)
-        case loading(modelName: String)
-        case ready(modelName: String)
-        case keyboardTooSmall(modelName: String)
-        case failed(modelName: String)
-    }
-
-    static func status(
-        selectedModel: LocalTranscriptionModel,
-        keyboardState: (KeyboardSpeechModel.KeyboardState, String)? = KeyboardSpeechModel.keyboardState(),
-        memoryLimit: UInt64? = KeyboardSpeechModel.reportedMemoryLimit()
-    ) -> Status {
-        guard keyboardVersion(for: selectedModel) != nil else {
-            return .appleSpeechOnly(reason: "\(selectedModel.shortName) can’t run inside the keyboard.")
-        }
-        guard selectedModel.isDownloaded else {
-            return .appleSpeechOnly(reason: "Download \(selectedModel.shortName) to use it in the keyboard.")
-        }
-        let name = selectedModel.shortName
-        if let memoryLimit, !KeyboardSpeechModel.canHoldModel(memoryLimit: memoryLimit) {
-            return .keyboardTooSmall(modelName: name)
-        }
-        guard let (state, modelID) = keyboardState, modelID == selectedModel.rawValue else {
-            return .waitingForKeyboard(modelName: name)
-        }
-        return switch state {
-        case .loading: .loading(modelName: name)
-        case .ready: .ready(modelName: name)
-        case .tooLittleMemory: .keyboardTooSmall(modelName: name)
-        case .failed: .failed(modelName: name)
-        }
-    }
 }

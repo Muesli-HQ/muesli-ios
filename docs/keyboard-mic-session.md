@@ -213,15 +213,15 @@ and otherwise with Apple Speech (`SFSpeechRecognizer`,
   an utterance after a pause and starts the next result from empty, so
   `InKeyboardTranscriptAccumulator` joins the utterances into one transcript.
 
-The keyboard shows the waveform while recording. Settings → Input → **Show live
+The keyboard shows the waveform while recording. Settings → Keyboard → **Show live
 transcript** (`muesli.keyboard.inKeyboardDictation.liveTranscript`, off by
 default) shows the partial transcript instead. Only the final text is inserted,
 after the mirrored filler-word and custom-dictionary settings are applied.
 History records the engine that wrote it (for example `parakeet-redux-keyboard`
 or `apple-speech-keyboard`). In-keyboard results are never queued for automatic
 delivery. The app refreshes that history when a new result arrives and when it
-returns to the foreground. Settings → Input → **Keyboard Model** shows which
-engine the keyboard uses and why.
+returns to the foreground. Which engine wrote a dictation is an implementation
+detail and is not shown in Settings.
 
 Routing on Record:
 

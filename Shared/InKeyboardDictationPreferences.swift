@@ -7,20 +7,13 @@ import Foundation
 /// both processes see the same values. Post-processing flags are mirrored from
 /// the app's standard defaults by `mirrorPostProcessing(...)`.
 enum InKeyboardDictationPreferences {
-    static let enabledKey = "muesli.keyboard.inKeyboardDictation.enabled"
     static let fillerWordRemovalKey = "muesli.keyboard.inKeyboardDictation.fillerWordRemoval"
     static let customDictionaryKey = "muesli.keyboard.inKeyboardDictation.customDictionary"
     static let liveTranscriptKey = "muesli.keyboard.inKeyboardDictation.liveTranscript"
-    /// In-keyboard dictation is the default way to record from the keyboard.
-    static let enabledByDefault = true
     static let liveTranscriptByDefault = false
 
     static var sharedDefaults: UserDefaults? {
         UserDefaults(suiteName: MuesliAppConstants.appGroupIdentifier)
-    }
-
-    static func isEnabled(in defaults: UserDefaults? = sharedDefaults) -> Bool {
-        bool(enabledKey, defaultValue: enabledByDefault, in: defaults)
     }
 
     /// Show the live transcript instead of the waveform while dictating.

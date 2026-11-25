@@ -1,6 +1,5 @@
 import AVFoundation
 import CloudKit
-import Speech
 import SwiftUI
 
 struct SettingsView: View {
@@ -38,15 +37,9 @@ struct SettingsView: View {
     @State private var modelRemovalErrorMessage: String?
     @State private var isActionButtonOnboardingPresented = false
     @AppStorage(
-        InKeyboardDictationPreferences.enabledKey,
-        store: InKeyboardDictationPreferences.sharedDefaults
-    ) private var inKeyboardDictationEnabled = InKeyboardDictationPreferences.enabledByDefault
-    @AppStorage(
         InKeyboardDictationPreferences.liveTranscriptKey,
         store: InKeyboardDictationPreferences.sharedDefaults
     ) private var inKeyboardLiveTranscript = InKeyboardDictationPreferences.liveTranscriptByDefault
-    @State private var requestingKeyboardPermissions = false
-    @State private var inKeyboardDictationStatusText: String?
 
 
     var body: some View {
@@ -284,35 +277,21 @@ struct SettingsView: View {
 
             MuesliSurface {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    SettingsRow(icon: "cpu", title: "Keyboard Model", value: keyboardModelStatus.value)
+                        .accessibilityIdentifier("settings.keyboardModelStatus")
+                    if let note = keyboardModelStatus.note {
+                        Text(note)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsToggleRow(
-                        icon: "waveform",
-                        title: "Dictate inside the keyboard",
-                        detail: inKeyboardDictationDetail,
-                        isOn: inKeyboardDictationBinding
+                        icon: "text.bubble",
+                        title: "Show live transcript",
+                        detail: "Show words instead of the waveform.",
+                        isOn: $inKeyboardLiveTranscript
                     )
-                    .disabled(requestingKeyboardPermissions)
-                    if let inKeyboardDictationStatusText {
-                        Text(inKeyboardDictationStatusText)
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if inKeyboardDictationEnabled, let keyboardModelStatusText {
-                        Label(keyboardModelStatusText, systemImage: "cpu")
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("settings.keyboardModelStatus")
-                    }
-                    if inKeyboardDictationEnabled {
-                        Divider().overlay(MuesliTheme.surfaceBorder)
-                        SettingsToggleRow(
-                            icon: "text.bubble",
-                            title: "Show live transcript",
-                            detail: "Show words as you speak instead of the waveform while dictating inside the keyboard.",
-                            isOn: $inKeyboardLiveTranscript
-                        )
-                    }
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsToggleRow(
                         icon: "keyboard.badge.ellipsis",
@@ -359,76 +338,28 @@ struct SettingsView: View {
         })
     }
 
-    private var inKeyboardDictationDetail: String {
-        "Record and transcribe on this iPhone without switching to Muesli. Uses your Muesli model when the keyboard can hold it, otherwise Apple Speech. Requires keyboard Full Access."
-    }
-
-    private var keyboardModelStatusText: String? {
+    /// Which engine the keyboard transcribes with, and a note only when
+    /// something needs attention.
+    private var keyboardModelStatus: (value: String, note: String?) {
         switch KeyboardSpeechModelSync.status(selectedModel: coordinator.selectedTranscriptionModel) {
-        case .off:
-            nil
-        case .appleSpeechOnly(let reason):
-            "Keyboard uses Apple Speech. \(reason)"
-        case .waitingForKeyboard(let name):
-            "Keyboard uses \(name). It prepares the model the first time you dictate, which takes a little longer once."
-        case .loading(let name):
-            "Keyboard is preparing \(name). This happens once, and again after app updates."
         case .ready(let name):
-            "Keyboard transcribes with \(name)."
+            (name, nil)
+        case .waitingForKeyboard(let name):
+            (name, "Prepares on your first keyboard dictation.")
+        case .loading(let name):
+            (name, "Preparing for the keyboard…")
+        case .appleSpeechOnly(let reason):
+            ("Apple Speech", reason)
         case .keyboardTooSmall(let name):
-            "This iPhone gives keyboards too little memory for \(name), so the keyboard uses Apple Speech."
+            ("Apple Speech", "Not enough keyboard memory for \(name).")
         case .failed(let name):
-            "\(name) couldn’t load in the keyboard, so it uses Apple Speech."
+            ("Apple Speech", "\(name) couldn’t load in the keyboard.")
         }
     }
 
-    private var inKeyboardDictationBinding: Binding<Bool> {
-        Binding(get: { inKeyboardDictationEnabled }, set: { enabled in
-            guard enabled else {
-                inKeyboardDictationEnabled = false
-                inKeyboardDictationStatusText = nil
-                KeyboardSpeechModelSync.sync(selectedModel: coordinator.selectedTranscriptionModel)
-                return
-            }
-            mirrorDictionaryPreferencesForKeyboard()
-            Task { await enableInKeyboardDictation() }
-        })
-    }
-
-    /// Both permissions belong to the app bundle; the keyboard cannot prompt.
-    @MainActor
-    private func enableInKeyboardDictation() async {
-        guard !requestingKeyboardPermissions else { return }
-        requestingKeyboardPermissions = true
-        defer { requestingKeyboardPermissions = false }
-        guard await AVAudioApplication.requestRecordPermission() else {
-            inKeyboardDictationEnabled = false
-            inKeyboardDictationStatusText = "Allow microphone access for Muesli in iOS Settings to use this."
-            return
-        }
-        // Apple Speech gives live words and the fallback. The keyboard's
-        // Parakeet model works without it.
-        var speechAuthorized = false
-        if SFSpeechRecognizer()?.supportsOnDeviceRecognition == true {
-            speechAuthorized = await requestSpeechRecognitionAuthorization() == .authorized
-        }
-        inKeyboardDictationEnabled = true
-        inKeyboardDictationStatusText = speechAuthorized
-            ? nil
-            : "Without Speech Recognition, the keyboard shows no live words and can only use your Muesli model."
-        KeyboardSpeechModelSync.sync(selectedModel: coordinator.selectedTranscriptionModel)
-        AppTelemetry.signal("keyboard_inline_dictation_enabled")
-    }
-
-    private func mirrorDictionaryPreferencesForKeyboard() {
-        InKeyboardDictationPreferences.mirrorPostProcessing(
-            fillerWordRemoval: MuesliPreferences.fillerWordRemovalEnabled,
-            customDictionary: MuesliPreferences.customDictionaryEnabled
-        )
-    }
 
     private var keyboardSessionModeDetail: String {
-        "When using Muesli’s mic, release it after each dictation. Turn this off to keep it ready for the next one."
+        "Only applies when the keyboard records through the Muesli app."
     }
 
     private var meetingSettings: some View {
@@ -1221,14 +1152,6 @@ private struct SettingsRow: View {
                 .font(MuesliTheme.callout())
                 .foregroundStyle(valueColor)
         }
-    }
-}
-
-/// Nonisolated so the authorization callback, which Speech invokes on a
-/// background queue, is not inferred as main-actor isolated.
-private func requestSpeechRecognitionAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
-    await withCheckedContinuation { continuation in
-        SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
     }
 }
 

@@ -7,6 +7,7 @@ import UIKit
 /// the Muesli handoff in every case except `.available`.
 enum InKeyboardDictationAvailability: Equatable, Sendable {
     case available
+    /// This keyboard has no in-keyboard session (for example no Full Access).
     case disabled
     case needsFullAccess
     case needsMicrophonePermission
@@ -163,7 +164,6 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         channels: 1,
         interleaved: true
     )
-    private let isPreferenceEnabled: () -> Bool
     private let model: (any InKeyboardModelTranscribing)?
 
     /// Fires when the capture page loads (or reloads after a WebKit crash).
@@ -185,12 +185,10 @@ final class InKeyboardDictationSession: InKeyboardDictating {
 
     init(
         locale: Locale = .current,
-        model: (any InKeyboardModelTranscribing)? = nil,
-        isPreferenceEnabled: @escaping () -> Bool = { InKeyboardDictationPreferences.isEnabled() }
+        model: (any InKeyboardModelTranscribing)? = nil
     ) {
         recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
         self.model = model
-        self.isPreferenceEnabled = isPreferenceEnabled
         capture.onReady = { [weak self] in
             self?.captureStartFailed = false
             self?.onReady?()
@@ -215,7 +213,6 @@ final class InKeyboardDictationSession: InKeyboardDictating {
     }
 
     func availability(hasFullAccess: Bool) -> InKeyboardDictationAvailability {
-        guard isPreferenceEnabled() else { return .disabled }
         guard hasFullAccess else { return .needsFullAccess }
         guard AVAudioApplication.shared.recordPermission == .granted else { return .needsMicrophonePermission }
         if model?.canTranscribe != true {

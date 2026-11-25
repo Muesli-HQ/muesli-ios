@@ -46,12 +46,8 @@ enum KeyboardSpeechModelSync {
         case share(source: URL, manifest: KeyboardSpeechModel.Manifest)
     }
 
-    static func makePlan(
-        for model: LocalTranscriptionModel,
-        isEnabled: Bool = InKeyboardDictationPreferences.isEnabled()
-    ) -> Plan {
-        guard isEnabled,
-              let version = keyboardVersion(for: model),
+    static func makePlan(for model: LocalTranscriptionModel) -> Plan {
+        guard let version = keyboardVersion(for: model),
               ModelBackgroundDownloadService.isModelDownloaded(model),
               let source = ModelBackgroundDownloadService.storageDirectory(for: model) else {
             return .remove
@@ -128,7 +124,6 @@ enum KeyboardSpeechModelSync {
     // MARK: - Settings status
 
     enum Status: Equatable {
-        case off
         case appleSpeechOnly(reason: String)
         case waitingForKeyboard(modelName: String)
         case loading(modelName: String)
@@ -139,11 +134,9 @@ enum KeyboardSpeechModelSync {
 
     static func status(
         selectedModel: LocalTranscriptionModel,
-        isEnabled: Bool = InKeyboardDictationPreferences.isEnabled(),
         keyboardState: (KeyboardSpeechModel.KeyboardState, String)? = KeyboardSpeechModel.keyboardState(),
         memoryLimit: UInt64? = KeyboardSpeechModel.reportedMemoryLimit()
     ) -> Status {
-        guard isEnabled else { return .off }
         guard keyboardVersion(for: selectedModel) != nil else {
             return .appleSpeechOnly(reason: "\(selectedModel.shortName) can’t run inside the keyboard.")
         }

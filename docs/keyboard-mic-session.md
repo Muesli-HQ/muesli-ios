@@ -164,14 +164,11 @@ attempt. Full recording cancellation still removes the checkpoint directory.
 
 ## In-keyboard dictation
 
-Settings → Input → **Dictate inside the keyboard** lets the keyboard record and
-transcribe without opening Muesli. It is on by default and stored in the App
-Group defaults (`muesli.keyboard.inKeyboardDictation.enabled`) so the keyboard
-process can read it. The keyboard cannot prompt for permissions. Turning the
-setting on requests microphone and Speech Recognition permission in the app.
-While it is on and Speech Recognition is still undetermined, the app asks once
-when it comes to the foreground and is not recording. Until then Record falls
-back to the Muesli handoff. The keyboard creates its capture session only when the setting and keyboard Full Access are both enabled.
+The keyboard records and transcribes itself, without opening Muesli, whenever
+it has Full Access and Muesli has microphone permission. There is no setting to
+turn it off. The keyboard cannot prompt for permissions, so the app asks for
+Speech Recognition once, when it is in the foreground and not recording. Apple
+Speech gives live words and the fallback.
 
 Capture technique adapted from
 [stephancill/ios-keyboard-dictation](https://github.com/stephancill/ios-keyboard-dictation)
@@ -184,25 +181,55 @@ pinging for 3 s, the page releases the microphone. If startup takes more than
 5 s, the keyboard ends the attempt and offers the Muesli handoff on the next
 tap. The keyboard ignores messages from previous capture attempts.
 
-Transcription uses `SFSpeechRecognizer` with `requiresOnDeviceRecognition`, so
-audio never leaves the iPhone. Parakeet/Whisper stay in the app: they do not fit
-a keyboard extension's memory budget. On-device Speech ends an utterance after a
-pause and starts the next result from empty, so `InKeyboardTranscriptAccumulator`
-joins the utterances into one transcript for the whole recording. The keyboard
-shows the waveform while recording. Settings → Input → **Show live transcript**
-(`muesli.keyboard.inKeyboardDictation.liveTranscript`, off by default) shows
-the partial transcript instead. Only the final text is inserted, after the mirrored filler-word and
-custom-dictionary settings are applied. The transcript is saved to history with
-engine `apple-speech-keyboard` and never queued for automatic delivery. The app
-refreshes that history when a new result arrives and when it returns to the
-foreground.
+### Transcription
+
+The keyboard transcribes with the user's selected Parakeet model when it can,
+and otherwise with Apple Speech (`SFSpeechRecognizer`,
+`requiresOnDeviceRecognition`). Audio never leaves the iPhone either way.
+
+- **Sharing the model.** The keyboard cannot read the app's private model
+  folder. `KeyboardSpeechModelSync` clones the selected model (Parakeet
+  TDT-CTC 110M, V3 or Redux) into the App Group under `KeyboardModels/`. APFS
+  clones use no extra disk. It writes `keyboard-model.json` last, so the
+  keyboard never sees a half-copied model. The sync runs at launch, in the
+  foreground and when the model changes. Other models (Whisper, Nemotron,
+  Unified) are withdrawn, and the keyboard uses Apple Speech.
+- **Memory.** On each appearance the keyboard records its memory limit
+  (`phys_footprint + os_proc_available_memory`). `KeyboardParakeetEngine` loads
+  the model only if that limit is at least 131 MB and 60 MB are free. It runs on
+  the CPU and Neural Engine, never the GPU, and Redux's encoder on the CPU only,
+  as in the app. A memory warning unloads it. A load that never finished
+  (iOS ended the keyboard) is not retried for that download, so the keyboard
+  cannot crash on every open.
+- **Compile and load.** Core ML caches compiled models per process, so the app
+  cannot compile for the keyboard. The keyboard starts loading when it appears.
+  Recording never waits. On Stop, the transcript waits for a load still in
+  progress (60 s limit) and the keyboard shows "Preparing <model>…". That wait
+  is the one-time compile after install or an app update; later loads come
+  from the cache. Recordings over 180 s use Apple Speech's transcript, to keep
+  the sample buffer small.
+- **Apple Speech.** It streams partials while recording. Its final text is used
+  when Parakeet is unavailable, fails or hears nothing. On-device Speech ends
+  an utterance after a pause and starts the next result from empty, so
+  `InKeyboardTranscriptAccumulator` joins the utterances into one transcript.
+
+The keyboard shows the waveform while recording. Settings → Input → **Show live
+transcript** (`muesli.keyboard.inKeyboardDictation.liveTranscript`, off by
+default) shows the partial transcript instead. Only the final text is inserted,
+after the mirrored filler-word and custom-dictionary settings are applied.
+History records the engine that wrote it (for example `parakeet-redux-keyboard`
+or `apple-speech-keyboard`). In-keyboard results are never queued for automatic
+delivery. The app refreshes that history when a new result arrives and when it
+returns to the foreground. Settings → Input → **Keyboard Model** shows which
+engine the keyboard uses and why.
 
 Routing on Record:
 
 - Muesli's own mic session is running → existing runtime handoff (no app switch,
   Muesli's local models).
-- Otherwise, in-keyboard dictation when enabled and available (Full Access,
-  both permissions, on-device support for the current locale, capture page ready).
+- Otherwise, in-keyboard dictation when available: Full Access, microphone
+  permission, the capture page ready, and either the keyboard model or Apple
+  Speech (permission and on-device support for the current locale).
 - Anything else → existing open-Muesli handoff. Fallback reasons are logged as
   `inline.fallback` in the keyboard diagnostics log.
 

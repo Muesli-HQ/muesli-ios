@@ -58,14 +58,13 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetV3), .v3)
         XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .whisperLargeTurbo))
         XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .appleSpeech))
-        guard case .remove = KeyboardSpeechModelSync.makePlan(for: .parakeetV3, isEnabled: false) else {
-            return XCTFail("turning in-keyboard dictation off withdraws the shared model")
+        guard case .remove = KeyboardSpeechModelSync.makePlan(for: .whisperLargeTurbo) else {
+            return XCTFail("a model the keyboard can't run is withdrawn")
         }
     }
 
     func testStatusExplainsWhichEngineTheKeyboardUses() {
-        XCTAssertEqual(KeyboardSpeechModelSync.status(selectedModel: .parakeetTdtCtc110m, isEnabled: false), .off)
-        if case .appleSpeechOnly = KeyboardSpeechModelSync.status(selectedModel: .whisperLargeTurbo, isEnabled: true) {
+        if case .appleSpeechOnly = KeyboardSpeechModelSync.status(selectedModel: .whisperLargeTurbo) {
         } else {
             XCTFail("Whisper cannot run in the keyboard")
         }

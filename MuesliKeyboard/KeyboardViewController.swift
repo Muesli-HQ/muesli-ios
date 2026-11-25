@@ -91,8 +91,8 @@ final class KeyboardViewController: UIInputViewController {
         refreshLaunchSnapshot()
     }
 
-    private func configureInlineDictationIfEnabled() {
-        guard hasFullAccess, InKeyboardDictationPreferences.isEnabled() else {
+    private func configureInlineDictation() {
+        guard hasFullAccess else {
             inKeyboardDictation?.tearDown()
             controller.inKeyboardDictation = nil
             inKeyboardDictation = nil
@@ -129,7 +129,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     override func viewWillAppear(_ animated: Bool) {
-        configureInlineDictationIfEnabled()
+        configureInlineDictation()
         appearanceGuard.beginAppearance()
         controller.isLaunchSettled = false
         controller.prepareInitialPresentationState()

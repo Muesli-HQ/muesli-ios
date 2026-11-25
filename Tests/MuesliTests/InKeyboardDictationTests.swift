@@ -291,10 +291,7 @@ final class InKeyboardDictationTests: XCTestCase {
             InKeyboardDictationPreferences.postProcess(" museli rocks ", customWords: [word], defaults: defaults),
             "museli rocks"
         )
-        XCTAssertTrue(InKeyboardDictationPreferences.isEnabled(in: defaults), "in-keyboard dictation defaults to on")
         XCTAssertFalse(InKeyboardDictationPreferences.showsLiveTranscript(in: defaults), "waveform is the default")
-        defaults.set(false, forKey: InKeyboardDictationPreferences.enabledKey)
-        XCTAssertFalse(InKeyboardDictationPreferences.isEnabled(in: defaults), "an explicit off is kept")
     }
 
     func testLiveTranscriptReplacesWaveformOnlyWhenPreferred() throws {
@@ -355,17 +352,15 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(transcript.text, "There we go")
     }
 
-    func testSpeechPermissionPromptOnlyWhenEnabledIdleAndUndetermined() {
+    func testSpeechPermissionPromptOnlyWhenIdleAndUndetermined() {
         XCTAssertTrue(InKeyboardDictationPermissionPrompt.shouldPrompt(
-            isRecording: false, isEnabled: true, microphone: .granted, speech: .notDetermined))
+            isRecording: false, microphone: .granted, speech: .notDetermined))
         XCTAssertFalse(InKeyboardDictationPermissionPrompt.shouldPrompt(
-            isRecording: true, isEnabled: true, microphone: .granted, speech: .notDetermined))
+            isRecording: true, microphone: .granted, speech: .notDetermined))
         XCTAssertFalse(InKeyboardDictationPermissionPrompt.shouldPrompt(
-            isRecording: false, isEnabled: false, microphone: .granted, speech: .notDetermined))
+            isRecording: false, microphone: .undetermined, speech: .notDetermined))
         XCTAssertFalse(InKeyboardDictationPermissionPrompt.shouldPrompt(
-            isRecording: false, isEnabled: true, microphone: .undetermined, speech: .notDetermined))
-        XCTAssertFalse(InKeyboardDictationPermissionPrompt.shouldPrompt(
-            isRecording: false, isEnabled: true, microphone: .granted, speech: .denied))
+            isRecording: false, microphone: .granted, speech: .denied))
     }
 }
 

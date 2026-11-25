@@ -2,9 +2,9 @@ import AVFoundation
 import Foundation
 import Speech
 
-/// In-keyboard dictation is on by default, but the keyboard extension cannot
-/// show permission prompts. Until Speech Recognition is allowed, Record opens
-/// Muesli instead. This asks once, from the app, when nothing is recording.
+/// The keyboard extension cannot show permission prompts. Speech Recognition
+/// gives the keyboard live words and its Apple Speech fallback, so the app asks
+/// once, when nothing is recording.
 @MainActor
 enum InKeyboardDictationPermissionPrompt {
     /// Lets a keyboard handoff that opened the app start recording first.
@@ -27,11 +27,10 @@ enum InKeyboardDictationPermissionPrompt {
 
     static func shouldPrompt(
         isRecording: Bool,
-        isEnabled: Bool = InKeyboardDictationPreferences.isEnabled(),
         microphone: AVAudioApplication.recordPermission = AVAudioApplication.shared.recordPermission,
         speech: SFSpeechRecognizerAuthorizationStatus = SFSpeechRecognizer.authorizationStatus()
     ) -> Bool {
-        !isRecording && isEnabled && microphone == .granted && speech == .notDetermined
+        !isRecording && microphone == .granted && speech == .notDetermined
     }
 
     /// Nonisolated so Speech's background-queue callback is not inferred as

@@ -40,7 +40,11 @@ struct SettingsView: View {
     @AppStorage(
         InKeyboardDictationPreferences.enabledKey,
         store: InKeyboardDictationPreferences.sharedDefaults
-    ) private var inKeyboardDictationEnabled = false
+    ) private var inKeyboardDictationEnabled = InKeyboardDictationPreferences.enabledByDefault
+    @AppStorage(
+        InKeyboardDictationPreferences.liveTranscriptKey,
+        store: InKeyboardDictationPreferences.sharedDefaults
+    ) private var inKeyboardLiveTranscript = InKeyboardDictationPreferences.liveTranscriptByDefault
     @State private var requestingKeyboardPermissions = false
     @State private var inKeyboardDictationStatusText: String?
 
@@ -293,6 +297,15 @@ struct SettingsView: View {
                             .foregroundStyle(MuesliTheme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if inKeyboardDictationEnabled {
+                        Divider().overlay(MuesliTheme.surfaceBorder)
+                        SettingsToggleRow(
+                            icon: "text.bubble",
+                            title: "Show live transcript",
+                            detail: "Show words as you speak instead of the waveform while dictating inside the keyboard.",
+                            isOn: $inKeyboardLiveTranscript
+                        )
+                    }
                     Divider().overlay(MuesliTheme.surfaceBorder)
                     SettingsToggleRow(
                         icon: "keyboard.badge.ellipsis",
@@ -340,7 +353,7 @@ struct SettingsView: View {
     }
 
     private var inKeyboardDictationDetail: String {
-        "Use Apple Speech when Muesli’s mic is off. Requires keyboard Full Access."
+        "Record and transcribe on this iPhone with Apple Speech, without switching to Muesli. Uses Muesli’s mic instead when it is already on. Requires keyboard Full Access."
     }
 
     private var inKeyboardDictationBinding: Binding<Bool> {

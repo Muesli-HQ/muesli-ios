@@ -98,6 +98,9 @@ struct MuesliApp: App {
                         coordinator.prewarmModelIfNeeded(reason: "foreground")
                         coordinator.syncICloudTextIfEnabled(reason: "foreground")
                         coordinator.recoverLongVoiceNotesIfNeeded()
+                        if coordinator.hasCompletedOnboarding {
+                            InKeyboardDictationPermissionPrompt.requestIfNeeded { coordinator.isRecording }
+                        }
                     }
                 }
         }

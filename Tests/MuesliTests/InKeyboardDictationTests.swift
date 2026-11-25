@@ -1,3 +1,5 @@
+import AVFoundation
+import Speech
 import XCTest
 @testable import Muesli
 
@@ -273,7 +275,81 @@ final class InKeyboardDictationTests: XCTestCase {
             InKeyboardDictationPreferences.postProcess(" museli rocks ", customWords: [word], defaults: defaults),
             "museli rocks"
         )
-        XCTAssertFalse(InKeyboardDictationPreferences.isEnabled(in: defaults), "opt-in defaults to off")
+        XCTAssertTrue(InKeyboardDictationPreferences.isEnabled(in: defaults), "in-keyboard dictation defaults to on")
+        XCTAssertFalse(InKeyboardDictationPreferences.showsLiveTranscript(in: defaults), "waveform is the default")
+        defaults.set(false, forKey: InKeyboardDictationPreferences.enabledKey)
+        XCTAssertFalse(InKeyboardDictationPreferences.isEnabled(in: defaults), "an explicit off is kept")
+    }
+
+    func testLiveTranscriptReplacesWaveformOnlyWhenPreferred() throws {
+        controller.inKeyboardLiveTranscriptPreference = { false }
+        controller.startDictation()
+        engine.handlers?.onPartial("Hello there")
+        XCTAssertFalse(controller.showsInKeyboardLiveTranscript)
+        engine.handlers?.onCompleted("Hello there")
+        XCTAssertFalse(controller.showsInKeyboardLiveTranscript)
+
+        controller.inKeyboardLiveTranscriptPreference = { true }
+        controller.startDictation()
+        engine.handlers?.onPartial("Hello again")
+        XCTAssertTrue(controller.showsInKeyboardLiveTranscript)
+        XCTAssertTrue(controller.showsLiveTranscript)
+        XCTAssertEqual(controller.liveTranscript, "Hello again")
+    }
+
+    // MARK: - Transcript accumulation
+
+    func testAccumulatorKeepsEveryUtteranceAcrossSpeechRestarts() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("Hello", start: 0.2, endsUtterance: false)
+        transcript.apply("Hello world.", start: 0.2, endsUtterance: false)
+        // Speech restarts after a pause without marking the utterance done.
+        transcript.apply("This is", start: 3.1, endsUtterance: false)
+        transcript.apply("This is the second part.", start: 3.1, endsUtterance: false)
+        transcript.apply("And a third", start: 7.4, endsUtterance: false)
+
+        XCTAssertEqual(transcript.text, "Hello world. This is the second part. And a third")
+    }
+
+    func testAccumulatorCommitsOnUtteranceMetadataWithoutDuplicatingFinal() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("First sentence.", start: 0.1, endsUtterance: true)
+        transcript.apply("Second", start: 0.1, endsUtterance: false)
+        transcript.apply("Second sentence.", start: 0.1, endsUtterance: true)
+        // The final result after endAudio() repeats the last utterance.
+        transcript.apply("Second sentence.", start: 0.1, endsUtterance: false)
+
+        XCTAssertEqual(transcript.text, "First sentence. Second sentence.")
+    }
+
+    func testAccumulatorTreatsFullTranscriptResultAsReplacement() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("One two.", start: 0.0, endsUtterance: true)
+        transcript.apply("One two. Three four.", start: 0.0, endsUtterance: false)
+
+        XCTAssertEqual(transcript.text, "One two. Three four.")
+    }
+
+    func testAccumulatorRevisionsReplaceTheCurrentUtterance() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("Their", start: 0.4, endsUtterance: false)
+        transcript.apply("There we go", start: 0.4, endsUtterance: false)
+        transcript.apply("", start: nil, endsUtterance: false)
+
+        XCTAssertEqual(transcript.text, "There we go")
+    }
+
+    func testSpeechPermissionPromptOnlyWhenEnabledIdleAndUndetermined() {
+        XCTAssertTrue(InKeyboardDictationPermissionPrompt.shouldPrompt(
+            isRecording: false, isEnabled: true, microphone: .granted, speech: .notDetermined))
+        XCTAssertFalse(InKeyboardDictationPermissionPrompt.shouldPrompt(
+            isRecording: true, isEnabled: true, microphone: .granted, speech: .notDetermined))
+        XCTAssertFalse(InKeyboardDictationPermissionPrompt.shouldPrompt(
+            isRecording: false, isEnabled: false, microphone: .granted, speech: .notDetermined))
+        XCTAssertFalse(InKeyboardDictationPermissionPrompt.shouldPrompt(
+            isRecording: false, isEnabled: true, microphone: .undetermined, speech: .notDetermined))
+        XCTAssertFalse(InKeyboardDictationPermissionPrompt.shouldPrompt(
+            isRecording: false, isEnabled: true, microphone: .granted, speech: .denied))
     }
 }
 

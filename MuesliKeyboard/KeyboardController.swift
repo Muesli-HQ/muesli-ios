@@ -56,6 +56,10 @@ final class KeyboardController {
     private(set) var canUseInKeyboardDictation = false
     private(set) var needsForegroundStart = false
     private var inKeyboardRequestID: UUID?
+    /// Reads the "live transcript instead of waveform" setting when capture starts.
+    var inKeyboardLiveTranscriptPreference: () -> Bool = { InKeyboardDictationPreferences.showsLiveTranscript() }
+    /// Whether this capture shows its live transcript in place of the waveform.
+    private(set) var showsInKeyboardLiveTranscript = false
     private var inKeyboardPartialTranscript = ""
 
     init(
@@ -1373,6 +1377,7 @@ extension KeyboardController {
         KeyboardDiagnosticsLog.record("inline.start")
         inKeyboardRequestID = requestID
         inKeyboardPartialTranscript = ""
+        showsInKeyboardLiveTranscript = inKeyboardLiveTranscriptPreference()
         isInKeyboardCaptureActive = true
         liveTranscript = ""
         inputLevel = 0
@@ -1439,6 +1444,7 @@ extension KeyboardController {
         isInKeyboardCaptureActive = false
         inKeyboardRequestID = nil
         inKeyboardPartialTranscript = ""
+        showsInKeyboardLiveTranscript = false
         liveTranscript = ""
         inputLevel = 0
         dictationPhase = .idle

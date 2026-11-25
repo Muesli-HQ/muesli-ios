@@ -253,7 +253,9 @@ struct KeyboardRootView: View {
             .frame(width: Self.activeStatusWidth, alignment: .leading)
 
             HStack(spacing: MuesliTheme.spacing4) {
-                if controller.isInKeyboardCaptureActive && controller.showsLiveTranscript {
+                if controller.isInKeyboardCaptureActive
+                    && controller.showsInKeyboardLiveTranscript
+                    && controller.showsLiveTranscript {
                     Text(controller.liveTranscript)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(MuesliTheme.textPrimary)

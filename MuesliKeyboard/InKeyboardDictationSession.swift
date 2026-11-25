@@ -33,6 +33,77 @@ enum InKeyboardDictationAvailability: Equatable, Sendable {
     }
 }
 
+/// Joins Apple Speech results into one transcript for the whole recording.
+///
+/// On-device dictation ends an utterance after a pause and starts the next
+/// result from empty, so `bestTranscription` only ever holds the latest
+/// utterance. Using it alone inserted just the last sentence. Utterances are
+/// committed when Speech marks one finished (`speechRecognitionMetadata`) or
+/// when a result starts later in the audio than the one before it.
+struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
+    /// Corrections of one utterance keep its start time; a new utterance
+    /// starts at least this much later.
+    static let restartThreshold: TimeInterval = 0.5
+
+    private struct Utterance: Equatable, Sendable {
+        var text: String
+        var start: TimeInterval?
+    }
+
+    private var committed: [Utterance] = []
+    private var current = Utterance(text: "", start: nil)
+
+    var text: String {
+        (committed + [current])
+            .map(\.text)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// - Parameters:
+    ///   - start: timestamp of the result's first segment, if any.
+    ///   - endsUtterance: Speech attached utterance metadata to this result.
+    mutating func apply(_ result: String, start: TimeInterval?, endsUtterance: Bool) {
+        let next = Utterance(text: result.trimmingCharacters(in: .whitespacesAndNewlines), start: start)
+        if let first = committed.first, Self.sameStart(start, first.start),
+           Self.normalized(next.text).hasPrefix(Self.normalized(committed.map(\.text).joined(separator: " "))) {
+            // Speech did not restart: this result covers the whole recording.
+            committed = []
+        } else if current.text.isEmpty, let last = committed.last, Self.sameStart(start, last.start),
+                  Self.overlaps(next.text, last.text) {
+            // A repeat of the utterance just committed (for example the final
+            // result after endAudio()): replace it instead of adding it twice.
+            committed.removeLast()
+        } else if !current.text.isEmpty, !Self.sameStart(start, current.start) {
+            commitCurrent()
+        }
+        if !next.text.isEmpty || current.text.isEmpty { current = next }
+        if endsUtterance { commitCurrent() }
+    }
+
+    private mutating func commitCurrent() {
+        if !current.text.isEmpty { committed.append(current) }
+        current = Utterance(text: "", start: nil)
+    }
+
+    /// Results without timing are treated as revisions of the same utterance.
+    private static func sameStart(_ lhs: TimeInterval?, _ rhs: TimeInterval?) -> Bool {
+        guard let lhs, let rhs else { return true }
+        return abs(lhs - rhs) <= restartThreshold
+    }
+
+    /// True when one text extends the other, as revisions of one utterance do.
+    private static func overlaps(_ lhs: String, _ rhs: String) -> Bool {
+        let lhs = normalized(lhs), rhs = normalized(rhs)
+        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        return lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs)
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+}
+
 struct InKeyboardDictationHandlers {
     var onListening: @MainActor () -> Void = {}
     var onPartial: @MainActor (String) -> Void = { _ in }
@@ -79,7 +150,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var handlers: InKeyboardDictationHandlers?
-    private var latestTranscript = ""
+    private var transcript = InKeyboardTranscriptAccumulator()
     private var finalResultTimeoutTask: Task<Void, Never>?
     /// Incremented per recording so Speech callbacks that hop to the main
     /// actor after a cancel cannot drive the next recording.
@@ -140,7 +211,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
 
         self.request = request
         self.handlers = handlers
-        latestTranscript = ""
+        transcript = InKeyboardTranscriptAccumulator()
         didStartCapture = false
         generation += 1
         let generation = generation
@@ -200,7 +271,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         finalResultTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.finalResultTimeout)
             guard !Task.isCancelled, let self else { return }
-            self.complete(with: self.latestTranscript)
+            self.complete(with: self.transcript.text)
         }
     }
 
@@ -211,17 +282,17 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         let isNoSpeechError = update.isNoSpeechError
         guard let handlers else { return }
         if let text {
-            latestTranscript = text
+            transcript.apply(text, start: update.firstSegmentStart, endsUtterance: update.endsUtterance)
             if isFinal {
-                complete(with: text)
+                complete(with: transcript.text)
             } else {
-                handlers.onPartial(text)
+                handlers.onPartial(transcript.text)
             }
             return
         }
         guard let errorDescription else { return }
-        if isNoSpeechError || !latestTranscript.isEmpty {
-            complete(with: latestTranscript)
+        if isNoSpeechError || !transcript.text.isEmpty {
+            complete(with: transcript.text)
         } else {
             fail(errorDescription)
         }
@@ -248,12 +319,14 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         task?.cancel()
         task = nil
         request = nil
-        latestTranscript = ""
+        transcript = InKeyboardTranscriptAccumulator()
         if capture.isCapturing { capture.stop() }
     }
 
     fileprivate struct RecognitionUpdate: Sendable {
         let text: String?
+        let firstSegmentStart: TimeInterval?
+        let endsUtterance: Bool
         let isFinal: Bool
         let errorDescription: String?
         let isNoSpeechError: Bool
@@ -268,6 +341,8 @@ final class InKeyboardDictationSession: InKeyboardDictating {
             // Extract Sendable values before hopping off Speech's queue.
             let update = RecognitionUpdate(
                 text: result?.bestTranscription.formattedString,
+                firstSegmentStart: result?.bestTranscription.segments.first?.timestamp,
+                endsUtterance: result?.speechRecognitionMetadata != nil,
                 isFinal: result?.isFinal ?? false,
                 errorDescription: error.map { ($0 as NSError).localizedDescription },
                 isNoSpeechError: error.map(isNoSpeechError) ?? false

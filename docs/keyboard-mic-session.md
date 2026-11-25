@@ -162,13 +162,16 @@ Failed recorder startup discards only that attempt's audio files. The session
 checkpoint manifest must survive retries so Stop can finalize the successful
 attempt. Full recording cancellation still removes the checkpoint directory.
 
-## In-keyboard dictation (opt-in)
+## In-keyboard dictation
 
 Settings → Input → **Dictate inside the keyboard** lets the keyboard record and
-transcribe without opening Muesli. It is off by default and stored in the App
+transcribe without opening Muesli. It is on by default and stored in the App
 Group defaults (`muesli.keyboard.inKeyboardDictation.enabled`) so the keyboard
-process can read it. Enabling it requests microphone and Speech Recognition
-permission in the app after checking on-device language support. The keyboard creates its capture session only when the setting and keyboard Full Access are both enabled.
+process can read it. The keyboard cannot prompt for permissions. Turning the
+setting on requests microphone and Speech Recognition permission in the app.
+While it is on and Speech Recognition is still undetermined, the app asks once
+when it comes to the foreground and is not recording. Until then Record falls
+back to the Muesli handoff. The keyboard creates its capture session only when the setting and keyboard Full Access are both enabled.
 
 Capture technique adapted from
 [stephancill/ios-keyboard-dictation](https://github.com/stephancill/ios-keyboard-dictation)
@@ -183,8 +186,12 @@ tap. The keyboard ignores messages from previous capture attempts.
 
 Transcription uses `SFSpeechRecognizer` with `requiresOnDeviceRecognition`, so
 audio never leaves the iPhone. Parakeet/Whisper stay in the app: they do not fit
-a keyboard extension's memory budget. Partials appear in the keyboard's live
-transcript; only the final text is inserted, after the mirrored filler-word and
+a keyboard extension's memory budget. On-device Speech ends an utterance after a
+pause and starts the next result from empty, so `InKeyboardTranscriptAccumulator`
+joins the utterances into one transcript for the whole recording. The keyboard
+shows the waveform while recording. Settings → Input → **Show live transcript**
+(`muesli.keyboard.inKeyboardDictation.liveTranscript`, off by default) shows
+the partial transcript instead. Only the final text is inserted, after the mirrored filler-word and
 custom-dictionary settings are applied. The transcript is saved to history with
 engine `apple-speech-keyboard` and never queued for automatic delivery. The app
 refreshes that history when a new result arrives and when it returns to the

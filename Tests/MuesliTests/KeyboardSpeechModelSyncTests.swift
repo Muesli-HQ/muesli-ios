@@ -171,6 +171,30 @@ final class KeyboardSpeechModelCrashGuardTests: XCTestCase {
         XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: redux, in: defaults))
     }
 
+    /// iOS also ends a keyboard that was closed during a long first load, so
+    /// one unfinished load only earns a retry; two in a row block the model.
+    func testOneUnfinishedLoadIsRetriedAndTwoBlockTheModel() throws {
+        let suite = "keyboard-model-guard-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let unified = guardManifest("parakeet-unified", "3-4")
+
+        KeyboardSpeechModel.beginLoad(unified, in: defaults)   // keyboard closed mid-load
+        XCTAssertTrue(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: unified, in: defaults))
+        XCTAssertFalse(KeyboardSpeechModel.keepsEndingTheKeyboard(manifest: unified, in: defaults))
+
+        KeyboardSpeechModel.beginLoad(unified, in: defaults)   // the retry ends the keyboard too
+        XCTAssertTrue(KeyboardSpeechModel.keepsEndingTheKeyboard(manifest: unified, in: defaults))
+
+        KeyboardSpeechModel.endLoad(unified, in: defaults)
+        XCTAssertEqual(KeyboardSpeechModel.unfinishedLoads(manifest: unified, in: defaults), 0)
+
+        KeyboardSpeechModel.beginLoad(unified, in: defaults)
+        KeyboardSpeechModel.endLoad(unified, in: defaults)     // a finished load resets the count
+        KeyboardSpeechModel.beginLoad(unified, in: defaults)
+        XCTAssertFalse(KeyboardSpeechModel.keepsEndingTheKeyboard(manifest: unified, in: defaults))
+    }
+
     func testLoadingAnotherModelKeepsTheCrashRecord() throws {
         let suite = "keyboard-model-guard-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

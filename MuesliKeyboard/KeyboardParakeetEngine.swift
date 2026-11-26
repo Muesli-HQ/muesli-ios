@@ -93,7 +93,12 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
             state = .unavailable
             return
         }
-        guard !KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest) else {
+        if KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest),
+           !KeyboardSpeechModel.keepsEndingTheKeyboard(manifest: manifest) {
+            // Once could be the keyboard closing mid-load; try again.
+            KeyboardDiagnosticsLog.record("parakeet.retryAfterUnfinishedLoad", ["model": manifest.modelID])
+        }
+        guard !KeyboardSpeechModel.keepsEndingTheKeyboard(manifest: manifest) else {
             // Hide it from the keyboard's model menu for this download.
             KeyboardSpeechModel.markUnsupported(manifest)
             KeyboardSpeechModel.endLoad(manifest)
@@ -159,6 +164,12 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
             ])
             throw CancellationError()
         }
+        // Logged first, so a keyboard that iOS ends mid-transcription leaves a
+        // trace in the diagnostics.
+        KeyboardDiagnosticsLog.record("parakeet.transcribing", [
+            "model": manifest.modelID,
+            "audioSeconds": String(format: "%.1f", Double(samples.count) / 16_000)
+        ])
         let startedAt = ContinuousClock.now
         let text = try await runner.transcribe(samples)
         KeyboardDiagnosticsLog.record("parakeet.transcribed", [
@@ -286,8 +297,20 @@ private enum Runner: Sendable {
     func transcribe(_ samples: [Float]) async throws -> String {
         switch self {
         case .tdt(let manager):
-            var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-            return try await manager.transcribe(samples, decoderState: &state).text
+            // Keep every call on the single-pass path; see QuietSplit.
+            var texts: [String] = []
+            for range in QuietSplit.ranges(for: samples) {
+                var piece = Array(samples[range])
+                if piece.count < QuietSplit.sampleRate {
+                    // Too short for the model on its own; pad with silence.
+                    piece += [Float](repeating: 0, count: QuietSplit.sampleRate - piece.count)
+                }
+                var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+                let text = try await manager.transcribe(piece, decoderState: &state).text
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { texts.append(text) }
+            }
+            return texts.joined(separator: " ")
         case .unified(let manager):
             return try await manager.transcribeWithTimings(samples).text
         case .nemotron(let manager):

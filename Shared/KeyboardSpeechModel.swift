@@ -24,9 +24,9 @@ enum KeyboardSpeechModel {
 
     static let catalogFileName = "keyboard-models.json"
     static let memoryLimitKey = "muesli.keyboard.memoryLimitBytes"
-    static let unsupportedModelsKey = "muesli.keyboard.unsupportedModels"
+    static let unsupportedModelsKey = "muesli.keyboard.unsupportedModels.v2"
     /// Model ID -> fingerprint for each load in progress, one per model.
-    static let loadingModelsKey = "muesli.keyboard.loadingModels"
+    static let loadingModelsKey = "muesli.keyboard.loadingModels.v2"
 
     /// Model families the keyboard loads. All use the ANE/CPU, never the GPU.
     enum Version: String, Codable, Sendable {
@@ -98,15 +98,21 @@ enum KeyboardSpeechModel {
 
     // MARK: - Crash guard
 
+    /// Unfinished loads in a row before a model counts as one the keyboard
+    /// can't run. One isn't enough: iOS also ends a keyboard that was simply
+    /// closed while a long first load was running.
+    static let unfinishedLoadLimit = 2
+
     /// Marks a load as started. If iOS ends the keyboard before `endLoad`,
-    /// the marker remains and `previousLoadDidNotFinish` reports it. Kept per
-    /// model, so loading another model never erases this record.
+    /// the marker remains and the next `beginLoad` of the same download counts
+    /// it. Kept per model, so loading another model never erases this record.
     static func beginLoad(
         _ manifest: Manifest,
         in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
     ) {
+        let attempts = unfinishedLoads(manifest: manifest, in: defaults) + 1
         var loading = defaults?.dictionary(forKey: loadingModelsKey) as? [String: String] ?? [:]
-        loading[manifest.modelID] = manifest.sourceFingerprint
+        loading[manifest.modelID] = "\(manifest.sourceFingerprint)#\(attempts)"
         defaults?.set(loading, forKey: loadingModelsKey)
     }
 
@@ -121,14 +127,37 @@ enum KeyboardSpeechModel {
         defaults?.set(loading, forKey: loadingModelsKey)
     }
 
+    /// How many loads of this exact download in a row started and never
+    /// finished, because iOS ended the keyboard during them.
+    static func unfinishedLoads(
+        manifest: Manifest,
+        in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
+    ) -> Int {
+        let loading = defaults?.dictionary(forKey: loadingModelsKey) as? [String: String] ?? [:]
+        guard let record = loading[manifest.modelID] else { return 0 }
+        let parts = record.split(separator: "#", omittingEmptySubsequences: false)
+        guard parts.count > 1, let count = Int(parts.last!) else {
+            return record == manifest.sourceFingerprint ? 1 : 0
+        }
+        return parts.dropLast().joined(separator: "#") == manifest.sourceFingerprint ? count : 0
+    }
+
     /// True when the keyboard started loading this exact download and never
-    /// finished: iOS most likely ended the keyboard for using too much memory.
+    /// finished.
     static func previousLoadDidNotFinish(
         manifest: Manifest,
         in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
     ) -> Bool {
-        let loading = defaults?.dictionary(forKey: loadingModelsKey) as? [String: String] ?? [:]
-        return loading[manifest.modelID] == manifest.sourceFingerprint
+        unfinishedLoads(manifest: manifest, in: defaults) > 0
+    }
+
+    /// True once loads of this download were cut short `unfinishedLoadLimit`
+    /// times in a row: most likely the model ends the keyboard.
+    static func keepsEndingTheKeyboard(
+        manifest: Manifest,
+        in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
+    ) -> Bool {
+        unfinishedLoads(manifest: manifest, in: defaults) >= unfinishedLoadLimit
     }
 
     // MARK: - What the keyboard can run

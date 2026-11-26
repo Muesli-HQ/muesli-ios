@@ -60,20 +60,21 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
         XCTAssertEqual(KeyboardSpeechModelSync.apply(.init(entries: []), container: container), "none")
     }
 
-    func testEveryFluidAudioModelCanBeTriedInTheKeyboard() {
+    func testEveryDownloadableModelCanBeTriedInTheKeyboard() {
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetTdtCtc110m), .tdtCtc110m)
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetV3), .v3)
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .phonon25), .phonon)
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetUnified), .unified)
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .nemotron35), .nemotron)
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetRealtimeEou120m), .eou320)
-        XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .whisperLargeTurbo))
+        XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .whisperLargeTurbo), .whisper)
+        XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .appleSpeech), "Apple Speech runs natively, nothing to share")
         XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .appleSpeech))
         let shared = KeyboardSpeechModelSync.makePlan(
-            models: [.whisperLargeTurbo, .appleSpeech],
+            models: [.appleSpeech],
             isDownloaded: { _ in true }
         )
-        XCTAssertTrue(shared.entries.isEmpty, "models the keyboard can't run are never shared")
+        XCTAssertTrue(shared.entries.isEmpty, "Apple Speech has no files to share")
     }
 
     func testKeyboardMemoryLimitGate() {
@@ -106,6 +107,35 @@ final class KeyboardSpeechModelCrashGuardTests: XCTestCase {
 
         KeyboardSpeechModel.recordKeyboardState(.ready, modelID: manifest.modelID, fingerprint: "10-20", in: defaults)
         XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest, in: defaults))
+    }
+
+    func testFailedModelsAreNotRunnableUntilRedownloaded() throws {
+        let suite = "keyboard-model-guard-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("runnable-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: container) }
+        let root = try XCTUnwrap(KeyboardSpeechModel.rootDirectory(in: container))
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        func manifest(_ id: String, _ print: String) -> KeyboardSpeechModel.Manifest {
+            .init(modelID: id, displayName: id, engineIdentifier: id, version: .whisper, sourceFingerprint: print)
+        }
+        func share(_ models: [KeyboardSpeechModel.Manifest]) throws {
+            try JSONEncoder().encode(KeyboardSpeechModel.Catalog(models: models))
+                .write(to: root.appendingPathComponent(KeyboardSpeechModel.catalogFileName))
+        }
+        try share([manifest("whisper-tiny-en", "1"), manifest("whisper-large-turbo", "1")])
+        XCTAssertEqual(KeyboardSpeechModel.runnableModelIDs(in: container, defaults: defaults), ["whisper-tiny-en", "whisper-large-turbo"])
+
+        KeyboardSpeechModel.markUnsupported(manifest("whisper-large-turbo", "1"), in: defaults)
+        XCTAssertEqual(KeyboardSpeechModel.runnableModelIDs(in: container, defaults: defaults), ["whisper-tiny-en"])
+
+        try share([manifest("whisper-tiny-en", "1"), manifest("whisper-large-turbo", "2")])
+        XCTAssertEqual(KeyboardSpeechModel.runnableModelIDs(in: container, defaults: defaults), ["whisper-tiny-en", "whisper-large-turbo"],
+                       "a new download is offered again")
+
+        KeyboardSpeechModel.recordMemoryLimit(80 * 1_048_576, in: defaults)
+        XCTAssertEqual(KeyboardSpeechModel.runnableModelIDs(in: container, defaults: defaults), [], "too little keyboard memory for any model")
     }
 
     func testDeliberateUnloadIsNotMistakenForACrash() throws {

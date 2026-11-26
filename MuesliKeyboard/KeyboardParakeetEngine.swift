@@ -3,6 +3,7 @@ import CoreML
 import FluidAudio
 import Foundation
 import os
+@preconcurrency import WhisperKit
 
 /// Runs the speech model the app shared into the App Group (Parakeet TDT
 /// variants, Phonon, Parakeet Unified, Nemotron or Parakeet Realtime) inside
@@ -89,6 +90,7 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
 
         guard !KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest) else {
             KeyboardSpeechModel.recordKeyboardState(.failed, modelID: manifest.modelID, fingerprint: manifest.sourceFingerprint)
+            KeyboardSpeechModel.markUnsupported(manifest)
             KeyboardDiagnosticsLog.record("parakeet.skippedAfterFailedLoad", ["model": manifest.modelID])
             state = .unavailable
             return
@@ -122,6 +124,7 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
                 guard let self, self.loadedFingerprint == fingerprint else { return }
                 self.state = .unavailable
                 KeyboardSpeechModel.recordKeyboardState(.failed, modelID: manifest.modelID, fingerprint: fingerprint)
+                KeyboardSpeechModel.markUnsupported(manifest)
                 KeyboardDiagnosticsLog.record("parakeet.loadFailed", [
                     "reason": String(String(describing: error).prefix(64))
                 ])
@@ -224,6 +227,7 @@ private enum Runner: Sendable {
     case unified(UnifiedAsrManager)
     case nemotron(StreamingNemotronMultilingualAsrManager)
     case eou(StreamingEouAsrManager)
+    case whisper(KeyboardWhisper)
 
     static func load(_ version: KeyboardSpeechModel.Version, from directory: URL) async throws -> Runner {
         let configuration = MLModelConfiguration()
@@ -262,6 +266,10 @@ private enum Runner: Sendable {
             let manager = StreamingEouAsrManager(configuration: configuration, chunkSize: .ms320)
             try await manager.loadModels(from: directory)
             return .eou(manager)
+        case .whisper:
+            let whisper = KeyboardWhisper()
+            try await whisper.load(from: directory)
+            return .whisper(whisper)
         }
     }
 
@@ -287,12 +295,15 @@ private enum Runner: Sendable {
                 _ = try await manager.process(audioBuffer: buffer)
             }
             return try await manager.finish()
+        case .whisper(let whisper):
+            return try await whisper.transcribe(samples)
         }
     }
 
     func cleanup() async {
         switch self {
         case .tdt(let manager): await manager.cleanup()
+        case .whisper(let whisper): await whisper.unload()
         case .unified, .nemotron, .eou: break
         }
     }
@@ -314,5 +325,45 @@ private enum Runner: Sendable {
             }
         }
         return buffer
+    }
+}
+
+/// WhisperKit in the keyboard, from the shared folder the app prepared (model
+/// and tokenizer together), so it never downloads. Kept in an actor because
+/// `WhisperKit` itself isn't Sendable.
+actor KeyboardWhisper {
+    private var kit: WhisperKit?
+
+    func load(from directory: URL) async throws {
+        let configuration = WhisperKitConfig(
+            model: nil,
+            modelFolder: directory.path,
+            tokenizerFolder: directory,
+            // WhisperKit defaults the mel step to the GPU, which a keyboard
+            // can't use from another app.
+            computeOptions: ModelComputeOptions(
+                melCompute: .cpuOnly,
+                audioEncoderCompute: .cpuAndNeuralEngine,
+                textDecoderCompute: .cpuAndNeuralEngine,
+                prefillCompute: .cpuOnly
+            ),
+            verbose: false,
+            logLevel: .error,
+            prewarm: false,
+            load: true,
+            download: false
+        )
+        kit = try await WhisperKit(configuration)
+    }
+
+    func transcribe(_ samples: [Float]) async throws -> String {
+        guard let kit else { throw CancellationError() }
+        let results: [TranscriptionResult] = try await kit.transcribe(audioArray: samples)
+        return results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func unload() async {
+        await kit?.unloadModels()
+        kit = nil
     }
 }

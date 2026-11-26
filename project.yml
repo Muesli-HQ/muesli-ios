@@ -183,6 +183,7 @@ targets:
         SKIP_INSTALL: true
     dependencies:
       - package: FluidAudio
+      - package: WhisperKit
       - sdk: libsqlite3.tbd
 
   MuesliDevKeyboard:
@@ -208,6 +209,7 @@ targets:
         MUESLI_URL_SCHEME: mueslidev
     dependencies:
       - package: FluidAudio
+      - package: WhisperKit
       - sdk: libsqlite3.tbd
 
   MuesliTests:

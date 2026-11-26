@@ -190,11 +190,18 @@ and otherwise with Apple Speech (`SFSpeechRecognizer`,
 - **Sharing models.** The keyboard cannot read the app's private model
   folder. `KeyboardSpeechModelSync` clones every downloaded model the keyboard
   can run (Parakeet TDT-CTC 110M, V3, Redux, Phonon 2.5, Parakeet Unified,
-  Nemotron 3.5, Parakeet Realtime) into the App Group under `KeyboardModels/`.
-  It lists them in `keyboard-models.json`. APFS clones use no extra disk. A
-  model is listed only after its copy is complete. The sync runs at launch, in
-  the foreground and when downloads change. Whisper needs WhisperKit, which
-  the keyboard doesn't link, so it uses Apple Speech.
+  Nemotron 3.5, Parakeet Realtime, Whisper) into the App Group under `KeyboardModels/`.
+  Whisper models are shared too (WhisperKit), with their tokenizer copied
+  into the same folder, so the keyboard never downloads anything. It lists them
+  in `keyboard-models.json`. APFS clones use no extra disk. A model is listed
+  only after its copy is complete. The sync runs at launch, in the foreground
+  and when downloads change.
+- **Only runnable models are offered.** A model whose load fails or ends the
+  keyboard is recorded as unsupported for that download. The keyboard's model
+  menu then lists only models it can run itself, plus Apple Speech. If the
+  app's selection can't run in the keyboard, the chip reads "Apple Speech".
+  Without Full Access the keyboard hands off to Muesli, and every model is
+  offered.
 - **Choosing the model.** The keyboard loads the model selected in the
   keyboard model catalog. A pick in the keyboard's model menu switches at once
   and loads the new model. The app adopts it the next time it runs, waiting

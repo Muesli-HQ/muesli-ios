@@ -27,6 +27,7 @@ enum KeyboardSpeechModel {
     static let keyboardStateKey = "muesli.keyboard.parakeet.state"
     static let keyboardStateModelKey = "muesli.keyboard.parakeet.stateModel"
     static let keyboardStateFingerprintKey = "muesli.keyboard.parakeet.stateFingerprint"
+    static let unsupportedModelsKey = "muesli.keyboard.unsupportedModels"
 
     /// Model families the keyboard loads. All use the ANE/CPU, never the GPU.
     enum Version: String, Codable, Sendable {
@@ -41,6 +42,8 @@ enum KeyboardSpeechModel {
         case nemotron
         /// Parakeet Realtime (EOU) with 320 ms chunks.
         case eou320
+        /// A WhisperKit model; its tokenizer is shared in the same folder.
+        case whisper
     }
 
     struct Manifest: Codable, Equatable, Sendable {
@@ -147,6 +150,35 @@ enum KeyboardSpeechModel {
         return (state == KeyboardState.loading.rawValue || state == KeyboardState.failed.rawValue)
             && model == manifest.modelID
             && fingerprint == manifest.sourceFingerprint
+    }
+
+    // MARK: - What the keyboard can run
+
+    /// Records that this download can't run in the keyboard (its load failed
+    /// or ended the keyboard), so the keyboard's model menu hides it. A new
+    /// download of the model is tried again.
+    static func markUnsupported(
+        _ manifest: Manifest,
+        in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
+    ) {
+        var unsupported = defaults?.dictionary(forKey: unsupportedModelsKey) as? [String: String] ?? [:]
+        unsupported[manifest.modelID] = manifest.sourceFingerprint
+        defaults?.set(unsupported, forKey: unsupportedModelsKey)
+    }
+
+    /// Model IDs the keyboard can transcribe with itself: shared by the app,
+    /// not known to fail, and only when the keyboard's memory limit allows a
+    /// model at all. Apple Speech isn't included; it always runs.
+    static func runnableModelIDs(
+        in container: URL? = containerURL,
+        defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
+    ) -> Set<String> {
+        if let limit = reportedMemoryLimit(in: defaults), !canHoldModel(memoryLimit: limit) {
+            return []
+        }
+        let unsupported = defaults?.dictionary(forKey: unsupportedModelsKey) as? [String: String] ?? [:]
+        let models = readCatalog(in: container)?.models ?? []
+        return Set(models.filter { unsupported[$0.modelID] != $0.sourceFingerprint }.map(\.modelID))
     }
 
     static func canHoldModel(memoryLimit: UInt64?) -> Bool {

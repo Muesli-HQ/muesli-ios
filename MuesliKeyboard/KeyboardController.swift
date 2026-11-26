@@ -197,8 +197,18 @@ final class KeyboardController {
         modelCatalog?.selectedModel
     }
 
+    /// Model IDs this keyboard can transcribe with itself. Set by the keyboard
+    /// when it dictates in-keyboard. Nil means every model the app has ready
+    /// is offered (the Muesli handoff runs any of them).
+    var keyboardRunnableModelIDs: (() -> Set<String>)?
+    static let appleSpeechRawValue = "apple-speech"
+
+    /// The model menu offers only models this keyboard can actually use, so
+    /// picking one never quietly falls back to another engine.
     var readyTranscriptionModels: [KeyboardTranscriptionModelOption] {
-        modelCatalog?.readyModels ?? []
+        let ready = modelCatalog?.readyModels ?? []
+        guard let runnable = keyboardRunnableModelIDs?() else { return ready }
+        return ready.filter { $0.rawValue == Self.appleSpeechRawValue || runnable.contains($0.rawValue) }
     }
 
     var canSelectTranscriptionModel: Bool {
@@ -207,8 +217,16 @@ final class KeyboardController {
             && pendingModelRawValue == nil
     }
 
+    /// Names the engine the keyboard will actually use: if the selected model
+    /// can't run here, in-keyboard dictation uses Apple Speech.
     var modelChipTitle: String {
-        selectedTranscriptionModel?.shortName ?? "Model"
+        guard let selected = selectedTranscriptionModel else { return "Model" }
+        if let runnable = keyboardRunnableModelIDs?(),
+           selected.rawValue != Self.appleSpeechRawValue,
+           !runnable.contains(selected.rawValue) {
+            return "Apple Speech"
+        }
+        return selected.shortName
     }
 
     var isModelSelectionPending: Bool {

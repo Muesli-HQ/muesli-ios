@@ -330,6 +330,27 @@ final class KeyboardControllerTests: XCTestCase {
         XCTAssertTrue(bus.postedEvents.contains(.modelSelectionRequested))
     }
 
+    func testModelMenuOffersOnlyModelsTheKeyboardCanRun() throws {
+        func option(_ id: String, _ name: String) -> KeyboardTranscriptionModelOption {
+            .init(rawValue: id, displayName: name, shortName: name, capabilityLabel: "", isReady: true)
+        }
+        let redux = option("parakeet-redux", "Redux")
+        let whisper = option("whisper-large-turbo", "Whisper Large")
+        let apple = option("apple-speech", "Apple Speech")
+        try store.saveKeyboardModelCatalog(.init(
+            selectedRawValue: whisper.rawValue,
+            models: [redux, whisper, apple],
+            canSelectModels: true
+        ))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.readyTranscriptionModels, [redux, whisper, apple], "the handoff can run any model")
+
+        controller.keyboardRunnableModelIDs = { ["parakeet-redux"] }
+
+        XCTAssertEqual(controller.readyTranscriptionModels, [redux, apple], "a model that can't run in the keyboard is hidden")
+        XCTAssertEqual(controller.modelChipTitle, "Apple Speech", "the chip names the engine actually used")
+    }
+
     func testModelSelectionIsDisabledDuringActiveDictation() throws {
         let parakeet = KeyboardTranscriptionModelOption(
             rawValue: "parakeet-tdt-ctc-110m",

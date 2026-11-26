@@ -9,10 +9,10 @@ enum KeyboardSpeechModelSync {
     private static var isSyncing = false
     private static var needsAnotherPass = false
 
-    /// Models the keyboard can try. Whether one fits is decided in the
-    /// keyboard from its measured memory; a model that ends the keyboard while
-    /// loading is not tried again for that download. Whisper needs WhisperKit,
-    /// which the keyboard does not link.
+    /// Models the keyboard can try: every downloadable model. Whether one fits
+    /// is decided in the keyboard from its measured memory; a model that fails
+    /// or ends the keyboard while loading is hidden from the keyboard's model
+    /// menu for that download.
     static func keyboardVersion(for model: LocalTranscriptionModel) -> KeyboardSpeechModel.Version? {
         switch model {
         case .parakeetTdtCtc110m: .tdtCtc110m
@@ -22,8 +22,28 @@ enum KeyboardSpeechModelSync {
         case .parakeetUnified: .unified
         case .nemotron35: .nemotron
         case .parakeetRealtimeEou120m: .eou320
-        case .appleSpeech, .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo: nil
+        case .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo: .whisper
+        case .appleSpeech: nil
         }
+    }
+
+    /// WhisperKit finds a tokenizer in the model folder, so the shared copy
+    /// carries one and the keyboard never downloads it. The app keeps it in
+    /// the Hugging Face cache under the tokenizer's repo name.
+    static func whisperTokenizerFiles(for model: LocalTranscriptionModel) -> [URL] {
+        let repo: String? = switch model {
+        case .whisperTinyEnglish: "whisper-tiny.en"
+        case .whisperSmallEnglish: "whisper-small.en"
+        case .whisperMediumEnglish: "whisper-medium.en"
+        case .whisperLargeTurbo: "whisper-large-v3"
+        default: nil
+        }
+        guard let repo else { return [] }
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("huggingface/models/openai/\(repo)", isDirectory: true)
+        return ["tokenizer.json", "tokenizer_config.json"]
+            .map { folder.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     /// Brings the App Group copies in line with the downloaded models. Runs
@@ -51,6 +71,8 @@ enum KeyboardSpeechModelSync {
     struct Entry: Sendable {
         var source: URL
         var manifest: KeyboardSpeechModel.Manifest
+        /// Copied into the model's shared folder (Whisper's tokenizer).
+        var extraFiles: [URL] = []
     }
 
     struct Plan: Sendable {
@@ -71,7 +93,7 @@ enum KeyboardSpeechModelSync {
                 engineIdentifier: model.engineIdentifier,
                 version: version,
                 sourceFingerprint: fingerprint(of: source)
-            ))
+            ), extraFiles: whisperTokenizerFiles(for: model))
         })
     }
 
@@ -129,6 +151,12 @@ enum KeyboardSpeechModelSync {
                 let staging = root.appendingPathComponent(".staging-\(UUID().uuidString)", isDirectory: true)
                 // APFS clones the files, so this uses no extra disk.
                 try fileManager.copyItem(at: entry.source, to: staging)
+                for file in entry.extraFiles {
+                    let target = staging.appendingPathComponent(file.lastPathComponent)
+                    if !fileManager.fileExists(atPath: target.path) {
+                        try fileManager.copyItem(at: file, to: target)
+                    }
+                }
                 if fileManager.fileExists(atPath: destination.path) {
                     try fileManager.removeItem(at: destination)
                 }

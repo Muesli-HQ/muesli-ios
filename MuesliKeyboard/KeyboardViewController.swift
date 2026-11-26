@@ -95,10 +95,12 @@ final class KeyboardViewController: UIInputViewController {
         guard hasFullAccess else {
             inKeyboardDictation?.tearDown()
             controller.inKeyboardDictation = nil
+            controller.keyboardRunnableModelIDs = nil
             inKeyboardDictation = nil
             KeyboardParakeetEngine.shared.unload()
             return
         }
+        controller.keyboardRunnableModelIDs = { KeyboardSpeechModel.runnableModelIDs() }
         let parakeet = KeyboardParakeetEngine.shared
         parakeet.onReady = { [weak self] in
             self?.controller.refreshInKeyboardAvailability()

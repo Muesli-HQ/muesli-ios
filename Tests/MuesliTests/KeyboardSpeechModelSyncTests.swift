@@ -25,32 +25,39 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
         .init(modelID: id, displayName: "Parakeet", engineIdentifier: id, version: .tdtCtc110m, sourceFingerprint: fingerprint)
     }
 
-    func testShareClonesModelAndWritesManifestLast() throws {
-        let plan = KeyboardSpeechModelSync.Plan.share(source: source, manifest: manifest())
-
-        XCTAssertEqual(KeyboardSpeechModelSync.apply(plan, container: container), "shared")
-        XCTAssertEqual(Muesli.KeyboardSpeechModel.readManifest(in: container), manifest())
-        let copied = try XCTUnwrap(Muesli.KeyboardSpeechModel.modelDirectory(for: manifest().modelID, in: container))
-        XCTAssertEqual(try Data(contentsOf: copied.appendingPathComponent("Encoder.mlmodelc")), Data("weights".utf8))
-
-        XCTAssertEqual(KeyboardSpeechModelSync.apply(plan, container: container), "current", "an unchanged model is not copied again")
+    private func plan(_ ids: String...) -> KeyboardSpeechModelSync.Plan {
+        .init(entries: ids.map { .init(source: source, manifest: manifest($0)) })
     }
 
-    func testSwitchingModelsRemovesTheOldCopy() throws {
-        _ = KeyboardSpeechModelSync.apply(.share(source: source, manifest: manifest("parakeet-v3")), container: container)
-        _ = KeyboardSpeechModelSync.apply(.share(source: source, manifest: manifest()), container: container)
+    func testShareClonesEveryModelAndListsThem() throws {
+        XCTAssertEqual(KeyboardSpeechModelSync.apply(plan("parakeet-redux", "nemotron-3.5"), container: container), "shared")
+
+        XCTAssertEqual(Muesli.KeyboardSpeechModel.readCatalog(in: container)?.models.map(\.modelID), ["parakeet-redux", "nemotron-3.5"])
+        XCTAssertEqual(Muesli.KeyboardSpeechModel.readManifest(for: "nemotron-3.5", in: container), manifest("nemotron-3.5"))
+        XCTAssertNil(Muesli.KeyboardSpeechModel.readManifest(for: "whisper-tiny-en", in: container))
+        let copied = try XCTUnwrap(Muesli.KeyboardSpeechModel.modelDirectory(for: "nemotron-3.5", in: container))
+        XCTAssertEqual(try Data(contentsOf: copied.appendingPathComponent("Encoder.mlmodelc")), Data("weights".utf8))
+
+        XCTAssertEqual(KeyboardSpeechModelSync.apply(plan("parakeet-redux", "nemotron-3.5"), container: container), "current",
+                       "unchanged models are not copied again")
+    }
+
+    func testRemovedDownloadsAreWithdrawn() throws {
+        _ = KeyboardSpeechModelSync.apply(plan("parakeet-redux", "nemotron-3.5"), container: container)
+        _ = KeyboardSpeechModelSync.apply(plan("parakeet-redux"), container: container)
 
         let root = try XCTUnwrap(Muesli.KeyboardSpeechModel.rootDirectory(in: container))
         let entries = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
-        XCTAssertEqual(entries, [Muesli.KeyboardSpeechModel.manifestFileName, "parakeet-tdt-ctc-110m"].sorted())
+        XCTAssertEqual(entries, [Muesli.KeyboardSpeechModel.catalogFileName, "parakeet-redux"].sorted())
+        XCTAssertNil(Muesli.KeyboardSpeechModel.readManifest(for: "nemotron-3.5", in: container))
     }
 
-    func testRemovePlanDeletesSharedModel() throws {
-        _ = KeyboardSpeechModelSync.apply(.share(source: source, manifest: manifest()), container: container)
+    func testNoKeyboardModelsRemovesTheSharedFolder() throws {
+        _ = KeyboardSpeechModelSync.apply(plan("parakeet-redux"), container: container)
 
-        XCTAssertEqual(KeyboardSpeechModelSync.apply(.remove, container: container), "removed")
-        XCTAssertNil(Muesli.KeyboardSpeechModel.readManifest(in: container))
-        XCTAssertEqual(KeyboardSpeechModelSync.apply(.remove, container: container), "none")
+        XCTAssertEqual(KeyboardSpeechModelSync.apply(.init(entries: []), container: container), "removed")
+        XCTAssertNil(Muesli.KeyboardSpeechModel.readCatalog(in: container))
+        XCTAssertEqual(KeyboardSpeechModelSync.apply(.init(entries: []), container: container), "none")
     }
 
     func testEveryFluidAudioModelCanBeTriedInTheKeyboard() {
@@ -62,9 +69,11 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetRealtimeEou120m), .eou320)
         XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .whisperLargeTurbo))
         XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .appleSpeech))
-        guard case .remove = KeyboardSpeechModelSync.makePlan(for: .whisperLargeTurbo) else {
-            return XCTFail("a model the keyboard can't run is withdrawn")
-        }
+        let shared = KeyboardSpeechModelSync.makePlan(
+            models: [.whisperLargeTurbo, .appleSpeech],
+            isDownloaded: { _ in true }
+        )
+        XCTAssertTrue(shared.entries.isEmpty, "models the keyboard can't run are never shared")
     }
 
     func testKeyboardMemoryLimitGate() {

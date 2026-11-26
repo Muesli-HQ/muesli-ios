@@ -238,15 +238,20 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(controller.dictationPhase, .recording)
     }
 
-    func testModelSelectionAcknowledgmentPreservesInlineCaptureStatus() async throws {
+    func testKeyboardModelPickSwitchesAtOnceAndPreservesInlineCaptureStatus() async throws {
         let model = KeyboardTranscriptionModelOption(
             rawValue: "new", displayName: "New model", shortName: "New", capabilityLabel: "Ready", isReady: true
         )
         try store.saveKeyboardModelCatalog(.init(selectedRawValue: "old", models: [model], canSelectModels: true))
         controller.startObservingSharedState()
         defer { controller.stopObservingSharedState() }
+        var reloads = 0
+        controller.onTranscriptionModelChanged = { reloads += 1 }
         controller.selectTranscriptionModel(model)
-        XCTAssertTrue(controller.isModelSelectionPending)
+        XCTAssertFalse(controller.isModelSelectionPending, "the keyboard switches without waiting for the app")
+        XCTAssertEqual(controller.modelChipTitle, "New")
+        XCTAssertEqual(reloads, 1, "the in-keyboard engine is told to load the new model")
+        XCTAssertEqual(try store.keyboardModelCatalog()?.selectedRawValue, "new")
         controller.startDictation()
         engine.handlers?.onListening()
 

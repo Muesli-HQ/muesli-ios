@@ -321,9 +321,12 @@ final class KeyboardControllerTests: XCTestCase {
 
         XCTAssertEqual(
             try store.keyboardModelSelectionRequest()?.modelRawValue,
-            whisper.rawValue
+            whisper.rawValue,
+            "the app still adopts the pick when it next runs"
         )
-        XCTAssertTrue(controller.isModelSelectionPending)
+        XCTAssertFalse(controller.isModelSelectionPending, "the keyboard switches without waiting for the app")
+        XCTAssertEqual(controller.modelChipTitle, "Whisper Tiny")
+        XCTAssertEqual(try store.keyboardModelCatalog()?.selectedRawValue, whisper.rawValue)
         XCTAssertTrue(bus.postedEvents.contains(.modelSelectionRequested))
     }
 

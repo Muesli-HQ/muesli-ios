@@ -64,7 +64,10 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
         let limit = Self.measureMemoryLimit()
         KeyboardSpeechModel.recordMemoryLimit(limit)
 
-        guard let manifest = KeyboardSpeechModel.readManifest(),
+        // The keyboard's model catalog holds the current pick, including one
+        // made in the keyboard that the app has not adopted yet.
+        let selected = (try? SharedStore().keyboardModelCatalog())?.selectedRawValue
+        guard let manifest = KeyboardSpeechModel.readManifest(for: selected),
               let directory = KeyboardSpeechModel.modelDirectory(for: manifest.modelID) else {
             unload()
             return

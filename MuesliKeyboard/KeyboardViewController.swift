@@ -104,6 +104,9 @@ final class KeyboardViewController: UIInputViewController {
             self?.controller.refreshInKeyboardAvailability()
         }
         parakeet.prepareIfPossible()
+        controller.onTranscriptionModelChanged = {
+            KeyboardParakeetEngine.shared.prepareIfPossible()
+        }
         guard inKeyboardDictation == nil else { return }
         let session = InKeyboardDictationSession(model: parakeet)
         session.onReady = { [weak self] in

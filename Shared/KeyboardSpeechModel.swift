@@ -3,12 +3,13 @@ import Foundation
 /// Contract between the app and the keyboard for running a Parakeet model
 /// inside the keyboard extension.
 ///
-/// The keyboard cannot read the app's private model folder. The app clones the
-/// selected Parakeet model into the App Group (`KeyboardModels/<id>`). APFS
+/// The keyboard cannot read the app's private model folder. The app clones
+/// every downloaded model the keyboard can run into the App Group
+/// (`KeyboardModels/<id>`) and lists them in `keyboard-models.json`. APFS
 /// clones share blocks, so this costs no extra disk until either copy changes.
-/// It then writes `keyboard-model.json`. The keyboard reports its memory limit,
-/// so the app only shares a model the keyboard can hold, and the keyboard
-/// reports whether its copy is loaded.
+/// The keyboard loads whichever model is selected in the keyboard model
+/// catalog, so a model picked in the keyboard switches at once, without the
+/// app. The keyboard reports its memory limit and whether its copy is loaded.
 enum KeyboardSpeechModel {
     /// The keyboard's memory limit must be at least this. iOS 26 gives
     /// keyboards about 177 MB on recent iPhones. A loaded Parakeet model plus
@@ -21,7 +22,7 @@ enum KeyboardSpeechModel {
     /// Apple Speech's transcript, so the sample buffer stays small (~6 MB).
     static let maximumDurationSeconds: Double = 180
 
-    static let manifestFileName = "keyboard-model.json"
+    static let catalogFileName = "keyboard-models.json"
     static let memoryLimitKey = "muesli.keyboard.memoryLimitBytes"
     static let keyboardStateKey = "muesli.keyboard.parakeet.state"
     static let keyboardStateModelKey = "muesli.keyboard.parakeet.stateModel"
@@ -73,10 +74,21 @@ enum KeyboardSpeechModel {
         rootDirectory(in: container)?.appendingPathComponent(modelID, isDirectory: true)
     }
 
-    static func readManifest(in container: URL? = containerURL) -> Manifest? {
-        guard let url = rootDirectory(in: container)?.appendingPathComponent(manifestFileName),
+    /// Every model shared with the keyboard.
+    struct Catalog: Codable, Equatable, Sendable {
+        var models: [Manifest]
+    }
+
+    static func readCatalog(in container: URL? = containerURL) -> Catalog? {
+        guard let url = rootDirectory(in: container)?.appendingPathComponent(catalogFileName),
               let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(Manifest.self, from: data)
+        return try? JSONDecoder().decode(Catalog.self, from: data)
+    }
+
+    /// The shared copy of `modelID`, if the keyboard can run it.
+    static func readManifest(for modelID: String?, in container: URL? = containerURL) -> Manifest? {
+        guard let modelID else { return nil }
+        return readCatalog(in: container)?.models.first { $0.modelID == modelID }
     }
 
     // MARK: - Keyboard reports

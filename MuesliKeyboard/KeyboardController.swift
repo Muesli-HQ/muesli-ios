@@ -285,19 +285,33 @@ final class KeyboardController {
         }
     }
 
+    /// Fires after the keyboard switches models, so its in-keyboard engine
+    /// can load the new one.
+    var onTranscriptionModelChanged: (@MainActor () -> Void)?
+
+    /// Switches at once: the keyboard dictates without the app, so it can't
+    /// wait for the app to apply the change. The app adopts the pick the next
+    /// time it runs.
     func selectTranscriptionModel(_ model: KeyboardTranscriptionModelOption) {
         guard model.isReady,
-              model.rawValue != modelCatalog?.selectedRawValue,
+              let catalog = modelCatalog,
+              model.rawValue != catalog.selectedRawValue,
               canSelectTranscriptionModel
         else { return }
 
         do {
-            pendingModelRawValue = model.rawValue
+            let updated = KeyboardTranscriptionModelCatalog(
+                selectedRawValue: model.rawValue,
+                models: catalog.models,
+                canSelectModels: catalog.canSelectModels
+            )
             try store.saveKeyboardModelSelectionRequest(.init(modelRawValue: model.rawValue))
-            statusText = "Switching to \(model.shortName)"
+            try store.saveKeyboardModelCatalog(updated)
+            modelCatalog = updated
+            statusText = "\(model.shortName) selected"
             KeyboardDiagnosticsLog.record("model.select", ["model": model.rawValue])
+            onTranscriptionModelChanged?()
         } catch {
-            pendingModelRawValue = nil
             statusText = "Enable Full Access"
         }
     }

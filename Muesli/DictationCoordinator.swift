@@ -180,7 +180,7 @@ final class DictationCoordinator {
                 forKey: MuesliPreferences.transcriptionModelKey
             )
             if !Self.shouldConfigureForUITestingFromLaunchArguments() {
-                KeyboardSpeechModelSync.sync(selectedModel: selectedTranscriptionModel)
+                KeyboardSpeechModelSync.sync()
             }
             let preparationTask = modelPreparationTask
             modelPreparationTask = nil
@@ -221,7 +221,12 @@ final class DictationCoordinator {
             exists = { $0.isDownloaded }
             #endif
         }
-        downloadedTranscriptionModels = Set(LocalTranscriptionModel.allCases.filter(exists))
+        let downloaded = Set(LocalTranscriptionModel.allCases.filter(exists))
+        if downloaded != downloadedTranscriptionModels, !Self.shouldConfigureForUITestingFromLaunchArguments() {
+            // A download or removal changes which models the keyboard can run.
+            KeyboardSpeechModelSync.sync()
+        }
+        downloadedTranscriptionModels = downloaded
         if modelPreparation.isReady, !downloadedTranscriptionModels.contains(selectedTranscriptionModel) {
             modelPreparation = ModelPreparationState(
                 status: "\(selectedTranscriptionModel.shortName) is not downloaded",
@@ -499,8 +504,10 @@ final class DictationCoordinator {
             }
         }
         startSharedEventObservation()
-        publishKeyboardModelCatalog()
+        // Adopt a model picked in the keyboard before republishing the app's
+        // own selection over it.
         processPendingKeyboardModelSelection()
+        publishKeyboardModelCatalog()
         MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
             guard let self else { return .unavailable }
             let result = self.stopCaptureFromLiveActivity(sessionID: sessionID)
@@ -4232,6 +4239,12 @@ final class DictationCoordinator {
     }
 
     private func publishKeyboardModelCatalog() {
+        if canSelectTranscriptionModelsFromKeyboard,
+           (try? store.keyboardModelSelectionRequest()) != nil {
+            // A keyboard pick waited for the app to become idle.
+            processPendingKeyboardModelSelection()
+            return
+        }
         let catalog = KeyboardTranscriptionModelCatalog(
             selectedRawValue: selectedTranscriptionModel.rawValue,
             models: LocalTranscriptionModel.availableModels.map(\.keyboardCatalogOption),
@@ -4240,14 +4253,17 @@ final class DictationCoordinator {
         try? store.saveKeyboardModelCatalog(catalog)
     }
 
+    /// The keyboard switches models itself (it dictates without the app), so
+    /// its pick is the user's current choice: adopt it whenever the app next
+    /// runs, however old. While the app is busy recording or transcribing,
+    /// the request waits rather than being dropped.
     private func processPendingKeyboardModelSelection() {
         guard let request = try? store.keyboardModelSelectionRequest() else { return }
+        guard canSelectTranscriptionModelsFromKeyboard else { return }
         try? store.clearKeyboardModelSelectionRequest()
 
-        guard Date.now.timeIntervalSince(request.createdAt) < 300,
-              let model = LocalTranscriptionModel(rawValue: request.modelRawValue),
-              model.isDownloaded,
-              canSelectTranscriptionModelsFromKeyboard
+        guard let model = LocalTranscriptionModel(rawValue: request.modelRawValue),
+              model.isDownloaded
         else {
             publishKeyboardModelCatalog()
             return

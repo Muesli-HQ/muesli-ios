@@ -166,7 +166,13 @@ protocol InKeyboardModelTranscribing: AnyObject {
     var isPreparing: Bool { get }
     var displayName: String? { get }
     var engineIdentifier: String? { get }
+    /// Longest recording it transcribes; longer ones use Apple Speech.
+    var maximumAudioSeconds: Double { get }
     func transcribe(_ samples: [Float]) async throws -> InKeyboardModelTranscript
+}
+
+extension InKeyboardModelTranscribing {
+    var maximumAudioSeconds: Double { KeyboardSpeechModel.maximumDurationSeconds }
 }
 
 /// Records with `WebAudioCapture` and transcribes on the iPhone, so audio never
@@ -178,7 +184,6 @@ protocol InKeyboardModelTranscribing: AnyObject {
 final class InKeyboardDictationSession: InKeyboardDictating {
     static let engineIdentifier = "apple-speech-keyboard"
     private static let finalResultTimeout: Duration = .seconds(4)
-    private static let maximumModelSamples = Int(KeyboardSpeechModel.maximumDurationSeconds * WebAudioCapture.sampleRate)
 
     private let capture = WebAudioCapture()
     private let recognizer: SFSpeechRecognizer?
@@ -206,6 +211,8 @@ final class InKeyboardDictationSession: InKeyboardDictating {
     private var modelSamples: [Int16]?
     private var modelSamplesOverflowed = false
     private var modelSamplesReachedLimit = false
+    /// Set per recording from the model in use.
+    private var maximumModelSamples = Int(KeyboardSpeechModel.maximumDurationSeconds * WebAudioCapture.sampleRate)
     private var modelTranscriptionTask: Task<Void, Never>?
 
     init(
@@ -262,6 +269,9 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         transcript = InKeyboardTranscriptAccumulator()
         didStartCapture = false
         modelSamples = usesModel ? [] : nil
+        if let model, usesModel {
+            maximumModelSamples = Int(model.maximumAudioSeconds * WebAudioCapture.sampleRate)
+        }
         modelSamplesOverflowed = false
         modelSamplesReachedLimit = false
         generation += 1
@@ -315,7 +325,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         handlers?.onLevel(Double(min(max(rms * 8, 0), 1)))
         let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
         if frames > 0, modelSamples != nil, !modelSamplesOverflowed {
-            if modelSamples!.count + Int(frames) > Self.maximumModelSamples {
+            if modelSamples!.count + Int(frames) > maximumModelSamples {
                 if request == nil {
                     // Only the keyboard model is transcribing, so there is no
                     // other transcript to fall back on: stop at its limit and

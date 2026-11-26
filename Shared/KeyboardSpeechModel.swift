@@ -18,9 +18,32 @@ enum KeyboardSpeechModel {
     static let requiredMemoryLimitBytes: UInt64 = 131 * 1_024 * 1_024
     /// Free memory the keyboard needs right before loading or transcribing.
     static let requiredAvailableBytes: UInt64 = 60 * 1_024 * 1_024
-    /// Longest recording Parakeet transcribes in the keyboard. Longer ones use
-    /// Apple Speech's transcript, so the sample buffer stays small (~6 MB).
+    /// Longest recording a keyboard model transcribes. Longer ones use Apple
+    /// Speech's transcript, which reads audio as it arrives.
     static let maximumDurationSeconds: Double = 180
+    /// Models whose encoder runs on the CPU (Redux, Phonon) hold far more in
+    /// the keyboard's own memory than Neural Engine models, so they stop
+    /// sooner, as Hex's keyboard does for all its models.
+    static let maximumCPUModelDurationSeconds: Double = 90
+    /// Free memory a transcription needs beyond the audio itself. Hex measured
+    /// a Parakeet transcription in a keyboard rising 9-16 MB.
+    static let transcriptionHeadroomBytes: UInt64 = 24 * 1_024 * 1_024
+    /// What FluidAudio holds per second of audio while transcribing (Hex
+    /// measured 0.42 MB; rounded up).
+    static let transcriptionBytesPerSecond: UInt64 = 512 * 1_024
+
+    static func maximumDurationSeconds(for version: Version) -> Double {
+        switch version {
+        case .redux, .phonon: maximumCPUModelDurationSeconds
+        default: maximumDurationSeconds
+        }
+    }
+
+    /// Free memory needed to transcribe this much audio without iOS ending
+    /// the keyboard.
+    static func requiredBytesToTranscribe(seconds: Double) -> UInt64 {
+        transcriptionHeadroomBytes + UInt64((max(seconds, 0) * Double(transcriptionBytesPerSecond)).rounded(.up))
+    }
 
     static let catalogFileName = "keyboard-models.json"
     static let memoryLimitKey = "muesli.keyboard.memoryLimitBytes"

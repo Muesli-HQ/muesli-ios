@@ -55,6 +55,11 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
 
     var displayName: String? { manifest?.displayName }
 
+    var maximumAudioSeconds: Double {
+        manifest.map { KeyboardSpeechModel.maximumDurationSeconds(for: $0.version) }
+            ?? KeyboardSpeechModel.maximumDurationSeconds
+    }
+
     var engineIdentifier: String? {
         manifest.map { "\($0.engineIdentifier)-keyboard" }
     }
@@ -158,9 +163,18 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
             ])
         }
         guard case .ready(let runner, let manifest) = state else { throw CancellationError() }
-        guard Self.availableMemory() >= KeyboardSpeechModel.requiredAvailableBytes / 2 else {
+        // Checked per recording: longer audio needs more room. Without it iOS
+        // ends the keyboard mid-transcription and nothing is pasted; with
+        // Apple Speech's transcript, the dictation still completes.
+        let audioSeconds = Double(samples.count) / 16_000
+        let needed = KeyboardSpeechModel.requiredBytesToTranscribe(seconds: audioSeconds)
+        let available = Self.availableMemory()
+        guard available >= needed else {
             KeyboardDiagnosticsLog.record("parakeet.skippedTranscribe", [
-                "availableMB": String(Self.availableMemory() / 1_048_576)
+                "model": manifest.modelID,
+                "audioSeconds": String(format: "%.1f", audioSeconds),
+                "availableMB": String(available / 1_048_576),
+                "neededMB": String(needed / 1_048_576)
             ])
             throw CancellationError()
         }

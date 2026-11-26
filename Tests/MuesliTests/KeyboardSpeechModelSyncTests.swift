@@ -242,6 +242,20 @@ final class KeyboardSpeechModelCrashGuardTests: XCTestCase {
         XCTAssertEqual(KeyboardSpeechModel.runnableModelIDs(in: container, defaults: defaults), [], "too little keyboard memory for any model")
     }
 
+    func testCPUModelsStopSoonerThanNeuralEngineModels() {
+        XCTAssertEqual(KeyboardSpeechModel.maximumDurationSeconds(for: .phonon), 90)
+        XCTAssertEqual(KeyboardSpeechModel.maximumDurationSeconds(for: .redux), 90)
+        XCTAssertEqual(KeyboardSpeechModel.maximumDurationSeconds(for: .unified), 180)
+        XCTAssertEqual(KeyboardSpeechModel.maximumDurationSeconds(for: .whisper), 180)
+    }
+
+    func testLongerAudioNeedsMoreFreeMemoryToTranscribe() {
+        let megabyte: UInt64 = 1_024 * 1_024
+        XCTAssertEqual(KeyboardSpeechModel.requiredBytesToTranscribe(seconds: 0), 24 * megabyte)
+        XCTAssertEqual(KeyboardSpeechModel.requiredBytesToTranscribe(seconds: 20), 34 * megabyte)
+        XCTAssertEqual(KeyboardSpeechModel.requiredBytesToTranscribe(seconds: 90), 69 * megabyte)
+    }
+
     func testDeliberateUnloadIsNotMistakenForACrash() throws {
         let suite = "keyboard-model-guard-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

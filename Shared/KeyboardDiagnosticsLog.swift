@@ -66,6 +66,27 @@ enum KeyboardDiagnosticsLog {
         }
     }
 
+    /// Keeps the newest whole lines whose UTF-8 size fits in `maxBytes`, in
+    /// their original order, and notes how many older lines were left out.
+    /// Copies across devices (Universal Clipboard) have been cut at 64 KiB,
+    /// which dropped the newest entries -- the ones that matter -- from an
+    /// oldest-first log.
+    static func newestLines(of text: String, fittingIn maxBytes: Int) -> String {
+        guard text.utf8.count > maxBytes else { return text }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        let noteBudget = 64
+        var kept: [Substring] = []
+        var used = 0
+        for line in lines.reversed() {
+            let size = line.utf8.count + 1
+            guard used + size <= maxBytes - noteBudget else { break }
+            kept.append(line)
+            used += size
+        }
+        let omitted = lines.count - kept.count
+        return "(\(omitted) older entries omitted)\n" + kept.reversed().joined(separator: "\n") + "\n"
+    }
+
     static func clear() {
         queue.sync {
             guard let url = fileURL() else { return }

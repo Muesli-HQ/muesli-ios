@@ -321,10 +321,34 @@ final class KeyboardControllerTests: XCTestCase {
 
         XCTAssertEqual(
             try store.keyboardModelSelectionRequest()?.modelRawValue,
-            whisper.rawValue
+            whisper.rawValue,
+            "the app still adopts the pick when it next runs"
         )
-        XCTAssertTrue(controller.isModelSelectionPending)
+        XCTAssertFalse(controller.isModelSelectionPending, "the keyboard switches without waiting for the app")
+        XCTAssertEqual(controller.modelChipTitle, "Whisper Tiny")
+        XCTAssertEqual(try store.keyboardModelCatalog()?.selectedRawValue, whisper.rawValue)
         XCTAssertTrue(bus.postedEvents.contains(.modelSelectionRequested))
+    }
+
+    func testModelMenuOffersOnlyModelsTheKeyboardCanRun() throws {
+        func option(_ id: String, _ name: String) -> KeyboardTranscriptionModelOption {
+            .init(rawValue: id, displayName: name, shortName: name, capabilityLabel: "", isReady: true)
+        }
+        let redux = option("parakeet-redux", "Redux")
+        let whisper = option("whisper-large-turbo", "Whisper Large")
+        let apple = option("apple-speech", "Apple Speech")
+        try store.saveKeyboardModelCatalog(.init(
+            selectedRawValue: whisper.rawValue,
+            models: [redux, whisper, apple],
+            canSelectModels: true
+        ))
+        controller.prepareInitialPresentationState()
+        XCTAssertEqual(controller.readyTranscriptionModels, [redux, whisper, apple], "the handoff can run any model")
+
+        controller.keyboardRunnableModelIDs = { ["parakeet-redux"] }
+
+        XCTAssertEqual(controller.readyTranscriptionModels, [redux, apple], "a model that can't run in the keyboard is hidden")
+        XCTAssertEqual(controller.modelChipTitle, "Apple Speech", "the chip names the engine actually used")
     }
 
     func testModelSelectionIsDisabledDuringActiveDictation() throws {

@@ -82,6 +82,7 @@ targets:
       - path: Muesli
       - path: Shared
       - path: LiveActivityShared
+      - path: ParakeetShared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios
@@ -111,6 +112,7 @@ targets:
       - path: Muesli
       - path: Shared
       - path: LiveActivityShared
+      - path: ParakeetShared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.dev
@@ -171,6 +173,7 @@ targets:
     sources:
       - path: MuesliKeyboard
       - path: Shared
+      - path: ParakeetShared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.keyboard
@@ -179,6 +182,8 @@ targets:
         CODE_SIGN_ENTITLEMENTS: MuesliKeyboard/MuesliKeyboard.entitlements
         SKIP_INSTALL: true
     dependencies:
+      - package: FluidAudio
+      - package: WhisperKit
       - sdk: libsqlite3.tbd
 
   MuesliDevKeyboard:
@@ -187,6 +192,7 @@ targets:
     sources:
       - path: MuesliKeyboard
       - path: Shared
+      - path: ParakeetShared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.phequals7.muesli.ios.dev.keyboard
@@ -202,6 +208,8 @@ targets:
         MUESLI_DISPLAY_NAME: MuesliDev
         MUESLI_URL_SCHEME: mueslidev
     dependencies:
+      - package: FluidAudio
+      - package: WhisperKit
       - sdk: libsqlite3.tbd
 
   MuesliTests:
@@ -217,6 +225,8 @@ targets:
         excludes:
           # UIInputViewController host: needs a real keyboard extension context.
           - "KeyboardViewController.swift"
+          # Links FluidAudio; tests use a fake InKeyboardModelTranscribing.
+          - "KeyboardParakeetEngine.swift"
           - "Info.plist"
           - "PrivacyInfo.xcprivacy"
           - "MuesliKeyboard.entitlements"
@@ -243,6 +253,8 @@ targets:
       - path: MuesliKeyboard
         excludes:
           - "KeyboardViewController.swift"
+          # Links FluidAudio; tests use a fake InKeyboardModelTranscribing.
+          - "KeyboardParakeetEngine.swift"
           - "Info.plist"
           - "PrivacyInfo.xcprivacy"
           - "MuesliKeyboard.entitlements"

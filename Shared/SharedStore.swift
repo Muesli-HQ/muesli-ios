@@ -109,6 +109,15 @@ struct SharedStore: Sendable {
         eventPoster.post(.resultChanged)
     }
 
+    /// Records a transcript produced inside the keyboard (in-keyboard
+    /// dictation) in history only. It deliberately writes no dictation status,
+    /// result pickup, or keyboard delivery: the keyboard already inserted the
+    /// text, and the app's capture state machine never owned this request.
+    func saveKeyboardInlineResult(_ result: DictationResult) throws {
+        try database().saveHistoryOnlyResult(result)
+        eventPoster.post(.resultChanged)
+    }
+
     func pendingKeyboardDeliveries() throws -> [DictationResult] {
         try database().pendingKeyboardDeliveries()
     }
@@ -209,6 +218,13 @@ struct SharedStore: Sendable {
 
     func clearKeyboardModelSelectionRequest() throws {
         try database().clearValue(key: .keyboardModelSelectionRequest)
+    }
+
+    /// Clears the request only while it is still `id`, so a newer pick the
+    /// keyboard saved in the meantime survives. Returns whether it cleared.
+    @discardableResult
+    func clearKeyboardModelSelectionRequest(id: UUID) throws -> Bool {
+        try database().clearKeyboardModelSelectionRequest(matching: id)
     }
 
     func saveSession(_ session: RecordingSession) throws {
@@ -822,6 +838,24 @@ private struct SharedStoreDatabase {
         }
     }
 
+    /// Compares and deletes in one transaction, so a pick the keyboard saves
+    /// between the two steps can't be deleted.
+    func clearKeyboardModelSelectionRequest(matching id: UUID) throws -> Bool {
+        try withDatabase { db in
+            var cleared = false
+            try transaction(db: db) {
+                guard let data = try valueData(key: .keyboardModelSelectionRequest, db: db),
+                      try decoder.decode(KeyboardTranscriptionModelSelectionRequest.self, from: data).id == id
+                else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.keyboardModelSelectionRequest.rawValue, to: statement, at: 1)
+                }
+                cleared = true
+            }
+            return cleared
+        }
+    }
+
     func clearPendingRequest(matching requestID: UUID) throws {
         try withDatabase { db in
             try transaction(db: db) {
@@ -879,6 +913,14 @@ private struct SharedStoreDatabase {
         try withDatabase { db in
             try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
                 try bind(key.rawValue, to: statement, at: 1)
+            }
+        }
+    }
+
+    func saveHistoryOnlyResult(_ result: DictationResult) throws {
+        try withDatabase { db in
+            try transaction(db: db) {
+                try upsertResultHistory(result, db: db)
             }
         }
     }

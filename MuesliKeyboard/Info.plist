@@ -29,6 +29,10 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Muesli Keyboard records your voice so it can type what you say, transcribed on device.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Muesli Keyboard uses on-device speech recognition to turn your voice into text.</string>
 	<key>MuesliAppGroupIdentifier</key>
 	<string>$(MUESLI_APP_GROUP_IDENTIFIER)</string>
 	<key>MuesliCrossProcessPrefix</key>

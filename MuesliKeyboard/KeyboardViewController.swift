@@ -3,6 +3,7 @@ import UIKit
 
 final class KeyboardViewController: UIInputViewController {
     private let controller = KeyboardController()
+    private var inKeyboardDictation: InKeyboardDictationSession?
     private var hostingController: UIHostingController<KeyboardRootView>?
     private let launchSnapshotView = UIImageView()
     private var keyboardHeightConstraint: NSLayoutConstraint?
@@ -52,6 +53,7 @@ final class KeyboardViewController: UIInputViewController {
         controller.keyboardDismisser = { [weak self] in
             self?.dismissKeyboard()
         }
+        controller.currentFullAccess = { [weak self] in self?.hasFullAccess ?? false }
         controller.prepareInitialPresentationState()
 
         let hostingController = UIHostingController(
@@ -89,7 +91,50 @@ final class KeyboardViewController: UIInputViewController {
         refreshLaunchSnapshot()
     }
 
+    private func configureInlineDictation() {
+        guard hasFullAccess else {
+            inKeyboardDictation?.tearDown()
+            controller.inKeyboardDictation = nil
+            controller.keyboardRunnableModelIDs = nil
+            inKeyboardDictation = nil
+            KeyboardParakeetEngine.shared.unload()
+            return
+        }
+        controller.keyboardRunnableModelIDs = { KeyboardSpeechModel.runnableModelIDs() }
+        let parakeet = KeyboardParakeetEngine.shared
+        parakeet.onReady = { [weak self] in
+            self?.controller.refreshInKeyboardAvailability()
+        }
+        parakeet.prepareIfPossible()
+        controller.onTranscriptionModelChanged = {
+            KeyboardParakeetEngine.shared.prepareIfPossible()
+        }
+        guard inKeyboardDictation == nil else { return }
+        let session = InKeyboardDictationSession(model: parakeet)
+        session.onReady = { [weak self] in
+            self?.controller.refreshInKeyboardAvailability()
+        }
+        inKeyboardDictation = session
+        controller.inKeyboardDictation = session
+        session.attach(to: view)
+    }
+
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        guard controller.isInKeyboardCaptureActive == false else { return }
+        KeyboardDiagnosticsLog.record("parakeet.memoryWarning", [
+            "footprintMB": String(KeyboardParakeetEngine.footprint() / 1_048_576)
+        ])
+        KeyboardParakeetEngine.shared.unload()
+        controller.refreshInKeyboardAvailability()
+    }
+
+    deinit {
+        MainActor.assumeIsolated { inKeyboardDictation?.tearDown() }
+    }
+
     override func viewWillAppear(_ animated: Bool) {
+        configureInlineDictation()
         appearanceGuard.beginAppearance()
         controller.isLaunchSettled = false
         controller.prepareInitialPresentationState()

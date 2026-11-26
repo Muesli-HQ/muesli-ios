@@ -179,6 +179,7 @@ final class DictationCoordinator {
                 selectedTranscriptionModel.rawValue,
                 forKey: MuesliPreferences.transcriptionModelKey
             )
+            requestKeyboardModelSync()
             let preparationTask = modelPreparationTask
             modelPreparationTask = nil
             preparationTask?.cancel()
@@ -218,7 +219,12 @@ final class DictationCoordinator {
             exists = { $0.isDownloaded }
             #endif
         }
-        downloadedTranscriptionModels = Set(LocalTranscriptionModel.allCases.filter(exists))
+        let downloaded = Set(LocalTranscriptionModel.allCases.filter(exists))
+        if downloaded != downloadedTranscriptionModels {
+            // A download or removal changes which models the keyboard can run.
+            requestKeyboardModelSync()
+        }
+        downloadedTranscriptionModels = downloaded
         if modelPreparation.isReady, !downloadedTranscriptionModels.contains(selectedTranscriptionModel) {
             modelPreparation = ModelPreparationState(
                 status: "\(selectedTranscriptionModel.shortName) is not downloaded",
@@ -284,6 +290,40 @@ final class DictationCoordinator {
             && meetingRecorder != nil
     }
     var isAudioCaptureActive: Bool { isRecording || isMeetingRecording }
+
+    /// Shares downloaded models with the keyboard. Replaceable in tests.
+    var syncKeyboardModels: @MainActor () -> Void = { KeyboardSpeechModelSync.sync() }
+
+    private func requestKeyboardModelSync() {
+        guard !Self.isUITestingLaunch else { return }
+        syncKeyboardModels()
+    }
+
+    /// Preparation can write files the keyboard copy needs (Whisper fetches
+    /// its tokenizer here), so share again once it finishes.
+    func finishModelPreparation(for model: LocalTranscriptionModel) {
+        guard selectedTranscriptionModel == model else { return }
+        modelPreparationTask = nil
+        modelPreparation = ModelPreparationState(
+            phase: .ready,
+            progress: 1,
+            status: "\(model.shortName) ready",
+            detail: model.detail
+        )
+        requestKeyboardModelSync()
+        playOnboardingModelReadyCueIfNeeded(for: model)
+        AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
+    }
+
+    /// Available in every configuration; the launch-argument check itself
+    /// exists only in DEBUG builds.
+    private static var isUITestingLaunch: Bool {
+        #if DEBUG
+        shouldConfigureForUITestingFromLaunchArguments()
+        #else
+        false
+        #endif
+    }
     var isMeetingTranscribing: Bool { meetingPresentationState.isProcessing }
     var activeMeetingTitle = "Untitled Meeting"
     var clipboardStatusText: String?
@@ -496,8 +536,10 @@ final class DictationCoordinator {
             }
         }
         startSharedEventObservation()
-        publishKeyboardModelCatalog()
+        // Adopt a model picked in the keyboard before republishing the app's
+        // own selection over it.
         processPendingKeyboardModelSelection()
+        publishKeyboardModelCatalog()
         MeetingLiveActivityActionDispatcher.register { [weak self] sessionID in
             guard let self else { return .unavailable }
             let result = self.stopCaptureFromLiveActivity(sessionID: sessionID)
@@ -2779,6 +2821,19 @@ final class DictationCoordinator {
         }
     }
 
+    /// Inline keyboard results have no app recording session or handoff to reconcile.
+    func refreshInlineKeyboardHistory() {
+        #if DEBUG
+        guard !Self.shouldConfigureForUITestingFromLaunchArguments() else { return }
+        #endif
+        guard let persistedHistory = try? store.resultsHistory() else { return }
+        let inlineResults = persistedHistory.filter { $0.source == "keyboard_inline" }
+        guard inlineResults != dictationHistory.filter({ $0.source == "keyboard_inline" }) else { return }
+        let appResults = dictationHistory.filter { $0.source != "keyboard_inline" }
+        dictationHistory = (appResults + inlineResults).sorted { $0.createdAt > $1.createdAt }
+        lastTranscript = dictationHistory.first?.text ?? ""
+    }
+
     private func publishVoiceNoteHistoryPresentationIfNeeded() {
         guard !historyPresentationPublicationIsSuspended,
               !voiceNoteHistoryPresentation.matches(
@@ -4204,6 +4259,8 @@ final class DictationCoordinator {
         selectedTranscriptionModel = model
     }
 
+    private var isAdoptingKeyboardModelPick = false
+
     private var canSelectTranscriptionModelsFromKeyboard: Bool {
         !isRecording
             && !hasMeetingRecordingInProgress
@@ -4216,22 +4273,50 @@ final class DictationCoordinator {
     }
 
     private func publishKeyboardModelCatalog() {
+        if !isAdoptingKeyboardModelPick,
+           canSelectTranscriptionModelsFromKeyboard,
+           (try? store.keyboardModelSelectionRequest()) != nil {
+            // A keyboard pick waited for the app to become idle.
+            processPendingKeyboardModelSelection()
+            return
+        }
+        // A keyboard pick the app can't adopt yet (busy recording, or its
+        // clear failed) stays the keyboard's selection; publishing the app's
+        // older choice would switch the keyboard back.
+        let pendingPick = (try? store.keyboardModelSelectionRequest())
+            .flatMap { LocalTranscriptionModel(rawValue: $0.modelRawValue) }
+            .flatMap { $0.isDownloaded ? $0 : nil }
         let catalog = KeyboardTranscriptionModelCatalog(
-            selectedRawValue: selectedTranscriptionModel.rawValue,
+            selectedRawValue: pendingPick?.rawValue ?? selectedTranscriptionModel.rawValue,
             models: LocalTranscriptionModel.availableModels.map(\.keyboardCatalogOption),
             canSelectModels: canSelectTranscriptionModelsFromKeyboard
         )
         try? store.saveKeyboardModelCatalog(catalog)
     }
 
+    /// The keyboard switches models itself (it dictates without the app), so
+    /// its pick is the user's current choice: adopt it whenever the app next
+    /// runs, however old. While the app is busy recording or transcribing,
+    /// the request waits rather than being dropped.
     private func processPendingKeyboardModelSelection() {
-        guard let request = try? store.keyboardModelSelectionRequest() else { return }
-        try? store.clearKeyboardModelSelectionRequest()
+        guard !isAdoptingKeyboardModelPick,
+              let request = try? store.keyboardModelSelectionRequest(),
+              canSelectTranscriptionModelsFromKeyboard else { return }
+        // Publishing below must not adopt again: if clearing fails, the same
+        // request would be found and adopted in an endless loop.
+        isAdoptingKeyboardModelPick = true
+        defer { isAdoptingKeyboardModelPick = false }
+        // Leave the request for a later attempt if it can't be cleared, and
+        // leave a newer pick alone; its own event adopts it.
+        guard (try? store.clearKeyboardModelSelectionRequest(id: request.id)) == true else {
+            // Still publish (the guard above stops re-adoption): the catalog
+            // keeps the pending pick selected until it can be adopted.
+            publishKeyboardModelCatalog()
+            return
+        }
 
-        guard Date.now.timeIntervalSince(request.createdAt) < 300,
-              let model = LocalTranscriptionModel(rawValue: request.modelRawValue),
-              model.isDownloaded,
-              canSelectTranscriptionModelsFromKeyboard
+        guard let model = LocalTranscriptionModel(rawValue: request.modelRawValue),
+              model.isDownloaded
         else {
             publishKeyboardModelCatalog()
             return
@@ -4342,16 +4427,7 @@ final class DictationCoordinator {
                 }
 
                 await MainActor.run {
-                    guard coordinator.selectedTranscriptionModel == model else { return }
-                    coordinator.modelPreparationTask = nil
-                    coordinator.modelPreparation = ModelPreparationState(
-                        phase: .ready,
-                        progress: 1,
-                        status: "\(model.shortName) ready",
-                        detail: model.detail
-                    )
-                    coordinator.playOnboardingModelReadyCueIfNeeded(for: model)
-                    AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
+                    coordinator.finishModelPreparation(for: model)
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -4635,16 +4711,7 @@ final class DictationCoordinator {
                 }
 
                 await MainActor.run {
-                    guard coordinator.selectedTranscriptionModel == model else { return }
-                    coordinator.modelPreparationTask = nil
-                    coordinator.modelPreparation = ModelPreparationState(
-                        phase: .ready,
-                        progress: 1,
-                        status: "\(model.shortName) ready",
-                        detail: model.detail
-                    )
-                    coordinator.playOnboardingModelReadyCueIfNeeded(for: model)
-                    AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
+                    coordinator.finishModelPreparation(for: model)
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -7382,16 +7449,19 @@ final class DictationCoordinator {
 
     private func startSharedEventObservation() {
         sharedEventObservationTask?.cancel()
-        sharedEventObservationTask = Task { @MainActor [weak self, eventBus] in
-            for await event in eventBus.events() {
+        let events = eventBus.events()
+        sharedEventObservationTask = Task { @MainActor [weak self] in
+            for await event in events {
                 guard !Task.isCancelled, let self else { return }
                 switch event {
                 case .commandChanged:
                     await self.processPendingKeyboardCommand()
                 case .modelSelectionRequested:
                     self.processPendingKeyboardModelSelection()
+                case .resultChanged:
+                    self.refreshInlineKeyboardHistory()
                 case .handoffStatusChanged, .runtimeStatusChanged, .liveTranscriptChanged,
-                     .modelCatalogChanged, .resultChanged, .ownershipChanged:
+                     .modelCatalogChanged, .ownershipChanged:
                     continue
                 }
             }

@@ -44,6 +44,7 @@ final class DictationModelsTests: XCTestCase {
         XCTAssertEqual(SyncOrigin.classify(source: "iPhone"), .thisIPhone)
         XCTAssertEqual(SyncOrigin.classify(source: "app"), .thisIPhone)
         XCTAssertEqual(SyncOrigin.classify(source: "keyboard"), .thisIPhone)
+        XCTAssertEqual(SyncOrigin.classify(source: "keyboard_inline"), .thisIPhone)
         for source in ["action_button", "action_button_clipboard"] {
             XCTAssertEqual(SyncOrigin.classify(source: source), .thisIPhone)
             XCTAssertEqual(SyncOrigin.classify(source: source, importedFromCloud: true), .thisIPhone)

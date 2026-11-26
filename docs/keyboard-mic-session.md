@@ -161,3 +161,109 @@ Startup uses the normal recorder path; saved experimental preferences are no lon
 Failed recorder startup discards only that attempt's audio files. The session
 checkpoint manifest must survive retries so Stop can finalize the successful
 attempt. Full recording cancellation still removes the checkpoint directory.
+
+## In-keyboard dictation
+
+The keyboard records and transcribes itself, without opening Muesli, whenever
+it has Full Access, Muesli has microphone permission, its hidden capture page
+is ready, and it can transcribe: either a usable keyboard model or on-device
+Apple Speech (Speech Recognition allowed, locale supported). Otherwise Record
+opens Muesli. There is no setting to
+turn it off. The keyboard cannot prompt for permissions, so the app asks for
+Speech Recognition once, when it is in the foreground and not recording. Apple
+Speech gives live words and the fallback.
+
+Capture technique adapted from
+[stephancill/ios-keyboard-dictation](https://github.com/stephancill/ios-keyboard-dictation)
+([MIT license](../MuesliKeyboard/ios-keyboard-dictation-LICENSE.txt)). `AVAudioEngine` input inside a keyboard process tends to be invalidated
+by the host app, so `WebAudioCapture` runs `getUserMedia` in a hidden 1 pt
+`WKWebView` that stays in the keyboard's window. WebKit captures in its own
+processes and posts 16 kHz mono Int16 PCM back via a script message handler. A
+1 s native heartbeat runs during startup and recording. If the keyboard stops
+pinging for 3 s, the page releases the microphone. If startup takes more than
+5 s, the keyboard ends the attempt and offers the Muesli handoff on the next
+tap. The keyboard ignores messages from previous capture attempts.
+
+### Transcription
+
+The keyboard transcribes with the user's selected Parakeet model when it can,
+and otherwise with Apple Speech (`SFSpeechRecognizer`,
+`requiresOnDeviceRecognition`). Audio never leaves the iPhone either way.
+
+- **Sharing models.** The keyboard cannot read the app's private model
+  folder. `KeyboardSpeechModelSync` clones every downloaded model the keyboard
+  can run (Parakeet TDT-CTC 110M, V3, Redux, Phonon 2.5, Parakeet Unified,
+  Nemotron 3.5, Parakeet Realtime, Whisper) into the App Group under `KeyboardModels/`.
+  Whisper models are shared too (WhisperKit), with their tokenizer copied
+  into the same folder, so the keyboard never downloads anything. It lists them
+  in `keyboard-models.json`. APFS clones use no extra disk. A model is listed
+  only after its copy is complete. The sync runs at launch, in the foreground
+  and when downloads change.
+- **Only runnable models are offered.** A model whose load fails or ends the
+  keyboard is recorded as unsupported for that download. The keyboard's model
+  menu then lists only models it can run itself, plus Apple Speech. If the
+  app's selection can't run in the keyboard, the chip reads "Apple Speech".
+  Without Full Access the keyboard hands off to Muesli, and every model is
+  offered.
+- **Choosing the model.** The keyboard loads the model selected in the
+  keyboard model catalog. A pick in the keyboard's model menu switches at once
+  and loads the new model. The app adopts it the next time it runs, waiting
+  if it is busy recording.
+- **Memory.** On each appearance the keyboard records its memory limit
+  (`phys_footprint + os_proc_available_memory`). `KeyboardParakeetEngine` loads
+  the model only if that limit is at least 131 MB and 60 MB are free. It runs on
+  the CPU and Neural Engine, never the GPU, and Redux's encoder on the CPU only,
+  as in the app. A memory warning unloads it. A load that never finished
+  (iOS ended the keyboard) is not retried for that download, so the keyboard
+  cannot crash on every open.
+- **Compile and load.** Core ML caches compiled models per process, so the app
+  cannot compile for the keyboard. The keyboard starts loading when it appears.
+  Recording never waits. On Stop, the transcript waits for a load still in
+  progress (60 s limit) and the keyboard shows "Preparing <model>…". That wait
+  is the one-time compile after install or an app update; later loads come
+  from the cache. The wait has a real deadline (`TaskDeadline`), so a stuck
+  load falls back to Apple Speech. Past 180 s the keyboard model stops
+  buffering, to keep the sample buffer small. If Apple Speech is running, its
+  transcript is used. Otherwise the recording stops at 180 s and the model
+  transcribes it, as if Stop were tapped. A deliberate unload (memory warning,
+  model switch) clears the loading marker, so the crash guard only blocks loads
+  cut short by the keyboard being ended. Markers are kept per model, so loading
+  another model never erases one. If Apple Speech ends during a model
+  recording, it stops counting as a fallback. If the model fails or hears
+  nothing, the keyboard waits for Apple Speech's final result. Dismissing the
+  keyboard while the model holds the only audio stops the mic but lets the
+  model finish, and saves the text to history.
+- **Apple Speech.** It streams partials while recording. Its final text is used
+  when Parakeet is unavailable, fails or hears nothing. On-device Speech ends
+  an utterance after a pause and starts the next result from empty, so
+  `InKeyboardTranscriptAccumulator` joins the utterances into one transcript.
+
+The keyboard shows the waveform while recording. Settings → Keyboard → **Show live
+transcript** (`muesli.keyboard.inKeyboardDictation.liveTranscript`, off by
+default) shows the partial transcript instead. Only the final text is inserted,
+after the mirrored filler-word and custom-dictionary settings are applied.
+History records the engine that wrote it (for example `parakeet-redux-keyboard`
+or `apple-speech-keyboard`). In-keyboard results are never queued for automatic
+delivery. The app refreshes that history when a new result arrives and when it
+returns to the foreground. Which engine wrote a dictation is an implementation
+detail and is not shown in Settings.
+
+Routing on Record:
+
+- Muesli's own mic session is running → existing runtime handoff (no app switch,
+  Muesli's local models).
+- Otherwise, in-keyboard dictation when available: Full Access, microphone
+  permission, the capture page ready, and either the keyboard model or Apple
+  Speech (permission and on-device support for the current locale).
+- Anything else → existing open-Muesli handoff. Fallback reasons are logged as
+  `inline.fallback` in the keyboard diagnostics log.
+
+During in-keyboard capture the keyboard ignores the app's shared dictation
+status, so a stale app request cannot be adopted. Dismissing the keyboard
+mid-capture releases the microphone and keeps the partial transcript in history
+instead of inserting it into a field that is gone.
+
+Device checks before release: first capture after enabling, AirPods route,
+phone call interruption, dismissal mid-capture (mic indicator must clear within
+~3 s), a locale without on-device support (must fall back), and coexistence with
+an active Muesli mic session.

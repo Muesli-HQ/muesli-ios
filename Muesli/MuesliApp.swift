@@ -19,6 +19,10 @@ struct MuesliApp: App {
     init() {
         _coordinator = State(initialValue: DictationCoordinator())
         AppTelemetry.configure()
+        InKeyboardDictationPreferences.mirrorPostProcessing(
+            fillerWordRemoval: MuesliPreferences.fillerWordRemovalEnabled,
+            customDictionary: MuesliPreferences.customDictionaryEnabled
+        )
     }
 
     var body: some Scene {
@@ -43,6 +47,10 @@ struct MuesliApp: App {
                 }
                 #endif
                 .task {
+                    if !isUITesting {
+                        // A cold launch may not report a scene-phase change.
+                        KeyboardSpeechModelSync.sync()
+                    }
                     #if DEBUG
                     await ModelDownloadDeviceValidation.runIfRequested()
                     #endif
@@ -89,10 +97,15 @@ struct MuesliApp: App {
                         #endif
                     }
                     if phase == .active, !isUITesting {
+                        coordinator.refreshInlineKeyboardHistory()
                         coordinator.reconcileMeetingRuntime(reason: "foreground")
                         coordinator.prewarmModelIfNeeded(reason: "foreground")
                         coordinator.syncICloudTextIfEnabled(reason: "foreground")
                         coordinator.recoverLongVoiceNotesIfNeeded()
+                        KeyboardSpeechModelSync.sync()
+                        if coordinator.hasCompletedOnboarding {
+                            InKeyboardDictationPermissionPrompt.requestIfNeeded { coordinator.isAudioCaptureActive }
+                        }
                     }
                 }
         }

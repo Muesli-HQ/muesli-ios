@@ -6,8 +6,12 @@ struct AboutSettingsContent: View {
 
     @State private var copiedDiagnostics = false
 
+    /// Stays under the 64 KiB at which cross-device copies have been cut.
+    private static let reportByteLimit = 60_000
+
     /// The keyboard transition log, preceded by a count of audio files against
     /// the notes that own them. Filenames are never included -- only totals.
+    /// Older entries are dropped first so the report fits `reportByteLimit`.
     private func diagnosticsReport() -> String {
         var header = ""
         let store = SharedStore()
@@ -15,7 +19,11 @@ struct AboutSettingsContent: View {
             header += "audio: \(audit.onDisk) files, \(audit.owned) owned, \(audit.orphaned) orphaned\n"
         }
         header += ICloudTextSyncEngine.diagnosticsSummary(store: store) + "\n\n"
-        return header + KeyboardDiagnosticsLog.exportText()
+        let logBudget = max(Self.reportByteLimit - header.utf8.count, 0)
+        return header + KeyboardDiagnosticsLog.newestLines(
+            of: KeyboardDiagnosticsLog.exportText(),
+            fittingIn: logBudget
+        )
     }
 
     private var version: String {

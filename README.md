@@ -38,6 +38,7 @@ This repository is suitable for source review, local development, CI, and TestFl
 
 - **On-device transcription** - FluidAudio Parakeet models run locally through CoreML/ANE; audio does not need to leave the iPhone for transcription.
 - **Keyboard handoff** - The keyboard extension creates a dictation request in the shared App Group, opens the main app to record/transcribe, then polls for the result and inserts it into the active text field.
+- **In-keyboard dictation** - Record and transcribe directly in the keyboard, without opening Muesli. Uses your selected Parakeet model inside the keyboard when it fits in the keyboard's memory, otherwise Apple's on-device speech recognition. Falls back to the handoff when unavailable. Capture technique adapted from [ios-keyboard-dictation](https://github.com/stephancill/ios-keyboard-dictation) (MIT).
 - **Keyboard Session Mode** - Keep the containing app ready for lower-friction keyboard dictation while the extension remains the text input surface.
 - **Dictation history** - Saved local dictations can be copied, reused, and deleted from the main app.
 - **Meeting recorder** - Record in-person conversations, save sessions, transcribe locally, browse transcript history, and retain meeting audio only when enabled.
@@ -107,9 +108,10 @@ Muesli for iOS asks only for permissions needed by the selected workflow.
 | **Microphone** | Record speech for dictation and meetings |
 | **Keyboard** | Use the Muesli custom keyboard from text fields |
 | **Full Access** | Let the keyboard extension communicate with the containing app through the shared App Group |
+| **Speech Recognition** *(optional)* | Live words and the Apple Speech fallback for in-keyboard dictation |
 | **Live Activities** *(optional)* | Show active meeting recording state |
 
-The keyboard extension does not record audio directly. Recording is owned by the containing app so microphone permission, model runtime, and transcription state stay in one place.
+By default the keyboard extension does not record audio. Recording is owned by the containing app so microphone permission, model runtime, and transcription state stay in one place. The exception is in-keyboard dictation. The keyboard records through a hidden web view and transcribes with the selected Parakeet model, shared through the App Group, or with Apple's on-device speech recognition. Permissions are requested in the app, because the keyboard cannot prompt.
 
 ---
 
@@ -122,7 +124,9 @@ Muesli/
 
 MuesliKeyboard/
   Custom keyboard extension. Owns the text-input surface and result insertion.
-  It creates handoff requests but does not run the microphone or transcription model.
+  It creates handoff requests. For in-keyboard dictation it runs the microphone,
+  the selected Parakeet model (when it fits in the keyboard's memory) and Apple's
+  on-device speech recognizer. Other models always run in the app.
 
 Shared/
   DTOs, preferences, post-processing, local storage, and App Group contracts used
@@ -206,8 +210,8 @@ The test suite currently includes:
 
 Muesli's default design is local-first:
 
-- audio is recorded by the app, not the keyboard extension;
-- transcription runs locally with FluidAudio/CoreML models;
+- audio is recorded by the app, not the keyboard extension, except for in-keyboard dictation (audio stays on device);
+- transcription runs locally with FluidAudio/CoreML models, including Parakeet inside the keyboard, or with Apple's on-device speech recognition (`requiresOnDeviceRecognition`) as the keyboard's fallback;
 - saved dictations and meetings stay on device unless future sync features are explicitly enabled;
 - TelemetryDeck events avoid audio, transcript text, and user-provided content;
 - cloud summary providers are optional and separate from local transcription.

@@ -614,6 +614,45 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(command?.action, .start)
     }
 
+    @MainActor
+    func testWarmAppObservesInlineKeyboardHistoryWithoutTakingOverHandoff() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bus = Muesli.DarwinCrossProcessEventBus.shared
+        let store = Muesli.SharedStore(containerURL: directory, eventPoster: bus)
+        let writer = Muesli.SharedStore(containerURL: directory, eventPoster: bus)
+        let appResult = Muesli.DictationResult(
+            requestID: UUID(),
+            text: "App result",
+            createdAt: .distantPast,
+            engineIdentifier: "test"
+        )
+        try store.saveResult(appResult)
+        let handoff = Muesli.KeyboardHandoffState(requestID: UUID(), phase: .startRequested)
+        try store.saveKeyboardHandoffState(handoff)
+        let coordinator = DictationCoordinator(store: store, eventBus: bus)
+        XCTAssertEqual(coordinator.dictationHistory, [appResult])
+
+        await Task.yield()
+        let inlineResult = Muesli.DictationResult(
+            requestID: UUID(),
+            text: "Keyboard result",
+            engineIdentifier: "apple-speech-keyboard",
+            source: "keyboard_inline"
+        )
+        try writer.saveKeyboardInlineResult(inlineResult)
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while coordinator.dictationHistory.first != inlineResult, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(coordinator.dictationHistory, [inlineResult, appResult])
+        XCTAssertEqual(coordinator.lastTranscript, inlineResult.text)
+        XCTAssertEqual(try store.keyboardHandoffState(), handoff)
+        XCTAssertNil(try store.result(for: inlineResult.requestID))
+    }
+
     func testSharedStoreDoesNotPostWhenDatabaseMutationFails() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2421,6 +2460,45 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try sqliteString("SELECT summary_text FROM transcripts LIMIT 1", in: directory), "Legacy notes")
         XCTAssertEqual(try sqliteDouble("SELECT matching_threshold FROM custom_words LIMIT 1", in: directory), 0.9, accuracy: 0.001)
     }
+
+    func testClearingAModelPickLeavesANewerOne() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("model-pick-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let older = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "parakeet-redux")
+        let newer = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "nemotron-3.5")
+        try store.saveKeyboardModelSelectionRequest(newer)
+
+        XCTAssertFalse(try store.clearKeyboardModelSelectionRequest(id: older.id))
+        XCTAssertEqual(try store.keyboardModelSelectionRequest()?.id, newer.id)
+        XCTAssertTrue(try store.clearKeyboardModelSelectionRequest(id: newer.id))
+        XCTAssertNil(try store.keyboardModelSelectionRequest())
+    }
+
+    /// The app clears an older pick while the keyboard (another process, here
+    /// another store on the same file) saves a newer one. The newer pick must
+    /// survive every interleaving.
+    func testClearingAModelPickRacingANewerSaveKeepsTheNewerOne() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = Muesli.SharedStore(containerURL: directory)
+        let keyboard = Muesli.SharedStore(containerURL: directory)
+
+        for _ in 0..<100 {
+            let older = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "parakeet-redux")
+            let newer = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "nemotron-3.5")
+            try app.saveKeyboardModelSelectionRequest(older)
+            DispatchQueue.concurrentPerform(iterations: 2) { index in
+                if index == 0 {
+                    _ = try? app.clearKeyboardModelSelectionRequest(id: older.id)
+                } else {
+                    try? keyboard.saveKeyboardModelSelectionRequest(newer)
+                }
+            }
+            XCTAssertEqual(try app.keyboardModelSelectionRequest()?.id, newer.id)
+        }
+    }
 }
 
 private extension SharedStoreTests {
@@ -2730,4 +2808,5 @@ private final class TestCrossProcessEventBus: CrossProcessEventStreaming, @unche
             }
         }
     }
+
 }

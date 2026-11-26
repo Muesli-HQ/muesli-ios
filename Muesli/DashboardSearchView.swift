@@ -7,7 +7,7 @@ enum HistoryRecordID: Hashable, Sendable {
 
 private extension DictationResult {
     func searchKind(session: RecordingSession?) -> String {
-        if session?.kind == .keyboardDictation || source == "keyboard" || syncOrigin == .fromMac {
+        if session?.kind == .keyboardDictation || source == "keyboard" || source == "keyboard_inline" || syncOrigin == .fromMac {
             return "Dictation"
         }
         return "Voice Note"

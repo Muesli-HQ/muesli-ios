@@ -157,7 +157,7 @@ enum SyncOrigin: Sendable, Equatable {
 
     private static func isLocalSource(_ source: String) -> Bool {
         switch source {
-        case "ios", "iphone", "app", "keyboard", "action_button", "action_button_clipboard":
+        case "ios", "iphone", "app", "keyboard", "keyboard_inline", "action_button", "action_button_clipboard":
             true
         default:
             false

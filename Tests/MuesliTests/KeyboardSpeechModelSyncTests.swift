@@ -42,6 +42,32 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
                        "unchanged models are not copied again")
     }
 
+    func testOneFailedCopyDoesNotHideTheModelsThatCopied() throws {
+        let missing = source.deletingLastPathComponent().appendingPathComponent("missing", isDirectory: true)
+        let plan = KeyboardSpeechModelSync.Plan(entries: [
+            .init(source: source, manifest: manifest("parakeet-redux")),
+            .init(source: missing, manifest: manifest("nemotron-3.5")),
+            .init(source: source, manifest: manifest("phonon-2.5")),
+        ])
+
+        XCTAssertEqual(KeyboardSpeechModelSync.apply(plan, container: container), "partial")
+
+        XCTAssertEqual(Muesli.KeyboardSpeechModel.readCatalog(in: container)?.models.map(\.modelID), ["parakeet-redux", "phonon-2.5"])
+    }
+
+    func testWhisperTokenizerIsCopiedIntoTheSharedModel() throws {
+        let tokenizer = source.deletingLastPathComponent().appendingPathComponent("tokenizer.json")
+        try Data("{}".utf8).write(to: tokenizer)
+        let plan = KeyboardSpeechModelSync.Plan(entries: [
+            .init(source: source, manifest: manifest("whisper-tiny-en"), extraFiles: [tokenizer]),
+        ])
+
+        _ = KeyboardSpeechModelSync.apply(plan, container: container)
+
+        let shared = try XCTUnwrap(Muesli.KeyboardSpeechModel.modelDirectory(for: "whisper-tiny-en", in: container))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: shared.appendingPathComponent("tokenizer.json").path))
+    }
+
     func testRemovedDownloadsAreWithdrawn() throws {
         _ = KeyboardSpeechModelSync.apply(plan("parakeet-redux", "nemotron-3.5"), container: container)
         _ = KeyboardSpeechModelSync.apply(plan("parakeet-redux"), container: container)
@@ -88,25 +114,39 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
 
 @MainActor
 final class KeyboardSpeechModelCrashGuardTests: XCTestCase {
+    private func guardManifest(_ id: String, _ print: String) -> KeyboardSpeechModel.Manifest {
+        .init(modelID: id, displayName: id, engineIdentifier: id, version: .redux, sourceFingerprint: print)
+    }
+
     func testKeyboardSkipsAModelWhoseLastLoadNeverFinished() throws {
         let suite = "keyboard-model-guard-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let manifest = KeyboardSpeechModel.Manifest(
-            modelID: "parakeet-redux", displayName: "Redux", engineIdentifier: "parakeet-redux",
-            version: .redux, sourceFingerprint: "10-20"
-        )
+        let redux = guardManifest("parakeet-redux", "10-20")
 
-        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest, in: defaults))
-        KeyboardSpeechModel.recordKeyboardState(.loading, modelID: manifest.modelID, fingerprint: "10-20", in: defaults)
-        XCTAssertTrue(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest, in: defaults))
+        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: redux, in: defaults))
+        KeyboardSpeechModel.beginLoad(redux, in: defaults)
+        XCTAssertTrue(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: redux, in: defaults))
+        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: guardManifest("parakeet-redux", "11-20"), in: defaults),
+                       "a new download is tried again")
 
-        var redownloaded = manifest
-        redownloaded.sourceFingerprint = "11-20"
-        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: redownloaded, in: defaults), "a new download is tried again")
+        KeyboardSpeechModel.endLoad(redux, in: defaults)
+        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: redux, in: defaults))
+    }
 
-        KeyboardSpeechModel.recordKeyboardState(.ready, modelID: manifest.modelID, fingerprint: "10-20", in: defaults)
-        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest, in: defaults))
+    func testLoadingAnotherModelKeepsTheCrashRecord() throws {
+        let suite = "keyboard-model-guard-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let crashed = guardManifest("nemotron-3.5", "1")
+        let other = guardManifest("parakeet-redux", "1")
+
+        KeyboardSpeechModel.beginLoad(crashed, in: defaults)   // the keyboard was ended here
+        KeyboardSpeechModel.beginLoad(other, in: defaults)
+        KeyboardSpeechModel.endLoad(other, in: defaults)
+
+        XCTAssertTrue(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: crashed, in: defaults))
+        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: other, in: defaults))
     }
 
     func testFailedModelsAreNotRunnableUntilRedownloaded() throws {
@@ -142,15 +182,21 @@ final class KeyboardSpeechModelCrashGuardTests: XCTestCase {
         let suite = "keyboard-model-guard-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let manifest = KeyboardSpeechModel.Manifest(
-            modelID: "phonon-2.5", displayName: "Phonon", engineIdentifier: "phonon-2.5",
-            version: .phonon, sourceFingerprint: "1-2"
-        )
-        KeyboardSpeechModel.recordKeyboardState(.loading, modelID: manifest.modelID, fingerprint: "1-2", in: defaults)
+        let phonon = guardManifest("phonon-2.5", "1-2")
+        KeyboardSpeechModel.beginLoad(phonon, in: defaults)
 
-        KeyboardSpeechModel.clearKeyboardState(ifLoading: manifest.modelID, in: defaults)
+        KeyboardSpeechModel.endLoad(phonon, in: defaults)   // what unload() does
 
-        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest, in: defaults))
+        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: phonon, in: defaults))
+    }
+}
+
+final class KeyboardDiagnosticsBudgetTests: XCTestCase {
+    func testTrimNeverExceedsATinyBudget() {
+        let text = (1...20).map { "line \($0)" }.joined(separator: "\n") + "\n"
+        for budget in [0, 1, 10] {
+            XCTAssertLessThanOrEqual(KeyboardDiagnosticsLog.newestLines(of: text, fittingIn: budget).utf8.count, budget)
+        }
     }
 }
 

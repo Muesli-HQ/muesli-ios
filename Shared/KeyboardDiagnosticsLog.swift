@@ -79,12 +79,14 @@ enum KeyboardDiagnosticsLog {
         var used = 0
         for line in lines.reversed() {
             let size = line.utf8.count + 1
-            guard used + size <= maxBytes - noteBudget else { break }
+            guard used + size <= max(maxBytes - noteBudget, 0) else { break }
             kept.append(line)
             used += size
         }
         let omitted = lines.count - kept.count
-        return "(\(omitted) older entries omitted)\n" + kept.reversed().joined(separator: "\n") + "\n"
+        let trimmed = "(\(omitted) older entries omitted)\n" + kept.reversed().joined(separator: "\n") + "\n"
+        // Never exceed the budget, even when it is too small for the note.
+        return trimmed.utf8.count <= maxBytes ? trimmed : ""
     }
 
     static func clear() {

@@ -164,6 +164,42 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(insertedText, ["Three minutes of speech"])
     }
 
+    func testDismissingWhileTheModelHoldsTheAudioSavesItsTranscriptToHistory() throws {
+        controller.startDictation()
+        engine.handlers?.onListening()
+        engine.holdsModelAudio = true
+
+        controller.abandonInKeyboardDictationForDisappearance()
+
+        XCTAssertEqual(engine.cancelCount, 0, "the model's audio is not discarded")
+        XCTAssertEqual(engine.finishCount, 1, "the mic stops")
+        XCTAssertTrue(try store.resultsHistory().isEmpty)
+
+        engine.handlers?.onCompleted("Said before dismissing", "phonon-2.5-keyboard")
+
+        XCTAssertTrue(insertedText.isEmpty, "the field it was meant for is gone")
+        let saved = try XCTUnwrap(store.resultsHistory().first)
+        XCTAssertEqual(saved.text, "Said before dismissing")
+        XCTAssertEqual(saved.engineIdentifier, "phonon-2.5-keyboard")
+        XCTAssertFalse(controller.isInKeyboardCaptureActive)
+    }
+
+    func testAccumulatorReplacesACorrectedUtterance() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("I saw a bear.", start: 0.3, endsUtterance: true)
+        transcript.apply("I saw a bird.", start: 0.3, endsUtterance: false)
+
+        XCTAssertEqual(transcript.text, "I saw a bird.")
+    }
+
+    func testAccumulatorKeepsADifferentSentenceWithTheSameStart() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("Good morning.", start: 0.0, endsUtterance: true)
+        transcript.apply("Send the report today.", start: 0.0, endsUtterance: false)
+
+        XCTAssertEqual(transcript.text, "Good morning. Send the report today.")
+    }
+
     func testEmptyFinalInsertsNothing() throws {
         controller.startDictation()
         controller.primaryAction()
@@ -390,6 +426,7 @@ private final class FakeInKeyboardDictation: InKeyboardDictating {
     var startCount = 0
     var finishCount = 0
     var cancelCount = 0
+    var holdsModelAudio = false
 
     func availability(hasFullAccess: Bool) -> InKeyboardDictationAvailability {
         hasFullAccess ? availability : .needsFullAccess

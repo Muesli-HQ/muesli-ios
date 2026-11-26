@@ -24,10 +24,9 @@ enum KeyboardSpeechModel {
 
     static let catalogFileName = "keyboard-models.json"
     static let memoryLimitKey = "muesli.keyboard.memoryLimitBytes"
-    static let keyboardStateKey = "muesli.keyboard.parakeet.state"
-    static let keyboardStateModelKey = "muesli.keyboard.parakeet.stateModel"
-    static let keyboardStateFingerprintKey = "muesli.keyboard.parakeet.stateFingerprint"
     static let unsupportedModelsKey = "muesli.keyboard.unsupportedModels"
+    /// Model ID -> fingerprint for each load in progress, one per model.
+    static let loadingModelsKey = "muesli.keyboard.loadingModels"
 
     /// Model families the keyboard loads. All use the ANE/CPU, never the GPU.
     enum Version: String, Codable, Sendable {
@@ -53,14 +52,6 @@ enum KeyboardSpeechModel {
         var version: Version
         /// Identifies the app's verified download, so a re-download is re-shared.
         var sourceFingerprint: String
-    }
-
-    /// What the keyboard last reported about its copy.
-    enum KeyboardState: String, Sendable {
-        case loading
-        case ready
-        case tooLittleMemory
-        case failed
     }
 
     static var containerURL: URL? {
@@ -105,51 +96,39 @@ enum KeyboardSpeechModel {
         defaults?.set(NSNumber(value: bytes), forKey: memoryLimitKey)
     }
 
-    static func keyboardState(in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults) -> (KeyboardState, String)? {
-        guard let raw = defaults?.string(forKey: keyboardStateKey),
-              let state = KeyboardState(rawValue: raw),
-              let model = defaults?.string(forKey: keyboardStateModelKey) else { return nil }
-        return (state, model)
-    }
+    // MARK: - Crash guard
 
-    static func recordKeyboardState(
-        _ state: KeyboardState,
-        modelID: String,
-        fingerprint: String? = nil,
+    /// Marks a load as started. If iOS ends the keyboard before `endLoad`,
+    /// the marker remains and `previousLoadDidNotFinish` reports it. Kept per
+    /// model, so loading another model never erases this record.
+    static func beginLoad(
+        _ manifest: Manifest,
         in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
     ) {
-        defaults?.set(state.rawValue, forKey: keyboardStateKey)
-        defaults?.set(modelID, forKey: keyboardStateModelKey)
-        defaults?.set(fingerprint, forKey: keyboardStateFingerprintKey)
+        var loading = defaults?.dictionary(forKey: loadingModelsKey) as? [String: String] ?? [:]
+        loading[manifest.modelID] = manifest.sourceFingerprint
+        defaults?.set(loading, forKey: loadingModelsKey)
     }
 
-    /// Forgets a load the keyboard cancelled on purpose (memory warning or a
-    /// model switch), so it is not mistaken for a crash.
-    static func clearKeyboardState(
-        ifLoading modelID: String,
+    /// The load finished, failed, or was cancelled on purpose (memory warning,
+    /// model switch). None of those is a crash.
+    static func endLoad(
+        _ manifest: Manifest,
         in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
     ) {
-        guard defaults?.string(forKey: keyboardStateKey) == KeyboardState.loading.rawValue,
-              defaults?.string(forKey: keyboardStateModelKey) == modelID else { return }
-        defaults?.removeObject(forKey: keyboardStateKey)
-        defaults?.removeObject(forKey: keyboardStateModelKey)
-        defaults?.removeObject(forKey: keyboardStateFingerprintKey)
+        var loading = defaults?.dictionary(forKey: loadingModelsKey) as? [String: String] ?? [:]
+        guard loading.removeValue(forKey: manifest.modelID) != nil else { return }
+        defaults?.set(loading, forKey: loadingModelsKey)
     }
 
-    /// True when the keyboard started loading this exact model and never
+    /// True when the keyboard started loading this exact download and never
     /// finished: iOS most likely ended the keyboard for using too much memory.
-    /// The keyboard then stays on Apple Speech for this download instead of
-    /// crashing on every open.
     static func previousLoadDidNotFinish(
         manifest: Manifest,
         in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
     ) -> Bool {
-        let state = defaults?.string(forKey: keyboardStateKey)
-        let fingerprint = defaults?.string(forKey: keyboardStateFingerprintKey)
-        let model = defaults?.string(forKey: keyboardStateModelKey)
-        return (state == KeyboardState.loading.rawValue || state == KeyboardState.failed.rawValue)
-            && model == manifest.modelID
-            && fingerprint == manifest.sourceFingerprint
+        let loading = defaults?.dictionary(forKey: loadingModelsKey) as? [String: String] ?? [:]
+        return loading[manifest.modelID] == manifest.sourceFingerprint
     }
 
     // MARK: - What the keyboard can run

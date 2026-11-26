@@ -2769,4 +2769,20 @@ private final class TestCrossProcessEventBus: CrossProcessEventStreaming, @unche
             }
         }
     }
+
+    func testClearingAModelPickLeavesANewerOne() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("model-pick-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let older = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "parakeet-redux")
+        let newer = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "nemotron-3.5")
+        try store.saveKeyboardModelSelectionRequest(newer)
+
+        XCTAssertFalse(try store.clearKeyboardModelSelectionRequest(id: older.id))
+        XCTAssertEqual(try store.keyboardModelSelectionRequest()?.id, newer.id)
+        XCTAssertTrue(try store.clearKeyboardModelSelectionRequest(id: newer.id))
+        XCTAssertNil(try store.keyboardModelSelectionRequest())
+    }
+
 }

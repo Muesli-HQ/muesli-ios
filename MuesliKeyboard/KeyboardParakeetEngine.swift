@@ -32,7 +32,7 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
     /// Fires when the model becomes ready, so Record can stop requiring
     /// Apple Speech.
     var onReady: (() -> Void)?
-    private var loadedFingerprint: String?
+    private var loadAttempt: UUID?
 
     var isReady: Bool {
         if case .ready = state { return true }
@@ -79,7 +79,6 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
 
         guard KeyboardSpeechModel.canHoldModel(memoryLimit: limit),
               Self.availableMemory() >= KeyboardSpeechModel.requiredAvailableBytes else {
-            KeyboardSpeechModel.recordKeyboardState(.tooLittleMemory, modelID: manifest.modelID)
             KeyboardDiagnosticsLog.record("parakeet.skipped", [
                 "limitMB": String(limit / 1_048_576),
                 "availableMB": String(Self.availableMemory() / 1_048_576)
@@ -89,31 +88,34 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
         }
 
         guard !KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest) else {
-            KeyboardSpeechModel.recordKeyboardState(.failed, modelID: manifest.modelID, fingerprint: manifest.sourceFingerprint)
+            // Hide it from the keyboard's model menu for this download.
             KeyboardSpeechModel.markUnsupported(manifest)
+            KeyboardSpeechModel.endLoad(manifest)
             KeyboardDiagnosticsLog.record("parakeet.skippedAfterFailedLoad", ["model": manifest.modelID])
             state = .unavailable
             return
         }
-        KeyboardSpeechModel.recordKeyboardState(.loading, modelID: manifest.modelID, fingerprint: manifest.sourceFingerprint)
+        KeyboardSpeechModel.beginLoad(manifest)
         KeyboardDiagnosticsLog.record("parakeet.loading", [
             "model": manifest.modelID,
             "limitMB": String(limit / 1_048_576),
             "footprintMB": String(Self.footprint() / 1_048_576)
         ])
-        loadedFingerprint = manifest.sourceFingerprint
-        let fingerprint = manifest.sourceFingerprint
+        // Identifies this attempt, so a cancelled earlier load of the same
+        // model can't install itself over this one.
+        let attempt = UUID()
+        loadAttempt = attempt
         let startedAt = ContinuousClock.now
         let task = Task { [weak self] in
             do {
                 let runner = try await Runner.load(manifest.version, from: directory)
-                guard let self, self.loadedFingerprint == fingerprint else {
+                guard let self, self.loadAttempt == attempt else {
                     await runner.cleanup()
                     return
                 }
                 self.state = .ready(runner, manifest)
                 self.onReady?()
-                KeyboardSpeechModel.recordKeyboardState(.ready, modelID: manifest.modelID, fingerprint: fingerprint)
+                KeyboardSpeechModel.endLoad(manifest)
                 KeyboardDiagnosticsLog.record("parakeet.ready", [
                     "model": manifest.modelID,
                     "loadSeconds": String(format: "%.1f", Self.seconds(since: startedAt)),
@@ -121,9 +123,9 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
                     "peakMB": String(Self.peakFootprint() / 1_048_576)
                 ])
             } catch {
-                guard let self, self.loadedFingerprint == fingerprint else { return }
+                guard let self, self.loadAttempt == attempt else { return }
                 self.state = .unavailable
-                KeyboardSpeechModel.recordKeyboardState(.failed, modelID: manifest.modelID, fingerprint: fingerprint)
+                KeyboardSpeechModel.endLoad(manifest)
                 KeyboardSpeechModel.markUnsupported(manifest)
                 KeyboardDiagnosticsLog.record("parakeet.loadFailed", [
                     "reason": String(String(describing: error).prefix(64))
@@ -135,7 +137,7 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
 
     /// Waits for a load in progress (the recording itself never waits), then
     /// transcribes.
-    func transcribe(_ samples: [Float]) async throws -> String {
+    func transcribe(_ samples: [Float]) async throws -> InKeyboardModelTranscript {
         if case .loading(let task, _) = state {
             let waitStarted = ContinuousClock.now
             let finished = await TaskDeadline.wait(for: task, limit: Self.loadWaitLimit)
@@ -160,7 +162,9 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
             "footprintMB": String(Self.footprint() / 1_048_576),
             "peakMB": String(Self.peakFootprint() / 1_048_576)
         ])
-        return text
+        // Named after the model that actually ran, which can differ from the
+        // one selected when recording started.
+        return InKeyboardModelTranscript(text: text, engineIdentifier: "\(manifest.engineIdentifier)-keyboard")
     }
 
     /// Frees the model, for example on a memory warning. The next appearance
@@ -170,13 +174,13 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
             task.cancel()
             // A deliberate unload is not a crash: clear the loading marker so
             // the crash guard doesn't block this model next time.
-            KeyboardSpeechModel.clearKeyboardState(ifLoading: manifest.modelID)
+            KeyboardSpeechModel.endLoad(manifest)
         }
         if case .ready(let runner, _) = state {
             Task { await runner.cleanup() }
         }
         state = .idle
-        loadedFingerprint = nil
+        loadAttempt = nil
     }
 
     // MARK: - Memory

@@ -71,9 +71,10 @@ struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
             // Speech did not restart: this result covers the whole recording.
             committed = []
         } else if current.text.isEmpty, let last = committed.last, Self.sameStart(start, last.start),
-                  Self.overlaps(next.text, last.text) {
-            // A repeat of the utterance just committed (for example the final
-            // result after endAudio()): replace it instead of adding it twice.
+                  Self.isRevision(next.text, of: last.text) {
+            // A repeat or correction of the utterance just committed (for
+            // example the final result after endAudio(), or "bear" -> "bird"):
+            // replace it instead of adding it twice.
             committed.removeLast()
         } else if !current.text.isEmpty, !Self.sameStart(start, current.start) {
             commitCurrent()
@@ -93,11 +94,23 @@ struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
         return abs(lhs - rhs) <= restartThreshold
     }
 
-    /// True when one text extends the other, as revisions of one utterance do.
-    private static func overlaps(_ lhs: String, _ rhs: String) -> Bool {
-        let lhs = normalized(lhs), rhs = normalized(rhs)
+    /// True when `text` revises `original`: one extends the other, or they
+    /// share at least half their leading words ("I saw a bear" -> "I saw a
+    /// bird"). A new utterance rarely shares its opening words, so this
+    /// doesn't merge distinct sentences even if timestamps were to restart.
+    private static func isRevision(_ text: String, of original: String) -> Bool {
+        let lhs = normalized(text), rhs = normalized(original)
         guard !lhs.isEmpty, !rhs.isEmpty else { return false }
-        return lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs)
+        if lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs) { return true }
+        let a = words(text), b = words(original)
+        let shared = zip(a, b).prefix { $0 == $1 }.count
+        return shared > 0 && shared * 2 >= min(a.count, b.count)
+    }
+
+    private static func words(_ text: String) -> [String] {
+        text.lowercased()
+            .split { !($0.isLetter || $0.isNumber || $0 == "'") }
+            .map(String.init)
     }
 
     private static func normalized(_ text: String) -> String {
@@ -133,10 +146,20 @@ protocol InKeyboardDictating: AnyObject {
     func finish()
     /// Stops the microphone and discards the transcript. No handler fires.
     func cancel()
+    /// The keyboard model holds this recording's only audio (recording, or
+    /// transcribing after Stop). Dismissing the keyboard should let it finish
+    /// rather than cancel it.
+    var holdsModelAudio: Bool { get }
 }
 
-/// A speech model that runs inside the keyboard process (Parakeet, shared by
-/// the app). Abstracted so the session is testable without FluidAudio.
+/// What the keyboard model produced, named after the model that actually ran.
+struct InKeyboardModelTranscript: Sendable {
+    var text: String
+    var engineIdentifier: String
+}
+
+/// A speech model that runs inside the keyboard process (shared by the app).
+/// Abstracted so the session is testable without FluidAudio or WhisperKit.
 @MainActor
 protocol InKeyboardModelTranscribing: AnyObject {
     /// Loaded, or loading: a recording can rely on it either way, because
@@ -146,7 +169,7 @@ protocol InKeyboardModelTranscribing: AnyObject {
     var isPreparing: Bool { get }
     var displayName: String? { get }
     var engineIdentifier: String? { get }
-    func transcribe(_ samples: [Float]) async throws -> String
+    func transcribe(_ samples: [Float]) async throws -> InKeyboardModelTranscript
 }
 
 /// Records with `WebAudioCapture` and transcribes on the iPhone, so audio never
@@ -287,6 +310,10 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         reset()
     }
 
+    var holdsModelAudio: Bool {
+        handlers != nil && ((modelSamples != nil && !modelSamplesOverflowed) || modelTranscriptionTask != nil)
+    }
+
     private func append(_ data: Data, rms: Float) {
         handlers?.onLevel(Double(min(max(rms * 8, 0), 1)))
         let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
@@ -342,13 +369,18 @@ final class InKeyboardDictationSession: InKeyboardDictating {
             transcribeWithModel(model, samples: samples)
             return
         }
-        if request == nil {
-            // No Apple Speech fallback is running (keyboard model only).
-            complete(with: "", engine: model?.engineIdentifier ?? Self.engineIdentifier)
+        guard task != nil else {
+            // Apple Speech isn't running (never started, or already ended):
+            // its transcript so far is all there is.
+            complete(with: transcript.text, engine: Self.engineIdentifier)
             return
         }
-        // Speech normally answers endAudio() with a final result; don't let a
-        // missing one strand the keyboard in "Transcribing".
+        waitForAppleFinal()
+    }
+
+    /// Speech answers endAudio() with a final result asynchronously; wait for
+    /// it, but don't let a missing one strand the keyboard in "Transcribing".
+    private func waitForAppleFinal() {
         finalResultTimeoutTask?.cancel()
         finalResultTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.finalResultTimeout)
@@ -362,34 +394,38 @@ final class InKeyboardDictationSession: InKeyboardDictating {
     private func transcribeWithModel(_ model: any InKeyboardModelTranscribing, samples: [Int16]) {
         modelSamples = nil
         let generation = generation
-        let engine = model.engineIdentifier ?? "parakeet-keyboard"
         if model.isPreparing {
             handlers?.onPreparingModel(model.displayName ?? "your model")
         }
         modelTranscriptionTask = Task { @MainActor [weak self] in
             let floats = samples.map { Float($0) / Float(Int16.max) }
-            let result: Result<String, Error>
+            let result: Result<InKeyboardModelTranscript, Error>
             do {
                 result = .success(try await model.transcribe(floats))
             } catch {
                 result = .failure(error)
             }
             guard let self, self.generation == generation, !Task.isCancelled else { return }
-            switch result {
-            case .success(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-                self.complete(with: text, engine: engine)
-            case .success:
-                // Parakeet heard nothing; trust Apple's text if it has any.
-                self.complete(with: self.transcript.text, engine: Self.engineIdentifier)
-            case .failure(let error):
+            if case .success(let output) = result,
+               !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.complete(with: output.text, engine: output.engineIdentifier)
+                return
+            }
+            if case .failure(let error) = result {
                 KeyboardDiagnosticsLog.record("inline.modelFailed", [
                     "reason": String(String(describing: error).prefix(48))
                 ])
-                if self.transcript.text.isEmpty {
-                    self.fail(error.localizedDescription)
-                } else {
-                    self.complete(with: self.transcript.text, engine: Self.engineIdentifier)
-                }
+            }
+            // The model failed or heard nothing: fall back to Apple Speech.
+            // Its final words may still be on the way, so let them arrive
+            // before completing.
+            self.modelTranscriptionTask = nil
+            if self.task != nil {
+                self.waitForAppleFinal()
+            } else if case .failure(let error) = result, self.transcript.text.isEmpty {
+                self.fail(error.localizedDescription)
+            } else {
+                self.complete(with: self.transcript.text, engine: Self.engineIdentifier)
             }
         }
     }
@@ -407,17 +443,32 @@ final class InKeyboardDictationSession: InKeyboardDictating {
             transcript.apply(text, start: update.firstSegmentStart, endsUtterance: update.endsUtterance)
             if isFinal, !feedsPartialsOnly {
                 complete(with: transcript.text, engine: Self.engineIdentifier)
-            } else if !isFinal {
+            } else if isFinal {
+                appleSpeechEnded()
+            } else {
                 handlers.onPartial(transcript.text)
             }
             return
         }
-        guard let errorDescription, !feedsPartialsOnly else { return }
+        guard let errorDescription else { return }
+        guard !feedsPartialsOnly else {
+            appleSpeechEnded()
+            return
+        }
         if isNoSpeechError || !transcript.text.isEmpty {
             complete(with: transcript.text, engine: Self.engineIdentifier)
         } else {
             fail(errorDescription)
         }
+    }
+
+    /// Apple Speech finished or failed while the keyboard model holds the
+    /// audio. Stop treating it as a live fallback: past the model's length
+    /// limit the recording must then stop rather than discard model audio.
+    private func appleSpeechEnded() {
+        task = nil
+        request = nil
+        KeyboardDiagnosticsLog.record("inline.appleSpeechEnded")
     }
 
     private func complete(with text: String, engine: String) {

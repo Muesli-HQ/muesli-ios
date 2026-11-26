@@ -165,7 +165,10 @@ attempt. Full recording cancellation still removes the checkpoint directory.
 ## In-keyboard dictation
 
 The keyboard records and transcribes itself, without opening Muesli, whenever
-it has Full Access and Muesli has microphone permission. There is no setting to
+it has Full Access, Muesli has microphone permission, its hidden capture page
+is ready, and it can transcribe: either a usable keyboard model or on-device
+Apple Speech (Speech Recognition allowed, locale supported). Otherwise Record
+opens Muesli. There is no setting to
 turn it off. The keyboard cannot prompt for permissions, so the app asks for
 Speech Recognition once, when it is in the foreground and not recording. Apple
 Speech gives live words and the fallback.
@@ -224,7 +227,12 @@ and otherwise with Apple Speech (`SFSpeechRecognizer`,
   transcript is used. Otherwise the recording stops at 180 s and the model
   transcribes it, as if Stop were tapped. A deliberate unload (memory warning,
   model switch) clears the loading marker, so the crash guard only blocks loads
-  cut short by the keyboard being ended.
+  cut short by the keyboard being ended. Markers are kept per model, so loading
+  another model never erases one. If Apple Speech ends during a model
+  recording, it stops counting as a fallback. If the model fails or hears
+  nothing, the keyboard waits for Apple Speech's final result. Dismissing the
+  keyboard while the model holds the only audio stops the mic but lets the
+  model finish, and saves the text to history.
 - **Apple Speech.** It streams partials while recording. Its final text is used
   when Parakeet is unavailable, fails or hears nothing. On-device Speech ends
   an utterance after a pause and starts the next result from empty, so

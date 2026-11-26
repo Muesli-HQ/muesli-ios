@@ -56,6 +56,9 @@ final class KeyboardController {
     private(set) var canUseInKeyboardDictation = false
     private(set) var needsForegroundStart = false
     private var inKeyboardRequestID: UUID?
+    /// A recording whose keyboard was dismissed while the model still held
+    /// its audio; its transcript is saved to history instead of inserted.
+    private var dismissedInKeyboardRequestID: UUID?
     /// Reads the "live transcript instead of waveform" setting when capture starts.
     var inKeyboardLiveTranscriptPreference: () -> Bool = { InKeyboardDictationPreferences.showsLiveTranscript() }
     /// The recording ended and its transcript is waiting for the keyboard
@@ -1346,6 +1349,18 @@ extension KeyboardController {
     /// is kept in history rather than inserted into a field that is gone.
     func abandonInKeyboardDictationForDisappearance() {
         guard isInKeyboardCaptureActive else { return }
+        if let requestID = inKeyboardRequestID, inKeyboardDictation?.holdsModelAudio == true {
+            // The keyboard model holds the only copy of this audio, and Apple
+            // Speech's partial may be empty or missing. Stop the mic, but let
+            // the model finish; its text goes to history, not the gone field.
+            dismissedInKeyboardRequestID = requestID
+            if dictationPhase == .recording {
+                inKeyboardDictation?.finish()
+                dictationPhase = .transcribing
+            }
+            KeyboardDiagnosticsLog.record("inline.dismissedWithModelAudio")
+            return
+        }
         let partial = inKeyboardPartialTranscript
         inKeyboardDictation?.cancel()
         if let requestID = inKeyboardRequestID {
@@ -1453,6 +1468,13 @@ extension KeyboardController {
         let customWords = (try? store.customWords()) ?? []
         let text = InKeyboardDictationPreferences.postProcess(rawText, customWords: customWords)
         KeyboardDiagnosticsLog.record("inline.completed", ["characters": String(text.count), "engine": engine])
+        if dismissedInKeyboardRequestID == requestID {
+            // Finished after the keyboard was dismissed: keep it in history
+            // only; the field it was meant for is gone.
+            saveInKeyboardResult(text: text, requestID: requestID, engine: engine)
+            resetInKeyboardState(status: hasLatestDictation ? "Latest ready" : "Ready")
+            return
+        }
         guard !text.isEmpty else {
             resetInKeyboardState(status: "No speech heard")
             return
@@ -1490,6 +1512,7 @@ extension KeyboardController {
     }
 
     private func resetInKeyboardState(status: String) {
+        dismissedInKeyboardRequestID = nil
         isInKeyboardCaptureActive = false
         inKeyboardRequestID = nil
         inKeyboardPartialTranscript = ""

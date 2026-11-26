@@ -220,6 +220,15 @@ struct SharedStore: Sendable {
         try database().clearValue(key: .keyboardModelSelectionRequest)
     }
 
+    /// Clears the request only while it is still `id`, so a newer pick the
+    /// keyboard saved in the meantime survives. Returns whether it cleared.
+    @discardableResult
+    func clearKeyboardModelSelectionRequest(id: UUID) throws -> Bool {
+        guard try keyboardModelSelectionRequest()?.id == id else { return false }
+        try clearKeyboardModelSelectionRequest()
+        return true
+    }
+
     func saveSession(_ session: RecordingSession) throws {
         try database().saveSession(session)
     }

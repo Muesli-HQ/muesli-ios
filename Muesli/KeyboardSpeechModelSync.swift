@@ -144,32 +144,49 @@ enum KeyboardSpeechModelSync {
             let untouched = existing.filter { wanted.contains($0.modelID) && !changedIDs.contains($0.modelID) }
             try write(KeyboardSpeechModel.Catalog(models: untouched), to: catalogURL)
 
+            // Each model is published as soon as its copy is in place, so one
+            // failed copy doesn't hide the models that copied fine.
+            var installed: [KeyboardSpeechModel.Manifest] = []
+            var failures = 0
+            func publish() throws {
+                let listed = Set((untouched + installed).map(\.modelID))
+                try write(KeyboardSpeechModel.Catalog(
+                    models: plan.entries.map(\.manifest).filter { listed.contains($0.modelID) }
+                ), to: catalogURL)
+            }
             for entry in changed {
                 guard let destination = KeyboardSpeechModel.modelDirectory(for: entry.manifest.modelID, in: container) else {
                     continue
                 }
                 let staging = root.appendingPathComponent(".staging-\(UUID().uuidString)", isDirectory: true)
-                // APFS clones the files, so this uses no extra disk.
-                try fileManager.copyItem(at: entry.source, to: staging)
-                for file in entry.extraFiles {
-                    let target = staging.appendingPathComponent(file.lastPathComponent)
-                    if !fileManager.fileExists(atPath: target.path) {
-                        try fileManager.copyItem(at: file, to: target)
+                do {
+                    // APFS clones the files, so this uses no extra disk.
+                    try fileManager.copyItem(at: entry.source, to: staging)
+                    for file in entry.extraFiles {
+                        let target = staging.appendingPathComponent(file.lastPathComponent)
+                        if !fileManager.fileExists(atPath: target.path) {
+                            try fileManager.copyItem(at: file, to: target)
+                        }
                     }
+                    if fileManager.fileExists(atPath: destination.path) {
+                        try fileManager.removeItem(at: destination)
+                    }
+                    try fileManager.moveItem(at: staging, to: destination)
+                    installed.append(entry.manifest)
+                    try publish()
+                } catch {
+                    failures += 1
+                    try? fileManager.removeItem(at: staging)
                 }
-                if fileManager.fileExists(atPath: destination.path) {
-                    try fileManager.removeItem(at: destination)
-                }
-                try fileManager.moveItem(at: staging, to: destination)
             }
 
-            let keep = wanted.union([KeyboardSpeechModel.catalogFileName])
+            let keep = Set((untouched + installed).map(\.modelID)).union([KeyboardSpeechModel.catalogFileName])
             for item in (try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
             where !keep.contains(item.lastPathComponent) {
                 try? fileManager.removeItem(at: item)
             }
-            try write(KeyboardSpeechModel.Catalog(models: plan.entries.map(\.manifest)), to: catalogURL)
-            return "shared"
+            try publish()
+            return failures == 0 ? "shared" : "partial"
         } catch {
             return "failed"
         }

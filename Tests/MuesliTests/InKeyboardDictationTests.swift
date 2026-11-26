@@ -352,6 +352,13 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(controller.modelCatalog?.selectedRawValue, selectedRawValue, "The catalog event was not observed")
     }
 
+    func testCaptureCountsAsStartingUntilTheMicListens() throws {
+        controller.startDictation()
+        XCTAssertTrue(controller.isStartingCapture)
+        engine.handlers?.onListening()
+        XCTAssertFalse(controller.isStartingCapture)
+    }
+
     func testLateCallbacksFromAnEndedCaptureAreIgnored() throws {
         controller.startDictation()
         let staleHandlers = engine.handlers

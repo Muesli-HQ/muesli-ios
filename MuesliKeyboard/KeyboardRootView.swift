@@ -4,7 +4,7 @@ struct KeyboardRootView: View {
     static let preferredHeight: CGFloat = 245
 
     private static let recorderBodyHeight: CGFloat = 84
-    private static let activeStatusWidth: CGFloat = 84
+    private static let activeStatusWidth: CGFloat = 100
     private static let activeControlButtonWidth: CGFloat = 120
     private static let activeWaveformBarCount = 34
 
@@ -127,12 +127,7 @@ struct KeyboardRootView: View {
                 if controller.isModelSelectionPending {
                     ProgressView()
                         .controlSize(.mini)
-                        .tint(MuesliTheme.syncGreen)
-                } else {
-                    Circle()
-                        .fill(MuesliTheme.syncGreen)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: MuesliTheme.syncGreen.opacity(0.45), radius: 3)
+                        .tint(MuesliTheme.textSecondary)
                 }
 
                 Text(controller.modelChipTitle)
@@ -239,10 +234,12 @@ struct KeyboardRootView: View {
     private var activeWaveformStrip: some View {
         HStack(spacing: MuesliTheme.spacing8) {
             HStack(spacing: 6) {
-                Circle()
-                    .fill(activeStatusColor)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: activeStatusColor.opacity(0.75), radius: 5)
+                if showsStatusSpinner {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(activeStatusColor)
+                        .accessibilityHidden(true)
+                }
 
                 Text(activeStatusText)
                     .font(.system(size: 13, weight: .semibold))
@@ -262,6 +259,7 @@ struct KeyboardRootView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier("keyboard.preparingModel")
                 } else if controller.isInKeyboardCaptureActive
+                    && !controller.isStartingCapture
                     && controller.showsInKeyboardLiveTranscript
                     && controller.showsLiveTranscript {
                     Text(controller.liveTranscript)
@@ -283,13 +281,8 @@ struct KeyboardRootView: View {
                         refreshDriver: .inputLevel
                     )
                     .frame(height: 24)
-                    .shadow(color: activeStatusColor.opacity(0.28), radius: 8)
-                }
-
-                if controller.dictationPhase == .transcribing {
-                    ProgressView()
-                        .tint(activeStatusColor)
-                        .controlSize(.small)
+                    // Grey and flat until the mic is actually listening.
+                    .opacity(controller.isStartingCapture ? 0.35 : 1)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -396,7 +389,7 @@ struct KeyboardRootView: View {
             "Transcribing"
         case .requested:
             "Starting"
-        case .recording where controller.statusText == "Starting mic":
+        case _ where controller.isStartingCapture:
             "Starting"
         default:
             controller.statusText == "Stopping" ? "Stopping" : "Listening"
@@ -404,7 +397,13 @@ struct KeyboardRootView: View {
     }
 
     private var activeStatusColor: Color {
-        controller.dictationPhase == .transcribing ? MuesliTheme.transcribing : Color(hex: 0x39D7FF)
+        if controller.isStartingCapture { return MuesliTheme.textSecondary }
+        return controller.dictationPhase == .transcribing ? MuesliTheme.transcribing : Color(hex: 0x39D7FF)
+    }
+
+    /// A small loader in place of a status dot while nothing is being heard yet.
+    private var showsStatusSpinner: Bool {
+        controller.isStartingCapture || controller.dictationPhase == .transcribing
     }
 
     private var primaryActionTitle: String {

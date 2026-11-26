@@ -183,6 +183,12 @@ final class KeyboardController {
         [.requested, .recording, .transcribing].contains(dictationPhase)
     }
 
+    /// The mic is not yet delivering audio: before `onListening`, or while
+    /// the app is being asked to start.
+    var isStartingCapture: Bool {
+        dictationPhase == .requested || (dictationPhase == .recording && statusText == "Starting mic")
+    }
+
     var waveformMode: MuesliFloatingWaveformMode {
         MuesliKeyboardWaveformPresentation.mode(for: dictationPhase)
     }

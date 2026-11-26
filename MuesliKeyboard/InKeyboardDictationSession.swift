@@ -171,7 +171,10 @@ protocol InKeyboardModelTranscribing: AnyObject {
     var maximumAudioSeconds: Double { get }
     /// Whether there is free memory to transcribe this much audio now.
     func hasRoomToTranscribe(seconds: Double) -> Bool
-    func transcribe(_ samples: [Float]) async throws -> InKeyboardModelTranscript
+    /// - Parameter requiresHeadroom: refuse when free memory is short. Pass
+    ///   false when there is no other transcript to fall back on: refusing
+    ///   would lose the recording for certain, while trying usually works.
+    func transcribe(_ samples: [Float], requiresHeadroom: Bool) async throws -> InKeyboardModelTranscript
 }
 
 extension InKeyboardModelTranscribing {
@@ -215,7 +218,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
     private var modelSamples: [Int16]?
     private var modelSamplesOverflowed = false
     private var modelSamplesReachedLimit = false
-    private var lastRoomCheckSecond = 0
+    private var lastRoomCheckSecond = -1
     /// Set per recording from the model in use.
     private var maximumModelSamples = Int(KeyboardSpeechModel.maximumDurationSeconds * WebAudioCapture.sampleRate)
     private var modelTranscriptionTask: Task<Void, Never>?
@@ -279,7 +282,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         }
         modelSamplesOverflowed = false
         modelSamplesReachedLimit = false
-        lastRoomCheckSecond = 0
+        lastRoomCheckSecond = -1
         generation += 1
         let generation = generation
         if let appleRecognizer {
@@ -329,8 +332,8 @@ final class InKeyboardDictationSession: InKeyboardDictating {
 
     /// With only the model transcribing, a recording that outgrows the free
     /// memory must stop while it can still be transcribed: the model would
-    /// refuse it at Stop, with no Apple Speech text to fall back on. Checked
-    /// once a second of audio, two seconds ahead.
+    /// struggle with it at Stop, with no Apple Speech text to fall back on.
+    /// Checked from the first buffer, then once a second, two seconds ahead.
     private func hasRoomForModelAudio(samples: Int) -> Bool {
         let rate = Int(WebAudioCapture.sampleRate)
         guard request == nil, let model, samples / rate != lastRoomCheckSecond else { return true }
@@ -424,11 +427,13 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         if model.isPreparing {
             handlers?.onPreparingModel(model.displayName ?? "your model")
         }
+        // Apple Speech's transcript is the fallback: running, or already heard.
+        let hasFallback = task != nil || !transcript.text.isEmpty
         modelTranscriptionTask = Task { @MainActor [weak self] in
             let floats = samples.map { Float($0) / Float(Int16.max) }
             let result: Result<InKeyboardModelTranscript, Error>
             do {
-                result = .success(try await model.transcribe(floats))
+                result = .success(try await model.transcribe(floats, requiresHeadroom: hasFallback))
             } catch {
                 result = .failure(error)
             }

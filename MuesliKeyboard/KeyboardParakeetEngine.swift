@@ -157,7 +157,7 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
 
     /// Waits for a load in progress (the recording itself never waits), then
     /// transcribes.
-    func transcribe(_ samples: [Float]) async throws -> InKeyboardModelTranscript {
+    func transcribe(_ samples: [Float], requiresHeadroom: Bool) async throws -> InKeyboardModelTranscript {
         if case .loading(let task, _) = state {
             let waitStarted = ContinuousClock.now
             let finished = await TaskDeadline.wait(for: task, limit: Self.loadWaitLimit)
@@ -173,7 +173,15 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
         let audioSeconds = Double(samples.count) / 16_000
         let needed = KeyboardSpeechModel.requiredBytesToTranscribe(seconds: audioSeconds)
         let available = Self.availableMemory()
-        guard available >= needed else {
+        if available < needed, !requiresHeadroom {
+            // Nothing else to fall back on: refusing would lose the recording.
+            KeyboardDiagnosticsLog.record("parakeet.transcribingWithLittleMemory", [
+                "model": manifest.modelID,
+                "availableMB": String(available / 1_048_576),
+                "neededMB": String(needed / 1_048_576)
+            ])
+        }
+        guard available >= needed || !requiresHeadroom else {
             KeyboardDiagnosticsLog.record("parakeet.skippedTranscribe", [
                 "model": manifest.modelID,
                 "audioSeconds": String(format: "%.1f", audioSeconds),

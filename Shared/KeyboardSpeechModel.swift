@@ -120,6 +120,19 @@ enum KeyboardSpeechModel {
         defaults?.set(fingerprint, forKey: keyboardStateFingerprintKey)
     }
 
+    /// Forgets a load the keyboard cancelled on purpose (memory warning or a
+    /// model switch), so it is not mistaken for a crash.
+    static func clearKeyboardState(
+        ifLoading modelID: String,
+        in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
+    ) {
+        guard defaults?.string(forKey: keyboardStateKey) == KeyboardState.loading.rawValue,
+              defaults?.string(forKey: keyboardStateModelKey) == modelID else { return }
+        defaults?.removeObject(forKey: keyboardStateKey)
+        defaults?.removeObject(forKey: keyboardStateModelKey)
+        defaults?.removeObject(forKey: keyboardStateFingerprintKey)
+    }
+
     /// True when the keyboard started loading this exact model and never
     /// finished: iOS most likely ended the keyboard for using too much memory.
     /// The keyboard then stays on Apple Speech for this download instead of

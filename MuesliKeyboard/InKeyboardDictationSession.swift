@@ -112,6 +112,10 @@ struct InKeyboardDictationHandlers {
     /// The recording ended while the keyboard model is still loading; the
     /// transcript waits for it. Carries the model's name.
     var onPreparingModel: @MainActor (String) -> Void = { _ in }
+    /// The recording hit the keyboard model's length limit with no Apple
+    /// Speech transcript to fall back on; the keyboard should stop as if the
+    /// user tapped Stop.
+    var onReachedLimit: @MainActor () -> Void = {}
     /// Final transcript (possibly empty when no speech was heard) and the
     /// engine that produced it.
     var onCompleted: @MainActor (String, String) -> Void = { _, _ in }
@@ -181,6 +185,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
     /// This recording's audio for the keyboard model, if it is in use.
     private var modelSamples: [Int16]?
     private var modelSamplesOverflowed = false
+    private var modelSamplesReachedLimit = false
     private var modelTranscriptionTask: Task<Void, Never>?
 
     init(
@@ -238,6 +243,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         didStartCapture = false
         modelSamples = usesModel ? [] : nil
         modelSamplesOverflowed = false
+        modelSamplesReachedLimit = false
         generation += 1
         let generation = generation
         if let appleRecognizer {
@@ -286,9 +292,20 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
         if frames > 0, modelSamples != nil, !modelSamplesOverflowed {
             if modelSamples!.count + Int(frames) > Self.maximumModelSamples {
-                // Too long for the keyboard model; Apple Speech's text is used.
-                modelSamplesOverflowed = true
-                modelSamples = []
+                if request == nil {
+                    // Only the keyboard model is transcribing, so there is no
+                    // other transcript to fall back on: stop at its limit and
+                    // transcribe what was recorded instead of losing it.
+                    if !modelSamplesReachedLimit {
+                        modelSamplesReachedLimit = true
+                        KeyboardDiagnosticsLog.record("inline.reachedModelLimit")
+                        handlers?.onReachedLimit()
+                    }
+                } else {
+                    // Too long for the keyboard model; Apple Speech's text is used.
+                    modelSamplesOverflowed = true
+                    modelSamples = []
+                }
             } else {
                 data.withUnsafeBytes { raw in
                     modelSamples!.append(contentsOf: raw.bindMemory(to: Int16.self))
@@ -425,6 +442,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         modelTranscriptionTask = nil
         modelSamples = nil
         modelSamplesOverflowed = false
+        modelSamplesReachedLimit = false
         task?.cancel()
         task = nil
         request = nil

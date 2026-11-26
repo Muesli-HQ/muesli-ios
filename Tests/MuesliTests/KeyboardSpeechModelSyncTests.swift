@@ -107,4 +107,38 @@ final class KeyboardSpeechModelCrashGuardTests: XCTestCase {
         KeyboardSpeechModel.recordKeyboardState(.ready, modelID: manifest.modelID, fingerprint: "10-20", in: defaults)
         XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest, in: defaults))
     }
+
+    func testDeliberateUnloadIsNotMistakenForACrash() throws {
+        let suite = "keyboard-model-guard-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manifest = KeyboardSpeechModel.Manifest(
+            modelID: "phonon-2.5", displayName: "Phonon", engineIdentifier: "phonon-2.5",
+            version: .phonon, sourceFingerprint: "1-2"
+        )
+        KeyboardSpeechModel.recordKeyboardState(.loading, modelID: manifest.modelID, fingerprint: "1-2", in: defaults)
+
+        KeyboardSpeechModel.clearKeyboardState(ifLoading: manifest.modelID, in: defaults)
+
+        XCTAssertFalse(KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest, in: defaults))
+    }
+}
+
+final class TaskDeadlineTests: XCTestCase {
+    func testReturnsAtTheDeadlineEvenIfTheTaskNeverFinishes() async {
+        let stuck = Task<Void, Never> { try? await Task.sleep(for: .seconds(3_600)) }
+        defer { stuck.cancel() }
+        let started = ContinuousClock.now
+
+        let finished = await TaskDeadline.wait(for: stuck, limit: .milliseconds(100))
+
+        XCTAssertFalse(finished)
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(2), "the wait must not block on the stuck task")
+    }
+
+    func testReportsATaskThatFinishesInTime() async {
+        let quick = Task<Void, Never> {}
+        let finished = await TaskDeadline.wait(for: quick, limit: .seconds(5))
+        XCTAssertTrue(finished)
+    }
 }

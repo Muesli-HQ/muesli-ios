@@ -104,7 +104,7 @@ struct MuesliApp: App {
                         coordinator.recoverLongVoiceNotesIfNeeded()
                         KeyboardSpeechModelSync.sync()
                         if coordinator.hasCompletedOnboarding {
-                            InKeyboardDictationPermissionPrompt.requestIfNeeded { coordinator.isRecording }
+                            InKeyboardDictationPermissionPrompt.requestIfNeeded { coordinator.isAudioCaptureActive }
                         }
                     }
                 }

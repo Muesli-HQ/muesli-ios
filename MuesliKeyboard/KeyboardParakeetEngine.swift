@@ -135,7 +135,7 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
     func transcribe(_ samples: [Float]) async throws -> String {
         if case .loading(let task, _) = state {
             let waitStarted = ContinuousClock.now
-            let finished = await Self.wait(for: task, limit: Self.loadWaitLimit)
+            let finished = await TaskDeadline.wait(for: task, limit: Self.loadWaitLimit)
             KeyboardDiagnosticsLog.record("parakeet.waitedForLoad", [
                 "seconds": String(format: "%.1f", Self.seconds(since: waitStarted)),
                 "finished": finished ? "true" : "false"
@@ -163,23 +163,17 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
     /// Frees the model, for example on a memory warning. The next appearance
     /// loads it again.
     func unload() {
-        if case .loading(let task, _) = state { task.cancel() }
+        if case .loading(let task, let manifest) = state {
+            task.cancel()
+            // A deliberate unload is not a crash: clear the loading marker so
+            // the crash guard doesn't block this model next time.
+            KeyboardSpeechModel.clearKeyboardState(ifLoading: manifest.modelID)
+        }
         if case .ready(let runner, _) = state {
             Task { await runner.cleanup() }
         }
         state = .idle
         loadedFingerprint = nil
-    }
-
-    /// True if the task finished within `limit`.
-    private static func wait(for task: Task<Void, Never>, limit: Duration) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await task.value; return true }
-            group.addTask { try? await Task.sleep(for: limit); return false }
-            let first = await group.next() ?? false
-            group.cancelAll()
-            return first
-        }
     }
 
     // MARK: - Memory

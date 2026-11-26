@@ -1384,6 +1384,10 @@ extension KeyboardController {
                 guard let self, self.inKeyboardRequestID == requestID else { return }
                 self.statusText = "Preparing \(name)…"
             },
+            onReachedLimit: { [weak self] in
+                guard let self, self.inKeyboardRequestID == requestID else { return }
+                self.finishInKeyboardDictation()
+            },
             onCompleted: { [weak self] text, engine in
                 self?.completeInKeyboardDictation(requestID: requestID, rawText: text, engine: engine)
             },

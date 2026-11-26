@@ -187,13 +187,18 @@ The keyboard transcribes with the user's selected Parakeet model when it can,
 and otherwise with Apple Speech (`SFSpeechRecognizer`,
 `requiresOnDeviceRecognition`). Audio never leaves the iPhone either way.
 
-- **Sharing the model.** The keyboard cannot read the app's private model
-  folder. `KeyboardSpeechModelSync` clones the selected model (Parakeet
-  TDT-CTC 110M, V3 or Redux) into the App Group under `KeyboardModels/`. APFS
-  clones use no extra disk. It writes `keyboard-model.json` last, so the
-  keyboard never sees a half-copied model. The sync runs at launch, in the
-  foreground and when the model changes. Other models (Whisper, Nemotron,
-  Unified) are withdrawn, and the keyboard uses Apple Speech.
+- **Sharing models.** The keyboard cannot read the app's private model
+  folder. `KeyboardSpeechModelSync` clones every downloaded model the keyboard
+  can run (Parakeet TDT-CTC 110M, V3, Redux, Phonon 2.5, Parakeet Unified,
+  Nemotron 3.5, Parakeet Realtime) into the App Group under `KeyboardModels/`.
+  It lists them in `keyboard-models.json`. APFS clones use no extra disk. A
+  model is listed only after its copy is complete. The sync runs at launch, in
+  the foreground and when downloads change. Whisper needs WhisperKit, which
+  the keyboard doesn't link, so it uses Apple Speech.
+- **Choosing the model.** The keyboard loads the model selected in the
+  keyboard model catalog. A pick in the keyboard's model menu switches at once
+  and loads the new model. The app adopts it the next time it runs, waiting
+  if it is busy recording.
 - **Memory.** On each appearance the keyboard records its memory limit
   (`phys_footprint + os_proc_available_memory`). `KeyboardParakeetEngine` loads
   the model only if that limit is at least 131 MB and 60 MB are free. It runs on
@@ -206,8 +211,13 @@ and otherwise with Apple Speech (`SFSpeechRecognizer`,
   Recording never waits. On Stop, the transcript waits for a load still in
   progress (60 s limit) and the keyboard shows "Preparing <model>…". That wait
   is the one-time compile after install or an app update; later loads come
-  from the cache. Recordings over 180 s use Apple Speech's transcript, to keep
-  the sample buffer small.
+  from the cache. The wait has a real deadline (`TaskDeadline`), so a stuck
+  load falls back to Apple Speech. Past 180 s the keyboard model stops
+  buffering, to keep the sample buffer small. If Apple Speech is running, its
+  transcript is used. Otherwise the recording stops at 180 s and the model
+  transcribes it, as if Stop were tapped. A deliberate unload (memory warning,
+  model switch) clears the loading marker, so the crash guard only blocks loads
+  cut short by the keyboard being ended.
 - **Apple Speech.** It streams partials while recording. Its final text is used
   when Parakeet is unavailable, fails or hears nothing. On-device Speech ends
   an utterance after a pause and starts the next result from empty, so

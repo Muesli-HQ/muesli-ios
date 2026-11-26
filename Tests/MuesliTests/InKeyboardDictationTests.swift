@@ -151,6 +151,19 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(store.resultsHistory().first).engineIdentifier, "parakeet-redux-keyboard")
     }
 
+    func testReachingTheModelLimitStopsLikeTappingStop() throws {
+        controller.startDictation()
+        engine.handlers?.onListening()
+
+        engine.handlers?.onReachedLimit()
+
+        XCTAssertEqual(engine.finishCount, 1, "the recording is ended and transcribed, not dropped")
+        XCTAssertEqual(controller.dictationPhase, .transcribing)
+
+        engine.handlers?.onCompleted("Three minutes of speech", "parakeet-redux-keyboard")
+        XCTAssertEqual(insertedText, ["Three minutes of speech"])
+    }
+
     func testEmptyFinalInsertsNothing() throws {
         controller.startDictation()
         controller.primaryAction()

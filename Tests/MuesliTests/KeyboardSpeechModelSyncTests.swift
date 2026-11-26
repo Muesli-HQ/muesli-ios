@@ -68,6 +68,27 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: shared.appendingPathComponent("tokenizer.json").path))
     }
 
+    func testATokenizerChangesTheFingerprintSoAFailedCopyIsRetried() {
+        let plain = KeyboardSpeechModelSync.fingerprint(of: source)
+        XCTAssertEqual(KeyboardSpeechModelSync.fingerprint(of: source, extraFiles: []), plain)
+        let withTokenizer = KeyboardSpeechModelSync.fingerprint(
+            of: source,
+            extraFiles: [URL(fileURLWithPath: "/hf/tokenizer.json")]
+        )
+        XCTAssertNotEqual(withTokenizer, plain)
+
+        let defaults = UserDefaults(suiteName: "fingerprint-\(UUID().uuidString)")!
+        let failed = KeyboardSpeechModel.Manifest(
+            modelID: "whisper-tiny", displayName: "Whisper", engineIdentifier: "whisper",
+            version: .whisper, sourceFingerprint: plain
+        )
+        KeyboardSpeechModel.markUnsupported(failed, in: defaults)
+        var repaired = failed
+        repaired.sourceFingerprint = withTokenizer
+        XCTAssertTrue(KeyboardSpeechModel.isUnsupported(failed, in: defaults))
+        XCTAssertFalse(KeyboardSpeechModel.isUnsupported(repaired, in: defaults))
+    }
+
     func testTokenizerFetchedLaterIsAddedToTheSharedModel() throws {
         let tokenizer = source.deletingLastPathComponent().appendingPathComponent("tokenizer.json")
         _ = KeyboardSpeechModelSync.apply(.init(entries: [.init(source: source, manifest: manifest("whisper-tiny-en"))]),

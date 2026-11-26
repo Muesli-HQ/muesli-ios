@@ -202,6 +202,13 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(transcript.text, "Another idea. A second one.")
     }
 
+    func testAccumulatorKeepsAShortSentenceThatPrefixesTheNextWord() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("No.", start: 0.0, endsUtterance: true)
+        transcript.apply("Nothing else.", start: 0.0, endsUtterance: true)
+        XCTAssertEqual(transcript.text, "No. Nothing else.")
+    }
+
     func testAccumulatorReplacesARepeatedFinalResult() {
         var transcript = InKeyboardTranscriptAccumulator()
         transcript.apply("Hello there", start: 0.0, endsUtterance: true)
@@ -321,8 +328,17 @@ final class InKeyboardDictationTests: XCTestCase {
         controller.startDictation()
         engine.handlers?.onListening()
 
-        try store.saveKeyboardModelCatalog(.init(selectedRawValue: "new", models: [model], canSelectModels: true))
-        try await waitForModelCatalog(selectedRawValue: "new")
+        // The controller already shows "new", so wait for a catalog it has not
+        // applied yet (one more model) before checking the status survived it.
+        let another = KeyboardTranscriptionModelOption(
+            rawValue: "another", displayName: "Another model", shortName: "Another", capabilityLabel: "Ready", isReady: true
+        )
+        try store.saveKeyboardModelCatalog(.init(selectedRawValue: "new", models: [model, another], canSelectModels: true))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while controller.modelCatalog?.models.count != 2, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(controller.modelCatalog?.models.count, 2, "The catalog event was not observed")
 
         XCTAssertFalse(controller.isModelSelectionPending)
         XCTAssertEqual(controller.statusText, "Listening on device")

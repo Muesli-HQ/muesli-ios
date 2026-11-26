@@ -87,14 +87,24 @@ enum KeyboardSpeechModelSync {
             guard let version = keyboardVersion(for: model),
                   isDownloaded(model),
                   let source = ModelBackgroundDownloadService.storageDirectory(for: model) else { return nil }
+            let extras = whisperTokenizerFiles(for: model)
             return Entry(source: source, manifest: KeyboardSpeechModel.Manifest(
                 modelID: model.rawValue,
                 displayName: model.shortName,
                 engineIdentifier: model.engineIdentifier,
                 version: version,
-                sourceFingerprint: fingerprint(of: source)
-            ), extraFiles: whisperTokenizerFiles(for: model))
+                sourceFingerprint: fingerprint(of: source, extraFiles: extras)
+            ), extraFiles: extras)
         })
+    }
+
+    /// A tokenizer added after a failed load must change the fingerprint, so
+    /// the keyboard's failure record for the copy without it no longer
+    /// matches. No suffix when there are no extra files.
+    nonisolated static func fingerprint(of directory: URL, extraFiles: [URL]) -> String {
+        let base = fingerprint(of: directory)
+        guard !extraFiles.isEmpty else { return base }
+        return base + "+" + extraFiles.map(\.lastPathComponent).joined(separator: ",")
     }
 
     /// Changes when the app re-downloads or re-verifies the model.

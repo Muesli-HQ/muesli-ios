@@ -67,7 +67,7 @@ struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
     mutating func apply(_ result: String, start: TimeInterval?, endsUtterance: Bool) {
         let next = Utterance(text: result.trimmingCharacters(in: .whitespacesAndNewlines), start: start)
         if let first = committed.first, Self.sameStart(start, first.start),
-           Self.normalized(next.text).hasPrefix(Self.normalized(committed.map(\.text).joined(separator: " "))) {
+           Self.extends(next.text, committed.map(\.text).joined(separator: " ")) {
             // Speech did not restart: this result covers the whole recording.
             committed = []
         } else if current.text.isEmpty, let last = committed.last, Self.sameStart(start, last.start),
@@ -99,14 +99,19 @@ struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
     /// True when `next` repeats or continues `committed`. A shorter result
     /// ("A" after "Another idea.") is the start of a new utterance, never a
     /// revision, so it must not replace the committed text.
+    /// Compares whole words, so "Nothing else." does not continue "No.".
     private static func extends(_ next: String, _ committed: String) -> Bool {
-        let next = normalized(next), committed = normalized(committed)
+        let next = words(next), committed = words(committed)
         guard !next.isEmpty, !committed.isEmpty else { return false }
-        return next.hasPrefix(committed)
+        return next.starts(with: committed)
     }
 
-    private static func normalized(_ text: String) -> String {
-        text.lowercased().filter { $0.isLetter || $0.isNumber }
+    /// Lowercased words with punctuation removed.
+    private static func words(_ text: String) -> [String] {
+        text.lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .map { $0.filter { $0.isLetter || $0.isNumber } }
+            .filter { !$0.isEmpty }
     }
 }
 

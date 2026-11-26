@@ -55,6 +55,10 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
 
     var displayName: String? { manifest?.displayName }
 
+    func hasRoomToTranscribe(seconds: Double) -> Bool {
+        Self.availableMemory() >= KeyboardSpeechModel.requiredBytesToTranscribe(seconds: seconds)
+    }
+
     var maximumAudioSeconds: Double {
         manifest.map { KeyboardSpeechModel.maximumDurationSeconds(for: $0.version) }
             ?? KeyboardSpeechModel.maximumDurationSeconds

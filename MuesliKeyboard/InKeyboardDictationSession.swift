@@ -106,12 +106,13 @@ struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
         return next.starts(with: committed)
     }
 
-    /// Lowercased words with punctuation removed.
+    /// Lowercased runs of letters and digits. Splitting at punctuation as
+    /// well as spaces keeps sentence boundaries in languages written without
+    /// spaces ("你好。世界。" is ["你好", "世界"]).
     private static func words(_ text: String) -> [String] {
         text.lowercased()
-            .split(whereSeparator: \.isWhitespace)
-            .map { $0.filter { $0.isLetter || $0.isNumber } }
-            .filter { !$0.isEmpty }
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
     }
 }
 
@@ -168,11 +169,14 @@ protocol InKeyboardModelTranscribing: AnyObject {
     var engineIdentifier: String? { get }
     /// Longest recording it transcribes; longer ones use Apple Speech.
     var maximumAudioSeconds: Double { get }
+    /// Whether there is free memory to transcribe this much audio now.
+    func hasRoomToTranscribe(seconds: Double) -> Bool
     func transcribe(_ samples: [Float]) async throws -> InKeyboardModelTranscript
 }
 
 extension InKeyboardModelTranscribing {
     var maximumAudioSeconds: Double { KeyboardSpeechModel.maximumDurationSeconds }
+    func hasRoomToTranscribe(seconds: Double) -> Bool { true }
 }
 
 /// Records with `WebAudioCapture` and transcribes on the iPhone, so audio never
@@ -211,6 +215,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
     private var modelSamples: [Int16]?
     private var modelSamplesOverflowed = false
     private var modelSamplesReachedLimit = false
+    private var lastRoomCheckSecond = 0
     /// Set per recording from the model in use.
     private var maximumModelSamples = Int(KeyboardSpeechModel.maximumDurationSeconds * WebAudioCapture.sampleRate)
     private var modelTranscriptionTask: Task<Void, Never>?
@@ -274,6 +279,7 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         }
         modelSamplesOverflowed = false
         modelSamplesReachedLimit = false
+        lastRoomCheckSecond = 0
         generation += 1
         let generation = generation
         if let appleRecognizer {
@@ -321,11 +327,23 @@ final class InKeyboardDictationSession: InKeyboardDictating {
         handlers != nil && ((modelSamples != nil && !modelSamplesOverflowed) || modelTranscriptionTask != nil)
     }
 
+    /// With only the model transcribing, a recording that outgrows the free
+    /// memory must stop while it can still be transcribed: the model would
+    /// refuse it at Stop, with no Apple Speech text to fall back on. Checked
+    /// once a second of audio, two seconds ahead.
+    private func hasRoomForModelAudio(samples: Int) -> Bool {
+        let rate = Int(WebAudioCapture.sampleRate)
+        guard request == nil, let model, samples / rate != lastRoomCheckSecond else { return true }
+        lastRoomCheckSecond = samples / rate
+        return model.hasRoomToTranscribe(seconds: Double(samples) / Double(rate) + 2)
+    }
+
     private func append(_ data: Data, rms: Float) {
         handlers?.onLevel(Double(min(max(rms * 8, 0), 1)))
         let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
-        if frames > 0, modelSamples != nil, !modelSamplesOverflowed {
-            if modelSamples!.count + Int(frames) > maximumModelSamples {
+        if frames > 0, modelSamples != nil, !modelSamplesOverflowed, !modelSamplesReachedLimit {
+            let total = modelSamples!.count + Int(frames)
+            if total > maximumModelSamples || !hasRoomForModelAudio(samples: total) {
                 if request == nil {
                     // Only the keyboard model is transcribing, so there is no
                     // other transcript to fall back on: stop at its limit and

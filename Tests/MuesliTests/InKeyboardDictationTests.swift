@@ -202,6 +202,13 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(transcript.text, "Another idea. A second one.")
     }
 
+    func testAccumulatorReplacesACumulativeResultWrittenWithoutSpaces() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("你好。", start: 0.0, endsUtterance: true)
+        transcript.apply("你好。世界。", start: 0.0, endsUtterance: true)
+        XCTAssertEqual(transcript.text, "你好。世界。")
+    }
+
     func testAccumulatorKeepsAShortSentenceThatPrefixesTheNextWord() {
         var transcript = InKeyboardTranscriptAccumulator()
         transcript.apply("No.", start: 0.0, endsUtterance: true)

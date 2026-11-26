@@ -179,9 +179,7 @@ final class DictationCoordinator {
                 selectedTranscriptionModel.rawValue,
                 forKey: MuesliPreferences.transcriptionModelKey
             )
-            if !Self.isUITestingLaunch {
-                KeyboardSpeechModelSync.sync()
-            }
+            requestKeyboardModelSync()
             let preparationTask = modelPreparationTask
             modelPreparationTask = nil
             preparationTask?.cancel()
@@ -222,9 +220,9 @@ final class DictationCoordinator {
             #endif
         }
         let downloaded = Set(LocalTranscriptionModel.allCases.filter(exists))
-        if downloaded != downloadedTranscriptionModels, !Self.isUITestingLaunch {
+        if downloaded != downloadedTranscriptionModels {
             // A download or removal changes which models the keyboard can run.
-            KeyboardSpeechModelSync.sync()
+            requestKeyboardModelSync()
         }
         downloadedTranscriptionModels = downloaded
         if modelPreparation.isReady, !downloadedTranscriptionModels.contains(selectedTranscriptionModel) {
@@ -292,6 +290,30 @@ final class DictationCoordinator {
             && meetingRecorder != nil
     }
     var isAudioCaptureActive: Bool { isRecording || isMeetingRecording }
+
+    /// Shares downloaded models with the keyboard. Replaceable in tests.
+    var syncKeyboardModels: @MainActor () -> Void = { KeyboardSpeechModelSync.sync() }
+
+    private func requestKeyboardModelSync() {
+        guard !Self.isUITestingLaunch else { return }
+        syncKeyboardModels()
+    }
+
+    /// Preparation can write files the keyboard copy needs (Whisper fetches
+    /// its tokenizer here), so share again once it finishes.
+    func finishModelPreparation(for model: LocalTranscriptionModel) {
+        guard selectedTranscriptionModel == model else { return }
+        modelPreparationTask = nil
+        modelPreparation = ModelPreparationState(
+            phase: .ready,
+            progress: 1,
+            status: "\(model.shortName) ready",
+            detail: model.detail
+        )
+        requestKeyboardModelSync()
+        playOnboardingModelReadyCueIfNeeded(for: model)
+        AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
+    }
 
     /// Available in every configuration; the launch-argument check itself
     /// exists only in DEBUG builds.
@@ -4405,16 +4427,7 @@ final class DictationCoordinator {
                 }
 
                 await MainActor.run {
-                    guard coordinator.selectedTranscriptionModel == model else { return }
-                    coordinator.modelPreparationTask = nil
-                    coordinator.modelPreparation = ModelPreparationState(
-                        phase: .ready,
-                        progress: 1,
-                        status: "\(model.shortName) ready",
-                        detail: model.detail
-                    )
-                    coordinator.playOnboardingModelReadyCueIfNeeded(for: model)
-                    AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
+                    coordinator.finishModelPreparation(for: model)
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -4698,16 +4711,7 @@ final class DictationCoordinator {
                 }
 
                 await MainActor.run {
-                    guard coordinator.selectedTranscriptionModel == model else { return }
-                    coordinator.modelPreparationTask = nil
-                    coordinator.modelPreparation = ModelPreparationState(
-                        phase: .ready,
-                        progress: 1,
-                        status: "\(model.shortName) ready",
-                        detail: model.detail
-                    )
-                    coordinator.playOnboardingModelReadyCueIfNeeded(for: model)
-                    AppTelemetry.signal("model_prepare_completed", parameters: ["engine": model.engineIdentifier])
+                    coordinator.finishModelPreparation(for: model)
                 }
             } catch is CancellationError {
                 await MainActor.run {

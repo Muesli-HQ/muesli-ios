@@ -96,11 +96,13 @@ struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
         return abs(lhs - rhs) <= restartThreshold
     }
 
-    /// True when one text extends the other, as revisions of one utterance do.
-    private static func extends(_ lhs: String, _ rhs: String) -> Bool {
-        let lhs = normalized(lhs), rhs = normalized(rhs)
-        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
-        return lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs)
+    /// True when `next` repeats or continues `committed`. A shorter result
+    /// ("A" after "Another idea.") is the start of a new utterance, never a
+    /// revision, so it must not replace the committed text.
+    private static func extends(_ next: String, _ committed: String) -> Bool {
+        let next = normalized(next), committed = normalized(committed)
+        guard !next.isEmpty, !committed.isEmpty else { return false }
+        return next.hasPrefix(committed)
     }
 
     private static func normalized(_ text: String) -> String {

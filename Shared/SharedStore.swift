@@ -224,9 +224,7 @@ struct SharedStore: Sendable {
     /// keyboard saved in the meantime survives. Returns whether it cleared.
     @discardableResult
     func clearKeyboardModelSelectionRequest(id: UUID) throws -> Bool {
-        guard try keyboardModelSelectionRequest()?.id == id else { return false }
-        try clearKeyboardModelSelectionRequest()
-        return true
+        try database().clearKeyboardModelSelectionRequest(matching: id)
     }
 
     func saveSession(_ session: RecordingSession) throws {
@@ -837,6 +835,24 @@ private struct SharedStoreDatabase {
                     try bind(SharedStoreKey.pendingCommand.rawValue, to: statement, at: 1)
                 }
             }
+        }
+    }
+
+    /// Compares and deletes in one transaction, so a pick the keyboard saves
+    /// between the two steps can't be deleted.
+    func clearKeyboardModelSelectionRequest(matching id: UUID) throws -> Bool {
+        try withDatabase { db in
+            var cleared = false
+            try transaction(db: db) {
+                guard let data = try valueData(key: .keyboardModelSelectionRequest, db: db),
+                      try decoder.decode(KeyboardTranscriptionModelSelectionRequest.self, from: data).id == id
+                else { return }
+                try execute("DELETE FROM key_values WHERE key = ?", db: db) { statement in
+                    try bind(SharedStoreKey.keyboardModelSelectionRequest.rawValue, to: statement, at: 1)
+                }
+                cleared = true
+            }
+            return cleared
         }
     }
 

@@ -2475,6 +2475,30 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertTrue(try store.clearKeyboardModelSelectionRequest(id: newer.id))
         XCTAssertNil(try store.keyboardModelSelectionRequest())
     }
+
+    /// The app clears an older pick while the keyboard (another process, here
+    /// another store on the same file) saves a newer one. The newer pick must
+    /// survive every interleaving.
+    func testClearingAModelPickRacingANewerSaveKeepsTheNewerOne() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = Muesli.SharedStore(containerURL: directory)
+        let keyboard = Muesli.SharedStore(containerURL: directory)
+
+        for _ in 0..<100 {
+            let older = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "parakeet-redux")
+            let newer = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "nemotron-3.5")
+            try app.saveKeyboardModelSelectionRequest(older)
+            DispatchQueue.concurrentPerform(iterations: 2) { index in
+                if index == 0 {
+                    _ = try? app.clearKeyboardModelSelectionRequest(id: older.id)
+                } else {
+                    try? keyboard.saveKeyboardModelSelectionRequest(newer)
+                }
+            }
+            XCTAssertEqual(try app.keyboardModelSelectionRequest()?.id, newer.id)
+        }
+    }
 }
 
 private extension SharedStoreTests {

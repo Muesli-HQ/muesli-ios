@@ -54,6 +54,26 @@ final class SettingsModelCatalogTests: XCTestCase {
         XCTAssertEqual(ModelCatalogState.resolve(isDownloaded: true, preparation: nil).icon, "checkmark.circle.fill")
     }
 
+    /// Whisper writes its tokenizer while preparing, after the download sync
+    /// ran. Finishing preparation must share the model again.
+    @MainActor
+    func testFinishingPreparationSharesModelsWithTheKeyboardAgain() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = DictationCoordinator(store: CatalogTestStore(containerURL: directory))
+        var syncs = 0
+        coordinator.syncKeyboardModels = { syncs += 1 }
+        let model = coordinator.selectedTranscriptionModel
+        let other = try XCTUnwrap(LocalTranscriptionModel.allCases.first { $0 != model })
+
+        coordinator.finishModelPreparation(for: other)
+        XCTAssertEqual(syncs, 0, "a stale preparation for another model changes nothing")
+
+        coordinator.finishModelPreparation(for: model)
+        XCTAssertEqual(syncs, 1)
+        XCTAssertTrue(coordinator.modelPreparation.isReady)
+    }
+
     @MainActor
     func testPreparationCannotRestartWhileModelRemovalIsInProgress() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

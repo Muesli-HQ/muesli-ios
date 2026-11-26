@@ -192,6 +192,23 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertEqual(transcript.text, "I like tea. I like coffee.")
     }
 
+    func testAccumulatorKeepsASentenceWhenTheNextOneStartsWithItsFirstLetters() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("Another idea.", start: 0.0, endsUtterance: true)
+        transcript.apply("A", start: 0.0, endsUtterance: false)
+        XCTAssertEqual(transcript.text, "Another idea. A")
+
+        transcript.apply("A second one.", start: 0.0, endsUtterance: true)
+        XCTAssertEqual(transcript.text, "Another idea. A second one.")
+    }
+
+    func testAccumulatorReplacesARepeatedFinalResult() {
+        var transcript = InKeyboardTranscriptAccumulator()
+        transcript.apply("Hello there", start: 0.0, endsUtterance: true)
+        transcript.apply("Hello there.", start: 0.0, endsUtterance: true)
+        XCTAssertEqual(transcript.text, "Hello there.")
+    }
+
     func testAccumulatorKeepsADifferentSentenceWithTheSameStart() {
         var transcript = InKeyboardTranscriptAccumulator()
         transcript.apply("Good morning.", start: 0.0, endsUtterance: true)

@@ -9,13 +9,20 @@ enum KeyboardSpeechModelSync {
     private static var isSyncing = false
     private static var needsAnotherPass = false
 
-    /// Models the keyboard can run: compact enough, and ANE/CPU friendly.
+    /// Models the keyboard can try. Whether one fits is decided in the
+    /// keyboard from its measured memory; a model that ends the keyboard while
+    /// loading is not tried again for that download. Whisper needs WhisperKit,
+    /// which the keyboard does not link.
     static func keyboardVersion(for model: LocalTranscriptionModel) -> KeyboardSpeechModel.Version? {
         switch model {
         case .parakeetTdtCtc110m: .tdtCtc110m
         case .parakeetV3: .v3
         case .parakeetRedux: .redux
-        default: nil
+        case .phonon25: .phonon
+        case .parakeetUnified: .unified
+        case .nemotron35: .nemotron
+        case .parakeetRealtimeEou120m: .eou320
+        case .appleSpeech, .whisperTinyEnglish, .whisperSmallEnglish, .whisperMediumEnglish, .whisperLargeTurbo: nil
         }
     }
 

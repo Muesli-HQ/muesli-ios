@@ -53,9 +53,13 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
         XCTAssertEqual(KeyboardSpeechModelSync.apply(.remove, container: container), "none")
     }
 
-    func testOnlyCompactParakeetModelsRunInTheKeyboard() {
+    func testEveryFluidAudioModelCanBeTriedInTheKeyboard() {
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetTdtCtc110m), .tdtCtc110m)
         XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetV3), .v3)
+        XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .phonon25), .phonon)
+        XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetUnified), .unified)
+        XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .nemotron35), .nemotron)
+        XCTAssertEqual(KeyboardSpeechModelSync.keyboardVersion(for: .parakeetRealtimeEou120m), .eou320)
         XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .whisperLargeTurbo))
         XCTAssertNil(KeyboardSpeechModelSync.keyboardVersion(for: .appleSpeech))
         guard case .remove = KeyboardSpeechModelSync.makePlan(for: .whisperLargeTurbo) else {

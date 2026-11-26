@@ -27,12 +27,19 @@ enum KeyboardSpeechModel {
     static let keyboardStateModelKey = "muesli.keyboard.parakeet.stateModel"
     static let keyboardStateFingerprintKey = "muesli.keyboard.parakeet.stateFingerprint"
 
-    /// Parakeet versions the keyboard loads. All use the ANE/CPU, never the GPU.
+    /// Model families the keyboard loads. All use the ANE/CPU, never the GPU.
     enum Version: String, Codable, Sendable {
         case tdtCtc110m
         case v3
         /// Its encoder runs on the CPU only, as in the app (no 2-bit ANE path).
         case redux
+        /// Phonon 2.5: a v3-family model; encoder on the CPU, as in the app.
+        case phonon
+        case unified
+        /// Nemotron 3.5 streaming multilingual.
+        case nemotron
+        /// Parakeet Realtime (EOU) with 320 ms chunks.
+        case eou320
     }
 
     struct Manifest: Codable, Equatable, Sendable {

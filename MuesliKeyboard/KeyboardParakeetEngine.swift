@@ -1,10 +1,12 @@
+import AVFoundation
 import CoreML
 import FluidAudio
 import Foundation
 import os
 
-/// Runs the Parakeet model the app shared into the App Group, inside the
-/// keyboard process. Loads only when the keyboard's memory limit and current
+/// Runs the speech model the app shared into the App Group (Parakeet TDT
+/// variants, Phonon, Parakeet Unified, Nemotron or Parakeet Realtime) inside
+/// the keyboard process. Loads only when the keyboard's memory limit and current
 /// free memory allow it, and never uses the GPU, which keyboards can't use
 /// from another app. Not compiled into the unit tests, which use a fake
 /// `InKeyboardModelTranscribing`.
@@ -21,7 +23,7 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
     private enum State {
         case idle
         case loading(Task<Void, Never>, KeyboardSpeechModel.Manifest)
-        case ready(AsrManager, KeyboardSpeechModel.Manifest)
+        case ready(Runner, KeyboardSpeechModel.Manifest)
         case unavailable
     }
 
@@ -99,22 +101,19 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
         let startedAt = ContinuousClock.now
         let task = Task { [weak self] in
             do {
-                let models = try await ParakeetModelLoading.loadAsrModels(
-                    from: directory,
-                    version: manifest.version.asrVersion,
-                    encoderComputeUnits: manifest.version == .redux ? .cpuOnly : nil,
-                    modelComputeUnits: .cpuAndNeuralEngine
-                )
-                let manager = AsrManager(config: .default)
-                try await manager.loadModels(models)
-                guard let self, self.loadedFingerprint == fingerprint else { return }
-                self.state = .ready(manager, manifest)
+                let runner = try await Runner.load(manifest.version, from: directory)
+                guard let self, self.loadedFingerprint == fingerprint else {
+                    await runner.cleanup()
+                    return
+                }
+                self.state = .ready(runner, manifest)
                 self.onReady?()
                 KeyboardSpeechModel.recordKeyboardState(.ready, modelID: manifest.modelID, fingerprint: fingerprint)
                 KeyboardDiagnosticsLog.record("parakeet.ready", [
                     "model": manifest.modelID,
                     "loadSeconds": String(format: "%.1f", Self.seconds(since: startedAt)),
-                    "footprintMB": String(Self.footprint() / 1_048_576)
+                    "footprintMB": String(Self.footprint() / 1_048_576),
+                    "peakMB": String(Self.peakFootprint() / 1_048_576)
                 ])
             } catch {
                 guard let self, self.loadedFingerprint == fingerprint else { return }
@@ -139,7 +138,7 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
                 "finished": finished ? "true" : "false"
             ])
         }
-        guard case .ready(let manager, _) = state else { throw CancellationError() }
+        guard case .ready(let runner, let manifest) = state else { throw CancellationError() }
         guard Self.availableMemory() >= KeyboardSpeechModel.requiredAvailableBytes / 2 else {
             KeyboardDiagnosticsLog.record("parakeet.skippedTranscribe", [
                 "availableMB": String(Self.availableMemory() / 1_048_576)
@@ -147,22 +146,23 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
             throw CancellationError()
         }
         let startedAt = ContinuousClock.now
-        var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-        let result = try await manager.transcribe(samples, decoderState: &decoderState)
+        let text = try await runner.transcribe(samples)
         KeyboardDiagnosticsLog.record("parakeet.transcribed", [
+            "model": manifest.modelID,
             "audioSeconds": String(format: "%.1f", Double(samples.count) / 16_000),
             "seconds": String(format: "%.2f", Self.seconds(since: startedAt)),
-            "footprintMB": String(Self.footprint() / 1_048_576)
+            "footprintMB": String(Self.footprint() / 1_048_576),
+            "peakMB": String(Self.peakFootprint() / 1_048_576)
         ])
-        return result.text
+        return text
     }
 
     /// Frees the model, for example on a memory warning. The next appearance
     /// loads it again.
     func unload() {
         if case .loading(let task, _) = state { task.cancel() }
-        if case .ready(let manager, _) = state {
-            Task { await manager.cleanup() }
+        if case .ready(let runner, _) = state {
+            Task { await runner.cleanup() }
         }
         state = .idle
         loadedFingerprint = nil
@@ -201,18 +201,121 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
         return result == KERN_SUCCESS ? info.phys_footprint : 0
     }
 
+    /// The highest footprint this process has reached: what counts against
+    /// the keyboard's memory limit.
+    static func peakFootprint() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? UInt64(info.ledger_phys_footprint_peak) : 0
+    }
+
     private static func seconds(since start: ContinuousClock.Instant) -> Double {
         let elapsed = ContinuousClock.now - start
         return Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
     }
 }
 
-private extension KeyboardSpeechModel.Version {
-    var asrVersion: AsrModelVersion {
-        switch self {
-        case .tdtCtc110m: .tdtCtc110m
-        case .v3: .v3
-        case .redux: .redux
+/// One loaded model and how to run it. Every configuration keeps to the CPU
+/// and Neural Engine: keyboards can't use the GPU from another app.
+private enum Runner: Sendable {
+    case tdt(AsrManager)
+    case unified(UnifiedAsrManager)
+    case nemotron(StreamingNemotronMultilingualAsrManager)
+    case eou(StreamingEouAsrManager)
+
+    static func load(_ version: KeyboardSpeechModel.Version, from directory: URL) async throws -> Runner {
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuAndNeuralEngine
+        switch version {
+        case .tdtCtc110m, .v3, .redux, .phonon:
+            let asrVersion: AsrModelVersion = switch version {
+            case .tdtCtc110m: .tdtCtc110m
+            case .redux: .redux
+            default: .v3
+            }
+            // Redux and Phonon run their encoders on the CPU, as in the app.
+            let models = try await ParakeetModelLoading.loadAsrModels(
+                from: directory,
+                version: asrVersion,
+                encoderComputeUnits: version == .redux || version == .phonon ? .cpuOnly : nil,
+                modelComputeUnits: .cpuAndNeuralEngine
+            )
+            let manager = AsrManager(config: .default)
+            try await manager.loadModels(models)
+            if version == .phonon {
+                // As in the app: Phonon is ready only after a first inference.
+                var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+                _ = try await manager.transcribe([Float](repeating: 0, count: 16_000), decoderState: &state)
+            }
+            return .tdt(manager)
+        case .unified:
+            let manager = UnifiedAsrManager(configuration: configuration, encoderPrecision: .int8)
+            try await manager.loadModels(from: directory)
+            return .unified(manager)
+        case .nemotron:
+            let manager = StreamingNemotronMultilingualAsrManager(configuration: configuration)
+            try await manager.loadModels(from: directory)
+            return .nemotron(manager)
+        case .eou320:
+            let manager = StreamingEouAsrManager(configuration: configuration, chunkSize: .ms320)
+            try await manager.loadModels(from: directory)
+            return .eou(manager)
         }
+    }
+
+    func transcribe(_ samples: [Float]) async throws -> String {
+        switch self {
+        case .tdt(let manager):
+            var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+            return try await manager.transcribe(samples, decoderState: &state).text
+        case .unified(let manager):
+            return try await manager.transcribeWithTimings(samples).text
+        case .nemotron(let manager):
+            await manager.reset()
+            await manager.setPartialCallback { _ in }
+            for start in stride(from: 0, to: samples.count, by: Self.chunk) {
+                let buffer = try Self.buffer(from: samples, start: start)
+                _ = try await manager.process(audioBuffer: buffer)
+            }
+            return try await manager.finish()
+        case .eou(let manager):
+            await manager.reset()
+            for start in stride(from: 0, to: samples.count, by: Self.chunk) {
+                let buffer = try Self.buffer(from: samples, start: start)
+                _ = try await manager.process(audioBuffer: buffer)
+            }
+            return try await manager.finish()
+        }
+    }
+
+    func cleanup() async {
+        switch self {
+        case .tdt(let manager): await manager.cleanup()
+        case .unified, .nemotron, .eou: break
+        }
+    }
+
+    private static let chunk = 16_000
+
+    /// One second of 16 kHz mono Float32 audio, as the app feeds streaming models.
+    private static func buffer(from samples: [Float], start: Int) throws -> AVAudioPCMBuffer {
+        let count = min(chunk, samples.count - start)
+        guard let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false
+              ),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
+              let channel = buffer.floatChannelData?[0] else { throw CocoaError(.featureUnsupported) }
+        buffer.frameLength = AVAudioFrameCount(count)
+        samples.withUnsafeBufferPointer { source in
+            if let base = source.baseAddress {
+                channel.update(from: base + start, count: count)
+            }
+        }
+        return buffer
     }
 }

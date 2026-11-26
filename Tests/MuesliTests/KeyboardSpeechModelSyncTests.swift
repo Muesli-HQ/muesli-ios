@@ -68,6 +68,22 @@ final class KeyboardSpeechModelSyncTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: shared.appendingPathComponent("tokenizer.json").path))
     }
 
+    func testTokenizerFetchedLaterIsAddedToTheSharedModel() throws {
+        let tokenizer = source.deletingLastPathComponent().appendingPathComponent("tokenizer.json")
+        _ = KeyboardSpeechModelSync.apply(.init(entries: [.init(source: source, manifest: manifest("whisper-tiny-en"))]),
+                                          container: container)
+        try Data("{}".utf8).write(to: tokenizer)
+
+        let outcome = KeyboardSpeechModelSync.apply(
+            .init(entries: [.init(source: source, manifest: manifest("whisper-tiny-en"), extraFiles: [tokenizer])]),
+            container: container
+        )
+
+        XCTAssertEqual(outcome, "shared", "an unchanged model missing its tokenizer is re-shared")
+        let shared = try XCTUnwrap(Muesli.KeyboardSpeechModel.modelDirectory(for: "whisper-tiny-en", in: container))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: shared.appendingPathComponent("tokenizer.json").path))
+    }
+
     func testRemovedDownloadsAreWithdrawn() throws {
         _ = KeyboardSpeechModelSync.apply(plan("parakeet-redux", "nemotron-3.5"), container: container)
         _ = KeyboardSpeechModelSync.apply(plan("parakeet-redux"), container: container)
@@ -169,6 +185,9 @@ final class KeyboardSpeechModelCrashGuardTests: XCTestCase {
 
         KeyboardSpeechModel.markUnsupported(manifest("whisper-large-turbo", "1"), in: defaults)
         XCTAssertEqual(KeyboardSpeechModel.runnableModelIDs(in: container, defaults: defaults), ["whisper-tiny-en"])
+        XCTAssertTrue(KeyboardSpeechModel.isUnsupported(manifest("whisper-large-turbo", "1"), in: defaults),
+                      "the keyboard checks this before every load, so it never loads the model again")
+        XCTAssertFalse(KeyboardSpeechModel.isUnsupported(manifest("whisper-large-turbo", "2"), in: defaults))
 
         try share([manifest("whisper-tiny-en", "1"), manifest("whisper-large-turbo", "2")])
         XCTAssertEqual(KeyboardSpeechModel.runnableModelIDs(in: container, defaults: defaults), ["whisper-tiny-en", "whisper-large-turbo"],
@@ -197,6 +216,15 @@ final class KeyboardDiagnosticsBudgetTests: XCTestCase {
         for budget in [0, 1, 10] {
             XCTAssertLessThanOrEqual(KeyboardDiagnosticsLog.newestLines(of: text, fittingIn: budget).utf8.count, budget)
         }
+    }
+
+    func testSmallBudgetStillKeepsTheNewestLines() {
+        let text = (1...40).map { "line \(String(format: "%02d", $0))" }.joined(separator: "\n") + "\n"
+
+        let trimmed = KeyboardDiagnosticsLog.newestLines(of: text, fittingIn: 64)
+
+        XCTAssertLessThanOrEqual(trimmed.utf8.count, 64)
+        XCTAssertTrue(trimmed.hasSuffix("line 40\n"), "the newest entry is kept")
     }
 }
 

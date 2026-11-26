@@ -2460,6 +2460,21 @@ final class SharedStoreTests: XCTestCase {
         XCTAssertEqual(try sqliteString("SELECT summary_text FROM transcripts LIMIT 1", in: directory), "Legacy notes")
         XCTAssertEqual(try sqliteDouble("SELECT matching_threshold FROM custom_words LIMIT 1", in: directory), 0.9, accuracy: 0.001)
     }
+
+    func testClearingAModelPickLeavesANewerOne() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("model-pick-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        let older = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "parakeet-redux")
+        let newer = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "nemotron-3.5")
+        try store.saveKeyboardModelSelectionRequest(newer)
+
+        XCTAssertFalse(try store.clearKeyboardModelSelectionRequest(id: older.id))
+        XCTAssertEqual(try store.keyboardModelSelectionRequest()?.id, newer.id)
+        XCTAssertTrue(try store.clearKeyboardModelSelectionRequest(id: newer.id))
+        XCTAssertNil(try store.keyboardModelSelectionRequest())
+    }
 }
 
 private extension SharedStoreTests {
@@ -2768,21 +2783,6 @@ private final class TestCrossProcessEventBus: CrossProcessEventStreaming, @unche
                 self.lock.unlock()
             }
         }
-    }
-
-    func testClearingAModelPickLeavesANewerOne() throws {
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("model-pick-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = Muesli.SharedStore(containerURL: directory)
-        let older = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "parakeet-redux")
-        let newer = Muesli.KeyboardTranscriptionModelSelectionRequest(modelRawValue: "nemotron-3.5")
-        try store.saveKeyboardModelSelectionRequest(newer)
-
-        XCTAssertFalse(try store.clearKeyboardModelSelectionRequest(id: older.id))
-        XCTAssertEqual(try store.keyboardModelSelectionRequest()?.id, newer.id)
-        XCTAssertTrue(try store.clearKeyboardModelSelectionRequest(id: newer.id))
-        XCTAssertNil(try store.keyboardModelSelectionRequest())
     }
 
 }

@@ -145,6 +145,15 @@ enum KeyboardSpeechModel {
         defaults?.set(unsupported, forKey: unsupportedModelsKey)
     }
 
+    /// True once this download failed to load or ended the keyboard.
+    static func isUnsupported(
+        _ manifest: Manifest,
+        in defaults: UserDefaults? = InKeyboardDictationPreferences.sharedDefaults
+    ) -> Bool {
+        let unsupported = defaults?.dictionary(forKey: unsupportedModelsKey) as? [String: String] ?? [:]
+        return unsupported[manifest.modelID] == manifest.sourceFingerprint
+    }
+
     /// Model IDs the keyboard can transcribe with itself: shared by the app,
     /// not known to fail, and only when the keyboard's memory limit allows a
     /// model at all. Apple Speech isn't included; it always runs.

@@ -184,12 +184,12 @@ final class InKeyboardDictationTests: XCTestCase {
         XCTAssertFalse(controller.isInKeyboardCaptureActive)
     }
 
-    func testAccumulatorReplacesACorrectedUtterance() {
+    func testAccumulatorNeverDropsASentenceThatSharesOpeningWords() {
         var transcript = InKeyboardTranscriptAccumulator()
-        transcript.apply("I saw a bear.", start: 0.3, endsUtterance: true)
-        transcript.apply("I saw a bird.", start: 0.3, endsUtterance: false)
+        transcript.apply("I like tea.", start: 0.0, endsUtterance: true)
+        transcript.apply("I like coffee.", start: 0.0, endsUtterance: false)
 
-        XCTAssertEqual(transcript.text, "I saw a bird.")
+        XCTAssertEqual(transcript.text, "I like tea. I like coffee.")
     }
 
     func testAccumulatorKeepsADifferentSentenceWithTheSameStart() {

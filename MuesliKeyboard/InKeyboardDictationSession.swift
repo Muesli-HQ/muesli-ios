@@ -71,10 +71,12 @@ struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
             // Speech did not restart: this result covers the whole recording.
             committed = []
         } else if current.text.isEmpty, let last = committed.last, Self.sameStart(start, last.start),
-                  Self.isRevision(next.text, of: last.text) {
-            // A repeat or correction of the utterance just committed (for
-            // example the final result after endAudio(), or "bear" -> "bird"):
-            // replace it instead of adding it twice.
+                  Self.extends(next.text, last.text) {
+            // A repeat of the utterance just committed (for example the final
+            // result after endAudio()): replace it instead of adding it twice.
+            // Only an exact continuation counts. A looser match ("I like tea."
+            // then "I like coffee.") would delete a real sentence, which is
+            // worse than an occasional duplicated correction.
             committed.removeLast()
         } else if !current.text.isEmpty, !Self.sameStart(start, current.start) {
             commitCurrent()
@@ -94,23 +96,11 @@ struct InKeyboardTranscriptAccumulator: Equatable, Sendable {
         return abs(lhs - rhs) <= restartThreshold
     }
 
-    /// True when `text` revises `original`: one extends the other, or they
-    /// share at least half their leading words ("I saw a bear" -> "I saw a
-    /// bird"). A new utterance rarely shares its opening words, so this
-    /// doesn't merge distinct sentences even if timestamps were to restart.
-    private static func isRevision(_ text: String, of original: String) -> Bool {
-        let lhs = normalized(text), rhs = normalized(original)
+    /// True when one text extends the other, as revisions of one utterance do.
+    private static func extends(_ lhs: String, _ rhs: String) -> Bool {
+        let lhs = normalized(lhs), rhs = normalized(rhs)
         guard !lhs.isEmpty, !rhs.isEmpty else { return false }
-        if lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs) { return true }
-        let a = words(text), b = words(original)
-        let shared = zip(a, b).prefix { $0 == $1 }.count
-        return shared > 0 && shared * 2 >= min(a.count, b.count)
-    }
-
-    private static func words(_ text: String) -> [String] {
-        text.lowercased()
-            .split { !($0.isLetter || $0.isNumber || $0 == "'") }
-            .map(String.init)
+        return lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs)
     }
 
     private static func normalized(_ text: String) -> String {
@@ -329,9 +319,11 @@ final class InKeyboardDictationSession: InKeyboardDictating {
                         handlers?.onReachedLimit()
                     }
                 } else {
-                    // Too long for the keyboard model; Apple Speech's text is used.
+                    // Too long for the keyboard model; Apple Speech's text is
+                    // used. Dropping the buffer (nil) also lets Speech's final
+                    // result complete the dictation without the timeout.
                     modelSamplesOverflowed = true
-                    modelSamples = []
+                    modelSamples = nil
                 }
             } else {
                 data.withUnsafeBytes { raw in

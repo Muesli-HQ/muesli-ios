@@ -74,7 +74,8 @@ enum KeyboardDiagnosticsLog {
     static func newestLines(of text: String, fittingIn maxBytes: Int) -> String {
         guard text.utf8.count > maxBytes else { return text }
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-        let noteBudget = 64
+        // Room for the note at its longest (every line omitted).
+        let noteBudget = "(\(lines.count) older entries omitted)\n".utf8.count
         var kept: [Substring] = []
         var used = 0
         for line in lines.reversed() {

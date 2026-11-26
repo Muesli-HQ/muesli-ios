@@ -87,6 +87,12 @@ final class KeyboardParakeetEngine: InKeyboardModelTranscribing {
             return
         }
 
+        guard !KeyboardSpeechModel.isUnsupported(manifest) else {
+            // Failed or ended the keyboard before: never load this download
+            // again. The keyboard uses Apple Speech, and its menu hides it.
+            state = .unavailable
+            return
+        }
         guard !KeyboardSpeechModel.previousLoadDidNotFinish(manifest: manifest) else {
             // Hide it from the keyboard's model menu for this download.
             KeyboardSpeechModel.markUnsupported(manifest)

@@ -123,7 +123,12 @@ enum KeyboardSpeechModelSync {
             guard let directory = KeyboardSpeechModel.modelDirectory(for: entry.manifest.modelID, in: container) else {
                 return true
             }
-            return !existing.contains(entry.manifest) || !fileManager.fileExists(atPath: directory.path)
+            // A Whisper tokenizer the app fetched after the model was shared
+            // also counts as a change, so the shared copy gains it.
+            let missingExtra = entry.extraFiles.contains {
+                !fileManager.fileExists(atPath: directory.appendingPathComponent($0.lastPathComponent).path)
+            }
+            return !existing.contains(entry.manifest) || !fileManager.fileExists(atPath: directory.path) || missingExtra
         }
         let wanted = Set(plan.entries.map(\.manifest.modelID))
         let stale = existing.filter { !wanted.contains($0.modelID) }

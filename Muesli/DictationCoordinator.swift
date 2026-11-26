@@ -4258,8 +4258,14 @@ final class DictationCoordinator {
             processPendingKeyboardModelSelection()
             return
         }
+        // A keyboard pick the app can't adopt yet (busy recording, or its
+        // clear failed) stays the keyboard's selection; publishing the app's
+        // older choice would switch the keyboard back.
+        let pendingPick = (try? store.keyboardModelSelectionRequest())
+            .flatMap { LocalTranscriptionModel(rawValue: $0.modelRawValue) }
+            .flatMap { $0.isDownloaded ? $0 : nil }
         let catalog = KeyboardTranscriptionModelCatalog(
-            selectedRawValue: selectedTranscriptionModel.rawValue,
+            selectedRawValue: pendingPick?.rawValue ?? selectedTranscriptionModel.rawValue,
             models: LocalTranscriptionModel.availableModels.map(\.keyboardCatalogOption),
             canSelectModels: canSelectTranscriptionModelsFromKeyboard
         )
@@ -4280,7 +4286,12 @@ final class DictationCoordinator {
         defer { isAdoptingKeyboardModelPick = false }
         // Leave the request for a later attempt if it can't be cleared, and
         // leave a newer pick alone; its own event adopts it.
-        guard (try? store.clearKeyboardModelSelectionRequest(id: request.id)) == true else { return }
+        guard (try? store.clearKeyboardModelSelectionRequest(id: request.id)) == true else {
+            // Still publish (the guard above stops re-adoption): the catalog
+            // keeps the pending pick selected until it can be adopted.
+            publishKeyboardModelCatalog()
+            return
+        }
 
         guard let model = LocalTranscriptionModel(rawValue: request.modelRawValue),
               model.isDownloaded

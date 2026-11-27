@@ -3886,8 +3886,17 @@ final class DictationCoordinator {
     }
 
     func syncICloudTextIfEnabled(reason: String = "manual") {
-        let intent: MuesliCKSyncIntent = reason == "foreground" ? .fetch : .manual
+        let intent: MuesliCKSyncIntent = reason == "foreground"
+            ? Self.foregroundSyncIntent(hasPendingUploads: (try? store.hasTextRecordsNeedingSync()) ?? false)
+            : .manual
         requestICloudTextSync(intent: intent, reason: reason)
+    }
+
+    /// The keyboard saves dictations it cannot upload itself, so a foreground
+    /// sync also sends whatever is waiting. Checking the store, not the
+    /// in-memory history, keeps this independent of which view reloaded first.
+    nonisolated static func foregroundSyncIntent(hasPendingUploads: Bool) -> MuesliCKSyncIntent {
+        hasPendingUploads ? .manual : .fetch
     }
 
     private func requestICloudTextSync(
@@ -7460,6 +7469,11 @@ final class DictationCoordinator {
                     self.processPendingKeyboardModelSelection()
                 case .resultChanged:
                     self.refreshInlineKeyboardHistory()
+                    // A keyboard result saved after the foreground check
+                    // would otherwise wait for the next upload trigger.
+                    if (try? self.store.hasTextRecordsNeedingSync()) == true {
+                        self.scheduleICloudSyncAfterLocalChange(reason: "keyboard_result")
+                    }
                 case .handoffStatusChanged, .runtimeStatusChanged, .liveTranscriptChanged,
                      .modelCatalogChanged, .ownershipChanged:
                     continue

@@ -680,6 +680,45 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertEqual(decoded.durationSeconds, 42, accuracy: 0.001)
     }
 
+    func testForegroundSyncSendsWhenKeyboardLeftUploadsWaiting() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        XCTAssertEqual(
+            Muesli.DictationCoordinator.foregroundSyncIntent(hasPendingUploads: try store.hasTextRecordsNeedingSync()),
+            .fetch
+        )
+
+        // As the keyboard extension saves an inline dictation.
+        try store.saveResult(Muesli.DictationResult(requestID: UUID(), text: "typed by voice", engineIdentifier: "test"))
+
+        XCTAssertEqual(
+            Muesli.DictationCoordinator.foregroundSyncIntent(hasPendingUploads: try store.hasTextRecordsNeedingSync()),
+            .manual
+        )
+    }
+
+    func testDiagnosticsCountOnlyMeetingsTheUploaderWillSend() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        // Dictation sessions are flagged on save but never upload as sessions;
+        // their text uploads as a result. A meeting still recording waits.
+        try store.saveSession(Muesli.RecordingSession(kind: .quickDictation, phase: .completed, engineIdentifier: "test"))
+        try store.saveSession(Muesli.RecordingSession(kind: .keyboardDictation, phase: .completed, engineIdentifier: "test"))
+        try store.saveSession(Muesli.RecordingSession(kind: .meeting, phase: .recording, engineIdentifier: "test"))
+        try store.saveSession(Muesli.RecordingSession(kind: .meeting, phase: .completed, engineIdentifier: "test"))
+        try store.saveResult(Muesli.DictationResult(requestID: UUID(), text: "note", engineIdentifier: "test"))
+
+        let counts = try store.syncRecordCounts()
+        let queued = try store.textRecordsNeedingSync()
+
+        XCTAssertEqual(counts.sessions, 4)
+        XCTAssertEqual(counts.dirtyMeetings, 1)
+        XCTAssertEqual(counts.dirtyMeetings, queued.filter { $0.kind == .meeting }.count)
+        XCTAssertEqual(counts.dirtyResults, queued.filter { $0.kind == .dictation }.count)
+    }
+
     func testNewerFetchedServerRecordReplacesLocalDirtyRowAndPendingSave() async throws {
         let directory = try Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

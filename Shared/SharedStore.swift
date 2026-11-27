@@ -356,12 +356,11 @@ struct SharedStore: Sendable {
 
     /// Row counts for diagnostics, without decoding any payloads.
     ///
-    /// The dirty counts are raw flag counts, not the uploader's queue.
-    /// `textRecordsNeedingSync` applies further rules -- kind, lifecycle state,
-    /// and dirty transcripts belonging to clean sessions -- so these answer
-    /// "is anything marked for upload at all", which is the question a
-    /// diagnostic needs, and deliberately not "how many will be sent".
-    func syncRecordCounts() throws -> (results: Int, sessions: Int, dirtyResults: Int, dirtySessions: Int) {
+    /// The dirty counts match what the uploader will send. Only meetings
+    /// upload as sessions; a dictation's session stays flagged forever while
+    /// its text uploads as a result, so counting raw session flags reports a
+    /// backlog that does not exist.
+    func syncRecordCounts() throws -> (results: Int, sessions: Int, dirtyResults: Int, dirtyMeetings: Int) {
         try database().syncRecordCounts()
     }
 
@@ -1376,7 +1375,7 @@ private struct SharedStoreDatabase {
     /// Counts only. The diagnostics summary runs on the main actor, and
     /// decoding a full history there is exactly the kind of harm a diagnostic
     /// must not do.
-    func syncRecordCounts() throws -> (results: Int, sessions: Int, dirtyResults: Int, dirtySessions: Int) {
+    func syncRecordCounts() throws -> (results: Int, sessions: Int, dirtyResults: Int, dirtyMeetings: Int) {
         try withDatabase { db in
             func count(_ sql: String) throws -> Int {
                 try queryRows(sql, db: db) { _ in } read: { statement in
@@ -1389,10 +1388,23 @@ private struct SharedStoreDatabase {
             let pendingDictations = try count(
                 "SELECT COUNT(*) FROM result_history WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL"
             )
-            let pendingSessions = try count(
-                "SELECT COUNT(*) FROM recording_sessions WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL"
-            )
-            return (results, sessions, pendingDictations, pendingSessions)
+            let pendingMeetings = try queryRows(
+                """
+                SELECT COUNT(DISTINCT s.id)
+                FROM recording_sessions s
+                LEFT JOIN transcripts t ON t.session_id = s.id
+                WHERE (s.sync_dirty = 1 OR t.sync_dirty = 1)
+                  AND s.cloud_record_name IS NOT NULL
+                  AND s.kind = ?
+                  AND (s.deleted_at IS NOT NULL OR s.phase IN ('completed', 'failed', 'cancelled'))
+                """,
+                db: db
+            ) { statement in
+                try bind(RecordingSessionKind.meeting.rawValue, to: statement, at: 1)
+            } read: { statement in
+                Int(sqlite3_column_int64(statement, 0))
+            }.first ?? 0
+            return (results, sessions, pendingDictations, pendingMeetings)
         }
     }
 

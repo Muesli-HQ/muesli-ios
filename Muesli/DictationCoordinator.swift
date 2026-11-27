@@ -2832,6 +2832,10 @@ final class DictationCoordinator {
         let appResults = dictationHistory.filter { $0.source != "keyboard_inline" }
         dictationHistory = (appResults + inlineResults).sorted { $0.createdAt > $1.createdAt }
         lastTranscript = dictationHistory.first?.text ?? ""
+        // The keyboard saves its own results but cannot run CloudKit, and a
+        // foreground sync only fetches. Upload what it saved now, as app
+        // dictations do on completion.
+        scheduleICloudSyncAfterLocalChange(reason: "keyboard_inline_completed")
     }
 
     private func publishVoiceNoteHistoryPresentationIfNeeded() {

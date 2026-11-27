@@ -330,7 +330,7 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
         // decoded in full just to be counted. It also means the pending figure
         // is exact rather than capped by a fetch limit.
         let counts = try? store.syncRecordCounts()
-        let dirty = counts.map { "\($0.dirtyResults)/\($0.dirtySessions)" }
+        let dirty = counts.map { "\($0.dirtyResults)/\($0.dirtyMeetings)" }
         let sessions = counts.map(\.sessions)
         let results = counts.map(\.results)
         // Presence and platform only. The stored device name is
@@ -343,50 +343,11 @@ final class ICloudTextSyncEngine: @unchecked Sendable {
             "sync: enabled=\(enabled)",
             "migrated=\(migrated)",
             "engineState=\(hasEngineState ? "present" : "none")",
-            "dirtyNotes/dirtySessions=\(dirty ?? "?")",
+            "dirtyNotes/dirtyMeetings=\(dirty ?? "?")",
             "localNotes=\(results.map(String.init) ?? "?")",
             "localSessions=\(sessions.map(String.init) ?? "?")",
             "linkedDevice=\(hasRemoteDevice ? (remotePlatform ?? "yes") : "none")"
         ].joined(separator: " ")
-    }
-
-    func sync(
-        store: SharedStore = SharedStore(),
-        forceBridgeDeviceRefresh: Bool = false
-    ) async throws -> ICloudTextSyncResult {
-        _ = try await ensureSyncZone()
-        await refreshBridgeDeviceLink(
-            forceRefresh: forceBridgeDeviceRefresh,
-            shouldCommit: { true }
-        )
-        try await migrateDefaultZoneIfNeeded(store: store)
-
-        let remoteRecords = try await fetchChangedTextRecords()
-        var downloaded = 0
-        for record in remoteRecords {
-            guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
-            try store.upsertSyncedTextRecord(syncRecord)
-            downloaded += 1
-        }
-
-        let dirtyRecords = try store.textRecordsNeedingSync()
-        let dirtyByRecordName = Dictionary(uniqueKeysWithValues: dirtyRecords.map { ($0.id, $0) })
-        let savedRecords = try await save(records: dirtyRecords.map {
-            Self.syncZoneCloudRecord(from: $0)
-        })
-        for savedRecord in savedRecords {
-            guard let kind = Self.kind(from: savedRecord),
-                  let uploadedRecord = dirtyByRecordName[savedRecord.recordID.recordName]
-            else { continue }
-            try store.markTextRecordSynced(
-                kind: kind,
-                recordName: savedRecord.recordID.recordName,
-                changeTag: savedRecord.recordChangeTag,
-                recordUpdatedAt: uploadedRecord.updatedAt
-            )
-        }
-
-        return ICloudTextSyncResult(uploaded: savedRecords.count, downloaded: downloaded)
     }
 
     /// Transitional preflight retained during the CKSyncEngine migration.

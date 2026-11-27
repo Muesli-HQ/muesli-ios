@@ -7469,6 +7469,11 @@ final class DictationCoordinator {
                     self.processPendingKeyboardModelSelection()
                 case .resultChanged:
                     self.refreshInlineKeyboardHistory()
+                    // A keyboard result saved after the foreground check
+                    // would otherwise wait for the next upload trigger.
+                    if (try? self.store.hasTextRecordsNeedingSync()) == true {
+                        self.scheduleICloudSyncAfterLocalChange(reason: "keyboard_result")
+                    }
                 case .handoffStatusChanged, .runtimeStatusChanged, .liveTranscriptChanged,
                      .modelCatalogChanged, .ownershipChanged:
                     continue

@@ -680,6 +680,24 @@ final class MuesliCKSyncEngineTests: XCTestCase {
         XCTAssertEqual(decoded.durationSeconds, 42, accuracy: 0.001)
     }
 
+    func testForegroundSyncSendsWhenKeyboardLeftUploadsWaiting() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Muesli.SharedStore(containerURL: directory)
+        XCTAssertEqual(
+            Muesli.DictationCoordinator.foregroundSyncIntent(hasPendingUploads: try store.hasTextRecordsNeedingSync()),
+            .fetch
+        )
+
+        // As the keyboard extension saves an inline dictation.
+        try store.saveResult(Muesli.DictationResult(requestID: UUID(), text: "typed by voice", engineIdentifier: "test"))
+
+        XCTAssertEqual(
+            Muesli.DictationCoordinator.foregroundSyncIntent(hasPendingUploads: try store.hasTextRecordsNeedingSync()),
+            .manual
+        )
+    }
+
     func testDiagnosticsCountOnlyMeetingsTheUploaderWillSend() throws {
         let directory = try Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

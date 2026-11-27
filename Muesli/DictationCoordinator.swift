@@ -2832,10 +2832,6 @@ final class DictationCoordinator {
         let appResults = dictationHistory.filter { $0.source != "keyboard_inline" }
         dictationHistory = (appResults + inlineResults).sorted { $0.createdAt > $1.createdAt }
         lastTranscript = dictationHistory.first?.text ?? ""
-        // The keyboard saves its own results but cannot run CloudKit, and a
-        // foreground sync only fetches. Upload what it saved now, as app
-        // dictations do on completion.
-        scheduleICloudSyncAfterLocalChange(reason: "keyboard_inline_completed")
     }
 
     private func publishVoiceNoteHistoryPresentationIfNeeded() {
@@ -3890,8 +3886,17 @@ final class DictationCoordinator {
     }
 
     func syncICloudTextIfEnabled(reason: String = "manual") {
-        let intent: MuesliCKSyncIntent = reason == "foreground" ? .fetch : .manual
+        let intent: MuesliCKSyncIntent = reason == "foreground"
+            ? Self.foregroundSyncIntent(hasPendingUploads: (try? store.hasTextRecordsNeedingSync()) ?? false)
+            : .manual
         requestICloudTextSync(intent: intent, reason: reason)
+    }
+
+    /// The keyboard saves dictations it cannot upload itself, so a foreground
+    /// sync also sends whatever is waiting. Checking the store, not the
+    /// in-memory history, keeps this independent of which view reloaded first.
+    nonisolated static func foregroundSyncIntent(hasPendingUploads: Bool) -> MuesliCKSyncIntent {
+        hasPendingUploads ? .manual : .fetch
     }
 
     private func requestICloudTextSync(
